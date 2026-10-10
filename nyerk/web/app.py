@@ -20,7 +20,7 @@ from markupsafe import Markup, escape
 from sqlalchemy import func, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import db, engine, party, reaction_roles, schedules, shugo, timers, transfer
+from .. import db, engine, party, reaction_roles, schedules, shugo, stats, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus
@@ -184,6 +184,14 @@ def create_app(cfg, bot=None) -> FastAPI:
         refresh(repost=True)
         flash(request, "Dashboard will be reposted in a moment." if app.state.bot else "Bot is not running.")
         return back("/")
+
+    @app.get("/stats", response_class=HTMLResponse)
+    async def stats_page(request: Request, range: str = "30"):
+        require(request)
+        with db.session() as s:
+            data = stats.compute(s, range, int(time.time()), get_settings(s).default_tz)
+        return render(request, "stats.html", st=data, ranges=stats.RANGES, days=stats.DAYS,
+                      heat_level=stats.heat_level)
 
     @app.get("/logs", response_class=HTMLResponse)
     async def logs_page(request: Request):

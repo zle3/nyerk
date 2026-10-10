@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Stats{% endblock %}
+{% macro chart(rows, unit="") %}
+  {% if rows and rows | sum(attribute='value') %}
+  <div class="chart" role="list">
+    {% for b in rows %}
+      <span class="lbl" role="listitem" title="{{ b.label }}">{{ b.label }}</span>
+      <div class="track" title="{{ b.label }}: {{ b.value | int }}{{ unit }}{% if b.note %} ({{ b.note }}){% endif %}"><div class="fill w-{{ b.pct }} {{ 'zero' if not b.value }}"></div></div>
+      <span class="val"><b>{{ b.value | int }}</b>{% if b.note %} · {{ b.note }}{% endif %}</span>
+    {% endfor %}
+  </div>
+  {% else %}<p class="chart-empty">Nothing recorded yet.</p>{% endif %}
+{% endmacro %}
+{% macro top(rows, what) %}
+  {% if rows %}
+  <table><tbody>
+    {% for name, n in rows %}<tr><td class="num muted">{{ loop.index }}</td><td>{{ name }}</td><td class="num">{{ n }} {{ what }}{{ 's' if n != 1 }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% else %}<p class="chart-empty">Nobody yet.</p>{% endif %}
+{% endmacro %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Stats</h1>
+    <p class="lede">Classes and ping roles count members who picked them through Nyerk. Activity counts registrations and parties started in the chosen range.</p>
+  </div>
+  <nav class="range" aria-label="Time range">
+    {% for key, (label, _) in ranges.items() %}<a href="/stats?range={{ key }}" class="{{ 'on' if key == st.range_key }}" {% if key == st.range_key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}
+  </nav>
+</div>
+
+<p class="section-label">Party activity · {{ st.range_label }}</p>
+<div class="grid tiles">
+  <div class="card stat"><span class="label">Parties started</span><span class="value">{{ st.parties }}</span><span class="label">{{ st.filled }} filled · {{ st.expired }} expired · {{ st.closed }} closed</span></div>
+  <div class="card stat"><span class="label">Fill rate</span><span class="value">{{ '%d%%' % st.fill_rate if st.fill_rate is not none else '–' }}</span><span class="label">Of parties that have finished</span></div>
+  <div class="card stat"><span class="label">Average time to fill</span><span class="value">{{ '%d min' % st.avg_fill_min if st.avg_fill_min is not none else '–' }}</span><span class="label">From listing to full</span></div>
+  <div class="card stat"><span class="label">Registrations</span><span class="value">{{ st.registrations }}</span><span class="label">by {{ st.registrants }} member{{ 's' if st.registrants != 1 }}</span></div>
+</div>
+
+<div class="card">
+  <h3>When parties start <span class="muted">· {{ st.tz }}</span></h3>
+  {% if st.heat_max %}
+  <table class="heat" aria-label="Parties started by weekday and hour">
+    <thead><tr><th></th>{% for h in range(24) %}<th scope="col">{{ '%02d' % h if h % 3 == 0 else '' }}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for d in range(7) %}
+      <tr><th scope="row">{{ days[d] }}</th>
+      {% for h in range(24) %}{% set n = st.heat[d][h] %}<td class="l{{ heat_level(n, st.heat_max) }}" title="{{ days[d] }} {{ '%02d' % h }}:00 · {{ n }} part{{ 'y' if n == 1 else 'ies' }}"></td>{% endfor %}</tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="actions mt"><div class="heat-key">Fewer <span class="l1"></span><span class="l3"></span><span class="l5"></span> More</div>
+    {% if st.busiest %}<span class="small muted">Busiest: {{ st.busiest | join(', ') }}</span>{% endif %}</div>
+  {% else %}<p class="chart-empty">No parties in this range yet.</p>{% endif %}
+</div>
+
+<div class="grid">
+  <div class="card"><h3>Parties by content</h3>{{ chart(st.content_parties) }}</div>
+  <div class="card"><h3>Party size</h3>{{ chart(st.sizes) }}</div>
+</div>
+
+<p class="section-label">Content demand · {{ st.range_label }}</p>
+<div class="grid">
+  <div class="card"><h3>Interest by content <span class="muted">· registrations that picked it</span></h3>{{ chart(st.content_interest) }}</div>
+  <div class="card"><h3>Gear score</h3>{{ chart(st.brackets) }}</div>
+  <div class="card"><h3>Available for</h3>{{ chart(st.windows) }}</div>
+</div>
+
+<p class="section-label">Classes and roles · now</p>
+<div class="grid">
+  <div class="card"><h3>Class distribution <span class="muted">· {{ st.tracked_members }} member{{ 's' if st.tracked_members != 1 }} tracked</span></h3>{{ chart(st.classes) }}</div>
+  <div class="card"><h3>Tank, Support, DPS</h3>{{ chart(st.types) }}</div>
+  <div class="card"><h3>Ping role members</h3>{{ chart(st.ping_roles) }}</div>
+</div>
+
+<p class="section-label">Top members · {{ st.range_label }}</p>
+<div class="grid">
+  <div class="card"><h3>Parties led</h3>{{ top(st.top_leaders, "party") | replace("partys", "parties") }}</div>
+  <div class="card"><h3>Parties joined</h3>{{ top(st.top_joiners, "party") | replace("partys", "parties") }}</div>
+  <div class="card"><h3>Registrations</h3>{{ top(st.top_registrants, "registration") }}</div>
+</div>
+<p class="small muted">Class and role tracking started with this version. Members who got roles before it, or by hand, aren't counted until they use Nyerk's class buttons or reactions again. Parties joined counts members still in the party when it ended.</p>
+{% endblock %}

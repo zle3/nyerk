@@ -341,3 +341,18 @@ class PfPartyMember(Base):
     joined_at: Mapped[int] = mapped_column(BigInteger)
 
     party: Mapped[PfParty] = relationship(back_populates="members")
+
+
+class RoleHolder(Base):
+    """Who holds a class or ping role, as far as Nyerk has seen through its
+    own buttons and reactions. Feeds the Stats page."""
+
+    __tablename__ = "role_holders"
+    __table_args__ = (UniqueConstraint("user_id", "role_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    user_name: Mapped[str] = mapped_column(String(100), default="")
+    role_id: Mapped[int] = mapped_column(BigInteger)
+    kind: Mapped[str] = mapped_column(String(8))  # class | ping
+    since: Mapped[int] = mapped_column(BigInteger)

@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from sqlalchemy import select
 
-from . import db, engine, party, party_bot, reaction_roles, timers
+from . import db, engine, party, party_bot, reaction_roles, timers, tracking
 from .db import get_settings, get_state
 from .logbus import bus
 from .models import PfContent, SentMessage, UserTimer
@@ -596,6 +596,7 @@ class NyerkBot(discord.Client):
         await interaction.response.send_message(f"Removed {len(held)} ping role{'s' if len(held) != 1 else ''}.",
                                                 ephemeral=True)
         bus.info("roles", f"{member.display_name} removed all their ping roles ({len(held)}).")
+        tracking.remove_pings(member.id, held)
         channel = await self._channel(channel_id)
         if channel is None:
             return
@@ -659,6 +660,10 @@ class NyerkBot(discord.Client):
             bus.error("roles", f"Could not {'grant' if add else 'remove'} role {role_id}: {exc!r}")
             return
         who = payload.member.display_name if payload.member else f"user {payload.user_id}"
+        if add:
+            tracking.add_ping(payload.user_id, payload.member.display_name if payload.member else "", int(role_id))
+        else:
+            tracking.remove_pings(payload.user_id, {int(role_id)})
         bus.info("roles", f"{'Granted' if add else 'Removed'} {role.name if role else role_id} "
                           f"{'to' if add else 'from'} {who}.")
 

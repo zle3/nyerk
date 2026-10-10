@@ -237,3 +237,9 @@ def test_roles_header(client):
     assert "Header saved" in r.text and 'class="h1">Pick roles' in r.text
     with db.session() as s:
         assert get_settings(s).roles_header == "# Pick roles\nhi"
+
+
+@pytest.mark.parametrize("rng", ["7", "30", "all", "bogus"])
+def test_stats_page(client, rng):
+    r = client.get(f"/stats?range={rng}")
+    assert r.status_code == 200 and "Class distribution" in r.text and "Parties led" in r.text

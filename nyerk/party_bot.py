@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import discord
 from sqlalchemy import select
 
-from . import db, party
+from . import db, party, tracking
 from .db import get_settings, get_state
 from .logbus import bus
 from .models import PfInterest, PfParty
@@ -220,6 +220,7 @@ class PartyFinder:
         try:
             with db.session() as s:
                 add, remove, text = party.class_change(s, who, class_id)
+                class_roles = {c.role_id for c in party.classes(s) if c.role_id}
         except PartyError as exc:
             await reply(interaction, str(exc))
             return
@@ -235,6 +236,8 @@ class PartyFinder:
             return
         await reply(interaction, text)
         bus.info("party", f"{who.user_name}: {text.replace('You are now', 'now').replace('Your class has been cleared', 'class cleared')}")
+        class_role = next((r for r in add if r in class_roles), None) if class_id is not None else None
+        tracking.set_class(who.user_id, who.user_name, class_role)
 
     async def on_reg(self, interaction) -> None:
         with db.session() as s:
