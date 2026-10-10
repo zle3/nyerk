@@ -1,57 +1,104 @@
 {% extends "base.html" %}
 {% block title %}Roles{% endblock %}
+{% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>Categories and roles</h1>
-    <p class="lede">Each category pings one Discord role. The roles message in the roles channel lists these event roles first, then the dungeon roles from the Party finder page, numbered 1️⃣ 2️⃣ 3️⃣ in order unless you set an emoji. Entries without a role are left off.</p>
+    <h1>Roles</h1>
+    <p class="lede">Ping roles members pick with reactions in the roles channel. Each role message below posts as its own message, numbered 1️⃣ 2️⃣ 3️⃣ unless you set an emoji. After them come a copy of the class selector and a Remove all pings button.</p>
   </div>
-  <form method="post" action="/categories/repost-roles" class="inline-form" data-confirm="Delete the current roles message and post a new one? Members keep their roles but will see fresh reactions.">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="btn" type="submit">{{ 'Repost' if posted else 'Post' }} roles message</button>
+  <form method="post" action="/categories/repost-roles" class="inline-form" data-confirm="Delete the roles channel messages Nyerk posted and post them again? Members keep their roles but will see fresh reactions.">
+    {{ csrf_field() }}
+    <button class="btn" type="submit">{{ 'Repost' if posted else 'Post' }} roles channel</button>
   </form>
 </div>
 
+<p class="section-label">Event ping categories</p>
 <div class="list">
 {% for c in cats %}
   <div class="row">
     <div class="actions">
-      <form method="post" action="/categories/{{ c.id }}/move" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="dir" value="up">
+      <form method="post" action="/categories/{{ c.id }}/move" class="inline-form">{{ csrf_field() }}<input type="hidden" name="dir" value="up">
         <button class="btn icon" type="submit" aria-label="Move {{ c.name }} up" {{ 'disabled' if loop.first }}>↑</button></form>
-      <form method="post" action="/categories/{{ c.id }}/move" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="dir" value="down">
+      <form method="post" action="/categories/{{ c.id }}/move" class="inline-form">{{ csrf_field() }}<input type="hidden" name="dir" value="down">
         <button class="btn icon" type="submit" aria-label="Move {{ c.name }} down" {{ 'disabled' if loop.last }}>↓</button></form>
     </div>
-    <span class="title">{{ numbered.get(c.id, '·') }}</span>
     <form method="post" action="/categories/{{ c.id }}" class="grow inline">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {{ csrf_field() }}
       <input type="text" name="name" value="{{ c.name }}" aria-label="Name" required>
       <input type="text" name="role_id" value="{{ c.role_id or '' }}" placeholder="Role ID" aria-label="Role ID for {{ c.name }}" class="mono" inputmode="numeric">
-      <input type="text" name="emoji" value="{{ c.emoji }}" placeholder="{{ numbered.get(c.id, 'auto') }}" aria-label="Reaction emoji for {{ c.name }}" size="4" title="Reaction emoji. Blank uses the next number.">
       <button class="btn small secondary" type="submit">Save</button>
     </form>
     <span class="sub">{{ counts.get(c.id, 0) }} event{{ 's' if counts.get(c.id, 0) != 1 }}</span>
     <form method="post" action="/categories/{{ c.id }}/delete" class="inline-form" data-confirm="Delete category {{ c.name }}?">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button class="btn icon" type="submit" aria-label="Delete {{ c.name }}">✕</button>
+      {{ csrf_field() }}<button class="btn icon" type="submit" aria-label="Delete {{ c.name }}">✕</button>
     </form>
   </div>
 {% endfor %}
 </div>
-
-<p class="section-label">Roles message preview</p>
-{% if chunks %}
-  {% for text in chunks %}<div class="discord mt">{{ text | discord }}</div>{% endfor %}
-  <p class="small muted">{{ dungeon_count }} dungeon role{{ 's' if dungeon_count != 1 }} included. Discord allows 20 reactions per message, so longer lists post as several messages.</p>
-{% else %}
-  <div class="card"><p class="muted">Nothing to post yet: add a role ID to a category here or to a dungeon on the Party finder page.</p></div>
-{% endif %}
-
-<p class="section-label">Add category</p>
 <form method="post" action="/categories" class="card inline">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
-  <input type="text" name="name" placeholder="Name" required aria-label="New category name">
+  {{ csrf_field() }}
+  <input type="text" name="name" placeholder="New category" required aria-label="New category name">
   <input type="text" name="role_id" placeholder="Role ID (optional)" class="mono" aria-label="New category role ID">
   <button class="btn" type="submit">Add</button>
 </form>
-<p class="small muted">Copy a role ID in Discord with Developer Mode on: Server Settings › Roles › right-click the role › Copy Role ID. Nyerk's own role must sit above every category role, and it needs Manage Roles.</p>
+<p class="small muted">Dungeon ping roles are set on the <a href="/party#content">Party finder</a> page. Copy a role ID with Developer Mode on: Server Settings › Roles › right-click › Copy Role ID. Nyerk's role must sit above every role it hands out.</p>
+
+<p class="section-label" id="messages">Role messages</p>
+<form method="post" action="/roles/groups">
+  {{ csrf_field() }}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Title</th><th>Description</th><th>Order</th><th></th></tr></thead>
+    <tbody>
+    {% for g in groups %}
+      <tr>
+        <td><input type="text" name="gname_{{ g.id }}" value="{{ g.name }}" aria-label="Title" required></td>
+        <td><input type="text" name="gdesc_{{ g.id }}" value="{{ g.description }}" placeholder="Optional line under the title" aria-label="Description for {{ g.name }}"></td>
+        <td><input type="number" name="gorder_{{ g.id }}" value="{{ g.sort_order }}" class="order-input" aria-label="Order for {{ g.name }}"></td>
+        <td>{% if g.default_for %}<span class="pill" title="New roles land here">default for {{ 'events' if g.default_for == 'category' else 'dungeons' }}</span>
+            {% else %}<button class="btn icon" type="submit" form="del-group-{{ g.id }}" aria-label="Remove {{ g.name }}">✕</button>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="actions"><button class="btn" type="submit">Save role messages</button></div>
+</form>
+{% for g in groups if not g.default_for %}<form method="post" action="/roles/groups/{{ g.id }}/delete" id="del-group-{{ g.id }}" data-confirm="Remove {{ g.name }}? Its roles move back to the default message." hidden>{{ csrf_field() }}</form>{% endfor %}
+<form method="post" action="/roles/groups/new" class="card inline mt">
+  {{ csrf_field() }}
+  <input type="text" name="name" placeholder="New role message, e.g. Siege pings" required aria-label="New role message title">
+  <input type="text" name="description" placeholder="Description (optional)" aria-label="Description">
+  <button class="btn" type="submit">Add</button>
+</form>
+
+<p class="section-label" id="assign">Which message each role goes in</p>
+<form method="post" action="/roles/assign">
+  {{ csrf_field() }}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Role</th><th>Kind</th><th>Message</th><th>Emoji</th></tr></thead>
+    <tbody>
+    {% for kind, rid, name, role_id, emoji, gid in assign %}
+      <tr class="{{ '' if role_id else 'off' }}">
+        <td>{{ name }}{% if not role_id %} <span class="small muted">· no role yet</span>{% endif %}</td>
+        <td><span class="pill">{{ 'Event' if kind == 'category' else 'Dungeon' }}</span></td>
+        <td><select name="group_{{ kind }}_{{ rid }}" aria-label="Message for {{ name }}">{% for g in groups %}<option value="{{ g.id }}" {{ 'selected' if g.id == gid }}>{{ g.name }}</option>{% endfor %}</select></td>
+        <td><input type="text" name="emoji_{{ kind }}_{{ rid }}" value="{{ emoji }}" placeholder="{{ emoji_of.get((kind, rid), 'auto') }}" size="4" class="emoji-input" aria-label="Emoji for {{ name }}" title="Blank uses the next number in its message"></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="actions"><button class="btn" type="submit">Save assignments</button><span class="small muted">Roles without an ID are left off until you set one.</span></div>
+</form>
+
+<p class="section-label">Roles channel preview</p>
+{% for text in previews %}<div class="discord mt">{{ text | discord }}</div>{% else %}<div class="card"><p class="muted">No ping role has an ID yet.</p></div>{% endfor %}
+<div class="discord mt">{{ class_preview | discord }}
+<div class="discord-buttons"><span>Class buttons</span><span>Clear class</span></div></div>
+<div class="discord mt">{{ clear_preview | discord }}
+<div class="discord-buttons"><span class="danger">Remove all my ping roles</span></div></div>
+<p class="small muted">Discord allows 20 reactions per message, so a role message with more continues in a second message.</p>
 {% endblock %}

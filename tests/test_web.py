@@ -7,8 +7,8 @@ from sqlalchemy import select
 from nyerk import db
 from nyerk.config import Config
 from nyerk.db import get_settings
-from nyerk.models import Category, Event, PfClass, PfContent, UserTimer
-from nyerk.seed import seed, seed_party_finder
+from nyerk.models import Category, Event, PfClass, PfContent, ReactionGroup, UserTimer
+from nyerk.seed import seed, seed_party_finder, seed_reaction_groups
 from nyerk.web.app import create_app, hash_password
 
 
@@ -20,6 +20,7 @@ def client(tmp_path, monkeypatch):
     with db.session() as s:
         seed(s)
         seed_party_finder(s)
+        seed_reaction_groups(s)
         get_settings(s).admin_password_hash = hash_password("correct horse")
     c = TestClient(create_app(Config()))
     page = c.get("/login")
@@ -206,6 +207,25 @@ def test_content_bulk_save_and_roles_preview(client):
         f"react_emoji_{cid}": "", f"min_gear_score_{cid}": "1700", f"sort_order_{cid}": "0", f"active_{cid}": "1"})
     assert "Saved 1 dungeon" in r.text
     page = client.get("/categories").text
+    assert "## Dungeon pings" not in page  # rendered as a heading
     assert "Dungeon pings" in page and "1️⃣ Fire Temple" in page
     r = client.post("/party/content/create-roles", data={"csrf": csrf})
     assert "Bot is not connected" in r.text
+
+
+def test_role_messages_and_assignment(client):
+    csrf = _csrf(client)
+    client.post("/roles/groups/new", data={"csrf": csrf, "name": "Siege pings", "description": "Abyss"})
+    with db.session() as s:
+        siege = s.scalar(select(ReactionGroup).where(ReactionGroup.name == "Siege pings"))
+        shugo = s.scalar(select(Category).where(Category.name == "Shugo"))
+        shugo.role_id = 123456789012345671
+        sid, gid = shugo.id, siege.id
+    r = client.post("/roles/assign", data={"csrf": csrf, f"group_category_{sid}": str(gid),
+                                           f"emoji_category_{sid}": "🎪"})
+    assert "Saved 1 change" in r.text
+    page = client.get("/categories").text
+    assert "Siege pings" in page and "🎪 Shugo" in page
+    r = client.post(f"/roles/groups/{gid}/delete", data={"csrf": csrf})
+    with db.session() as s:
+        assert s.get(Category, sid).group_id is None  # falls back to the default message

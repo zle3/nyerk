@@ -25,7 +25,8 @@ from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus
 from ..models import (
-    AlertSlot, Category, Event, LogEntry, PfBracket, PfClass, PfContent, PfInterest, PfParty, PfWindow, UserTimer,
+    AlertSlot, Category, Event, LogEntry, PfBracket, PfClass, PfContent, PfInterest, PfParty, PfWindow,
+    ReactionGroup, UserTimer,
 )
 from ..seed import make_slots, NONE
 
@@ -299,12 +300,17 @@ def create_app(cfg, bot=None) -> FastAPI:
             cats = list(s.scalars(select(Category).order_by(Category.sort_order, Category.id)))
             counts = dict(s.execute(select(Event.category_id, func.count()).group_by(Event.category_id)).all())
             state = get_state(s)
-            rows = reaction_roles.entries(s)
-            numbered = {e.ref_id: e.emoji for e in rows if e.kind == "category"}
-            chunks = [reaction_roles.message_text(c, i == 0) for i, c in enumerate(reaction_roles.chunks(rows))]
-            ctx = dict(cats=cats, counts=counts, numbered=numbered, chunks=chunks,
-                       posted=bool(state.reaction_messages or state.reaction_message_id),
-                       dungeon_count=sum(1 for e in rows if e.kind == "content"))
+            groups = reaction_roles.groups(s)
+            emoji_of = {(e.kind, e.ref_id): e.emoji for e in reaction_roles.entries(s)}
+            default_group = {g.default_for: g.id for g in groups if g.default_for}
+            assign = [("category", c.id, c.name, c.role_id, c.emoji, c.group_id or default_group.get("category"))
+                      for c in cats]
+            assign += [("content", c.id, c.name, c.role_id, c.react_emoji, c.group_id or default_group.get("content"))
+                       for c in party.contents(s, False)]
+            previews = [text for text, _ in reaction_roles.messages(s)]
+            ctx = dict(cats=cats, counts=counts, groups=groups, assign=assign, emoji_of=emoji_of,
+                       previews=previews, class_preview=party.CLASS_PANEL, clear_preview=reaction_roles.CLEAR_TEXT,
+                       posted=bool(state.reaction_messages or state.reaction_message_id))
         return render(request, "categories.html", **ctx)
 
     @app.post("/categories")
@@ -324,6 +330,81 @@ def create_app(cfg, bot=None) -> FastAPI:
         flash(request, f"Added {name}.")
         return back("/categories")
 
+    @app.post("/roles/groups")
+    async def roles_groups_save(request: Request):
+        data = await form(request)
+        try:
+            with db.session() as s:
+                rows = reaction_roles.groups(s)
+                names = []
+                for g in rows:
+                    name = str(data.get(f"gname_{g.id}", "")).strip()[:64]
+                    if not name:
+                        raise ValueError("Every role message needs a title")
+                    names.append(name.lower())
+                    g.name = name
+                    g.description = str(data.get(f"gdesc_{g.id}", "")).strip()[:200]
+                    g.sort_order = _int(data, f"gorder_{g.id}", g.sort_order, -1000, 1000)
+                if len(names) != len(set(names)):
+                    raise ValueError("Two role messages have the same title")
+        except ValueError as exc:
+            flash(request, f"Nothing saved: {exc}.", "err")
+            return back("/categories#messages")
+        bus.info("config", "Role messages saved.")
+        flash(request, "Role messages saved. Repost the roles channel to apply.")
+        return back("/categories#messages")
+
+    @app.post("/roles/groups/new")
+    async def roles_group_add(request: Request):
+        data = await form(request)
+        name = str(data.get("name", "")).strip()[:64]
+        if not name:
+            flash(request, "Give the role message a title.", "err")
+            return back("/categories#messages")
+        with db.session() as s:
+            if s.scalar(select(ReactionGroup).where(ReactionGroup.name == name)):
+                flash(request, f"{name} already exists.", "err")
+                return back("/categories#messages")
+            top = s.scalar(select(func.max(ReactionGroup.sort_order))) or 0
+            s.add(ReactionGroup(name=name, description=str(data.get("description", "")).strip()[:200],
+                                sort_order=top + 1))
+        bus.info("config", f"Role message {name} added.")
+        flash(request, f"Added {name}. Assign roles to it below.")
+        return back("/categories#messages")
+
+    @app.post("/roles/groups/{gid}/delete")
+    async def roles_group_delete(request: Request, gid: int):
+        await form(request)
+        with db.session() as s:
+            g = s.get(ReactionGroup, gid) or _404()
+            if g.default_for:
+                flash(request, f"{g.name} is a default role message and can't be removed. Rename it instead.", "err")
+                return back("/categories#messages")
+            name = g.name
+            s.delete(g)  # its roles fall back to the default message
+        bus.info("config", f"Role message {name} removed.")
+        return back("/categories#messages")
+
+    @app.post("/roles/assign")
+    async def roles_assign(request: Request):
+        data = await form(request)
+        with db.session() as s:
+            valid = {g.id for g in reaction_roles.groups(s)}
+            changed = 0
+            for model, kind, attr in ((Category, "category", "emoji"), (PfContent, "content", "react_emoji")):
+                for row in s.scalars(select(model)):
+                    gid = data.get(f"group_{kind}_{row.id}")
+                    gid = int(gid) if gid and str(gid).isdigit() and int(gid) in valid else row.group_id
+                    emoji = str(data.get(f"emoji_{kind}_{row.id}", getattr(row, attr) or "")).strip()[:64]
+                    if (row.group_id, getattr(row, attr)) != (gid, emoji):
+                        row.group_id = gid
+                        setattr(row, attr, emoji)
+                        changed += 1
+        bus.info("config", f"Roles channel assignments saved ({changed} changed).")
+        flash(request, f"Saved {changed} change{'s' if changed != 1 else ''}. Repost the roles channel to apply."
+              if changed else "No changes.")
+        return back("/categories#assign")
+
     # Registered before /categories/{cat_id}, which would otherwise swallow it.
     @app.post("/categories/repost-roles")
     async def repost_roles(request: Request):
@@ -340,7 +421,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                 bus.error("roles", f"Reaction roles repost failed: {exc!r}")
 
         asyncio.create_task(_run())
-        flash(request, "Posting the roles message. Reactions are added about 1.5 s apart.")
+        flash(request, "Reposting the roles channel. Reactions are added about 1.5 s apart.")
         return back("/categories")
 
     @app.post("/categories/{cat_id}")
@@ -355,7 +436,6 @@ def create_app(cfg, bot=None) -> FastAPI:
             c = s.get(Category, cat_id) or _404()
             c.name = str(data.get("name", c.name)).strip() or c.name
             c.role_id = role_id
-            c.emoji = str(data.get("emoji", "")).strip()[:64]
             name = c.name
         bus.info("config", f"Category {name} saved (role {role_id or 'none'}).")
         refresh()
@@ -687,7 +767,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                               ("sort_order", "int"))),
         "brackets": (PfBracket, (("label", "str"), ("min_score", "int"), ("max_score", "int"), ("sort_order", "int"))),
         "windows": (PfWindow, (("minutes", "int"), ("label", "str"))),
-        "content": (PfContent, (("name", "str"), ("emoji", "str"), ("role_id", "id"), ("react_emoji", "str"),
+        "content": (PfContent, (("name", "str"), ("emoji", "str"), ("role_id", "id"),
                                 ("min_gear_score", "int"), ("active", "bool"), ("sort_order", "int"))),
     }
 
@@ -792,7 +872,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             with db.session() as s:
                 rows = party.contents(s, False)
                 updates = {c.id: _pf_values("content", {k: data.get(f"{k}_{c.id}", "") for k in (
-                    "name", "emoji", "role_id", "react_emoji", "min_gear_score", "sort_order")}
+                    "name", "emoji", "role_id", "min_gear_score", "sort_order")}
                     | {"active": data.get(f"active_{c.id}")}) for c in rows}
                 names = [u["name"].lower() for u in updates.values()]
                 if len(names) != len(set(names)):
@@ -807,7 +887,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         if changed:
             bus.info("config", f"Party finder content saved: {', '.join(changed)}.")
             refresh()
-        flash(request, f"Saved {len(changed)} dungeon{'s' if len(changed) != 1 else ''}. Repost the roles message if roles or emojis changed."
+        flash(request, f"Saved {len(changed)} dungeon{'s' if len(changed) != 1 else ''}. Repost the roles channel if roles changed."
               if changed else "No changes.")
         return back("/party#content")
 

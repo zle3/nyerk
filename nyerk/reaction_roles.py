@@ -1,25 +1,27 @@
-"""The reaction roles message(s) in the roles channel.
+"""Reaction role messages in the roles channel.
 
-Event ping categories and dungeon (party finder content) roles share one
-list. Each entry uses its own emoji if set, otherwise the next free emoji
-from 1️⃣ 2️⃣ 3️⃣ … 🔟 then 🇦 🇧 🇨 …. Discord allows 20 different reactions
-per message, so longer lists are split across several messages.
+Ping roles (event categories and dungeon roles) are grouped into role
+messages that the admin defines; each group posts as its own message. In
+each message, entries use their own emoji if set, otherwise the next free
+one from 1️⃣ 2️⃣ 3️⃣ … 🔟 then 🇦 🇧 🇨 …. Discord allows 20 different
+reactions per message, so a bigger group continues in a second message.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Category, PfContent
+from .models import Category, PfContent, ReactionGroup
 
 NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 LETTERS = [chr(0x1F1E6 + i) for i in range(26)]  # 🇦 … 🇿
 AUTO_EMOJI = NUMBERS + LETTERS
 PER_MESSAGE = 20  # Discord's limit of distinct reactions on one message
 
-SECTIONS = {"category": "Event pings", "content": "Dungeon pings"}
+CLEAR_TEXT = ("## Remove all pings\n"
+              "Press the button to remove every event and dungeon ping role you have. Your class role stays.")
 
 
 @dataclass
@@ -32,38 +34,81 @@ class Entry:
     auto: bool = False
 
 
-def entries(s: Session) -> list[Entry]:
-    rows: list[Entry] = []
+@dataclass
+class Group:
+    id: int
+    name: str
+    description: str
+    entries: list[Entry] = field(default_factory=list)
+    chunks: list[list[Entry]] = field(default_factory=list)  # one per Discord message
+
+
+def groups(s: Session) -> list[ReactionGroup]:
+    return list(s.scalars(select(ReactionGroup).order_by(ReactionGroup.sort_order, ReactionGroup.id)))
+
+
+def build(s: Session, skip: set[int] | None = None) -> list[Group]:
+    """Every group with its entries and final emojis, in posting order.
+    Groups with no roles are left out; roles in `skip` are left out."""
+    skip = skip or set()
+    rows = groups(s)
+    by_id = {g.id: Group(g.id, g.name, g.description) for g in rows}
+    default = {g.default_for: g.id for g in rows if g.default_for}
+    fallback = rows[0].id if rows else None
+
+    def place(group_id, kind):
+        return group_id if group_id in by_id else default.get(kind, fallback)
+
     for c in s.scalars(select(Category).where(Category.role_id != 0).order_by(Category.sort_order, Category.id)):
-        rows.append(Entry("category", c.id, c.name, c.role_id, (c.emoji or "").strip()))
+        gid = place(c.group_id, "category")
+        if gid is not None and c.role_id not in skip:
+            by_id[gid].entries.append(Entry("category", c.id, c.name, c.role_id, (c.emoji or "").strip()))
     for c in s.scalars(select(PfContent).where(PfContent.role_id != 0, PfContent.active.is_(True))
                        .order_by(PfContent.sort_order, PfContent.name)):
-        rows.append(Entry("content", c.id, c.name, c.role_id, (c.react_emoji or "").strip()))
-    used = {e.emoji for e in rows if e.emoji}
-    pool = (x for x in AUTO_EMOJI if x not in used)
-    for e in rows:
-        if not e.emoji:
-            e.emoji, e.auto = next(pool, ""), True
-    # Two entries with the same custom emoji would clash; keep the first.
-    seen: set[str] = set()
+        gid = place(c.group_id, "content")
+        if gid is not None and c.role_id not in skip:
+            by_id[gid].entries.append(Entry("content", c.id, c.name, c.role_id, (c.react_emoji or "").strip()))
+
     out = []
-    for e in rows:
-        if e.emoji and e.emoji not in seen:
-            seen.add(e.emoji)
-            out.append(e)
+    for g in (by_id[r.id] for r in rows):
+        if not g.entries:
+            continue
+        for chunk in _chunks(g.entries):
+            used = {e.emoji for e in chunk if e.emoji}
+            pool = (x for x in AUTO_EMOJI if x not in used)
+            kept, seen = [], set()
+            for e in chunk:
+                if not e.emoji:
+                    e.emoji, e.auto = next(pool, ""), True
+                if e.emoji and e.emoji not in seen:  # emojis must be unique within a message
+                    seen.add(e.emoji)
+                    kept.append(e)
+            g.chunks.append(kept)
+        g.entries = [e for c in g.chunks for e in c]
+        out.append(g)
     return out
 
 
-def chunks(rows: list[Entry]) -> list[list[Entry]]:
-    return [rows[i:i + PER_MESSAGE] for i in range(0, len(rows), PER_MESSAGE)] or []
+def _chunks(rows: list[Entry]) -> list[list[Entry]]:
+    return [rows[i:i + PER_MESSAGE] for i in range(0, len(rows), PER_MESSAGE)]
 
 
-def message_text(rows: list[Entry], first: bool) -> str:
-    lines = ["## Ping roles", "React to get pinged. Remove your reaction to stop."] if first else []
-    section = None
-    for e in rows:
-        if e.kind != section:
-            section = e.kind
-            lines.append(f"### {SECTIONS[section]}")
-        lines.append(f"{e.emoji} {e.label}")
-    return "\n".join(lines)
+def messages(s: Session, skip: set[int] | None = None) -> list[tuple[str, list[Entry]]]:
+    """(text, entries) for every reaction message, in posting order."""
+    out = []
+    for g in build(s, skip):
+        for i, chunk in enumerate(g.chunks):
+            head = [f"## {g.name}"] + ([g.description] if g.description else []) if i == 0 \
+                else [f"## {g.name} (continued)"]
+            out.append(("\n".join(head + [f"{e.emoji} {e.label}" for e in chunk]), chunk))
+    return out
+
+
+def entries(s: Session) -> list[Entry]:
+    return [e for g in build(s) for e in g.entries]
+
+
+def ping_role_ids(s: Session) -> set[int]:
+    ids = {c.role_id for c in s.scalars(select(Category).where(Category.role_id != 0))}
+    ids |= {c.role_id for c in s.scalars(select(PfContent).where(PfContent.role_id != 0))}
+    return ids

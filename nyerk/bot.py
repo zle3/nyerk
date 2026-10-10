@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from sqlalchemy import select
 
-from . import db, engine, party_bot, reaction_roles, timers
+from . import db, engine, party, party_bot, reaction_roles, timers
 from .db import get_settings, get_state
 from .logbus import bus
 from .models import PfContent, SentMessage, UserTimer
@@ -69,6 +69,19 @@ class CustomTimeButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nye
             await interaction.response.send_message("No world bosses are enabled.", ephemeral=True)
             return
         await interaction.response.send_modal(CustomTimeModal(bosses))
+
+
+class ClearPingsButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:roles:clear"):
+    def __init__(self) -> None:
+        super().__init__(discord.ui.Button(label="Remove all my ping roles", style=discord.ButtonStyle.danger,
+                                           custom_id="nyerk:roles:clear"))
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls()
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.client.clear_pings(interaction)
 
 
 class CustomTimeModal(discord.ui.Modal, title="Report a world boss"):
@@ -214,11 +227,12 @@ class NyerkBot(discord.Client):
         self._started = False
         self.last_tick_ok: int = 0
         self.pf = party_bot.PartyFinder(self)
+        self._clearing: set[int] = set()
 
     # -- lifecycle ---------------------------------------------------------
 
     async def setup_hook(self) -> None:
-        self.add_dynamic_items(BossButton, CustomTimeButton, *party_bot.ITEMS)
+        self.add_dynamic_items(BossButton, CustomTimeButton, ClearPingsButton, *party_bot.ITEMS)
         if self.guild_id:
             guild = discord.Object(self.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -499,24 +513,25 @@ class NyerkBot(discord.Client):
         return self.get_guild(self.guild_id) if self.guild_id else (self.guilds[0] if self.guilds else None)
 
     async def post_roles_message(self) -> str:
-        """Delete the old roles message(s) and post event and dungeon ping
-        roles, 20 reactions per message, reactions added in order."""
+        """Repost everything in the roles channel, in order: one message per
+        role message group (split past 20 reactions), a copy of the class
+        selector, then the Remove all pings message."""
+        guild = self._guild()
         with db.session() as s:
             settings, state = get_settings(s), get_state(s)
-            rows = reaction_roles.entries(s)
+            everything = reaction_roles.entries(s)
+            missing = {e.role_id: e.label for e in everything if guild is None or guild.get_role(e.role_id) is None}
+            plan = reaction_roles.messages(s, skip=set(missing))
+            class_text, class_view = party.CLASS_PANEL, self.pf._class_view(s)
             channel_id = settings.roles_channel_id
-            old_ids = {int(k) for k in (state.reaction_messages or {})} | (
-                {state.reaction_message_id} if state.reaction_message_id else set())
-        guild = self._guild()
-        missing = [e.label for e in rows if guild is None or guild.get_role(e.role_id) is None]
-        rows = [e for e in rows if e.label not in missing]
+            old_ids = {int(k) for k in (state.reaction_messages or {})} | {
+                x for x in (state.reaction_message_id, state.roles_class_message_id, state.roles_clear_message_id) if x}
         if missing:
-            bus.warn("roles", f"Skipped entries whose role does not exist: {', '.join(missing)}.")
+            bus.warn("roles", f"Skipped entries whose role does not exist: {', '.join(sorted(missing.values()))}.")
         channel = await self._channel(channel_id)
         if channel is None:
+            class_view.stop()
             return "Roles channel not reachable."
-        if not rows:
-            return "No category or dungeon has a valid role yet."
         for old in old_ids:
             try:
                 await channel.get_partial_message(old).delete()
@@ -524,14 +539,25 @@ class NyerkBot(discord.Client):
                 pass
         posted: dict[str, dict[str, int]] = {}
         messages = []
-        for i, chunk in enumerate(reaction_roles.chunks(rows)):
-            msg = await channel.send(reaction_roles.message_text(chunk, first=i == 0), allowed_mentions=NO_MENTIONS)
+        for text, chunk in plan:
+            msg = await channel.send(text, allowed_mentions=NO_MENTIONS)
             posted[str(msg.id)] = {e.emoji: e.role_id for e in chunk}
             messages.append((msg, chunk))
+        try:
+            class_msg = await channel.send(class_text, view=class_view, allowed_mentions=NO_MENTIONS)
+        finally:
+            class_view.stop()
+        clear_view = discord.ui.View(timeout=None)
+        clear_view.add_item(ClearPingsButton())
+        try:
+            clear_msg = await channel.send(reaction_roles.CLEAR_TEXT, view=clear_view, allowed_mentions=NO_MENTIONS)
+        finally:
+            clear_view.stop()
         with db.session() as s:
             state = get_state(s)
             state.reaction_messages = posted
-            state.reaction_message_id, state.reaction_map = messages[0][0].id, {}
+            state.reaction_message_id, state.reaction_map = 0, {}
+            state.roles_class_message_id, state.roles_clear_message_id = class_msg.id, clear_msg.id
         for msg, chunk in messages:
             for e in chunk:
                 try:
@@ -539,8 +565,47 @@ class NyerkBot(discord.Client):
                 except discord.HTTPException as exc:
                     bus.error("roles", f"Could not add reaction {e.emoji} for {e.label}: {exc!r}")
                 await asyncio.sleep(REACTION_PAUSE)  # keeps the reactions in order
-        bus.info("roles", f"Reaction roles posted: {len(rows)} roles in {len(messages)} message(s).")
-        return f"Posted {len(rows)} roles in {len(messages)} message(s)."
+        roles = sum(len(c) for _, c in messages)
+        bus.info("roles", f"Roles channel posted: {roles} ping roles in {len(messages)} message(s), "
+                          f"class selector, remove-all.")
+        return f"Posted {roles} ping roles in {len(messages)} message(s)."
+
+    async def clear_pings(self, interaction: discord.Interaction) -> None:
+        """Remove every event and dungeon ping role from the clicker, and
+        their reactions on the role messages so they can react again."""
+        member = interaction.user
+        with db.session() as s:
+            ping_ids = reaction_roles.ping_role_ids(s)
+            reaction_msgs = dict(get_state(s).reaction_messages or {})
+            channel_id = get_settings(s).roles_channel_id
+        held = {r.id for r in getattr(member, "roles", [])} & ping_ids
+        if not held:
+            await interaction.response.send_message("You don't have any ping roles.", ephemeral=True)
+            return
+        try:
+            await member.remove_roles(*[discord.Object(r) for r in held], reason="Nyerk: remove all pings")
+        except discord.HTTPException as exc:
+            bus.error("roles", f"Remove all pings for {member.display_name} failed: {exc!r}")
+            await interaction.response.send_message("I couldn't remove your roles. An admin has been told.",
+                                                    ephemeral=True)
+            return
+        await interaction.response.send_message(f"Removed {len(held)} ping role{'s' if len(held) != 1 else ''}.",
+                                                ephemeral=True)
+        bus.info("roles", f"{member.display_name} removed all their ping roles ({len(held)}).")
+        channel = await self._channel(channel_id)
+        if channel is None:
+            return
+        self._clearing.add(member.id)
+        try:
+            for mid, mapping in reaction_msgs.items():
+                for emoji, role_id in mapping.items():
+                    if int(role_id) in held:
+                        try:
+                            await channel.get_partial_message(int(mid)).remove_reaction(emoji, member)
+                        except discord.HTTPException:
+                            pass  # needs Manage Messages in the roles channel; roles are gone either way
+        finally:
+            self._clearing.discard(member.id)
 
     async def create_content_roles(self, content_ids: list[int]) -> list[str]:
         """Create a mentionable role for each dungeon without one."""
@@ -567,6 +632,8 @@ class NyerkBot(discord.Client):
     async def _reaction(self, payload: discord.RawReactionActionEvent, add: bool) -> None:
         if self.user and payload.user_id == self.user.id or payload.guild_id is None:
             return
+        if not add and payload.user_id in self._clearing:
+            return  # Remove all pings is clearing this member's reactions
         with db.session() as s:
             state = get_state(s)
             mapping = (state.reaction_messages or {}).get(str(payload.message_id))
@@ -600,3 +667,4 @@ class NyerkBot(discord.Client):
 
 def _slot_name(lead: int) -> str:
     return f"{lead} min" if lead else "event-time"
+

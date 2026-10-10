@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from . import schedules
 from .db import get_settings
 from .models import (
-    AlertSlot, Category, Event, PfBracket, PfClass, PfContent, PfWindow, Settings,
+    AlertSlot, Category, Event, PfBracket, PfClass, PfContent, PfWindow, ReactionGroup, Settings,
 )
 from .seed import NONE, make_slots
 
@@ -49,6 +49,7 @@ def export(s: Session) -> dict:
     settings = {c.name: _out(getattr(st, c.name), c.name)
                 for c in Settings.__table__.columns if c.name not in SKIP_SETTINGS}
     cats = {c.id: c.name for c in s.scalars(select(Category))}
+    gnames = {g.id: g.name for g in s.scalars(select(ReactionGroup))}
     events = []
     for e in s.scalars(select(Event).where(Event.overrides_event_id.is_(None)).order_by(Event.sort_order, Event.id)):
         params = {k: v for k, v in (e.schedule_params or {}).items() if not k.startswith("_")}
@@ -66,8 +67,10 @@ def export(s: Session) -> dict:
         "nyerk_export": FORMAT,
         "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "settings": settings,
+        "role_messages": [{"name": g.name, "description": g.description, "sort_order": g.sort_order}
+                          for g in s.scalars(select(ReactionGroup).order_by(ReactionGroup.sort_order))],
         "categories": [{"name": c.name, "role_id": _out(c.role_id, "role_id"), "sort_order": c.sort_order,
-                        "emoji": c.emoji}
+                        "emoji": c.emoji, "role_message": gnames.get(c.group_id, "")}
                        for c in s.scalars(select(Category).order_by(Category.sort_order))],
         "events": events,
         "party_finder": {
@@ -80,7 +83,8 @@ def export(s: Session) -> dict:
             "windows": [{"minutes": w.minutes, "label": w.label}
                         for w in s.scalars(select(PfWindow).order_by(PfWindow.minutes))],
             "content": [{"name": c.name, "emoji": c.emoji, "role_id": _out(c.role_id, "role_id"),
-                         "react_emoji": c.react_emoji, "min_gear_score": c.min_gear_score,
+                         "react_emoji": c.react_emoji, "role_message": gnames.get(c.group_id, ""),
+                         "min_gear_score": c.min_gear_score,
                          "active": c.active, "sort_order": c.sort_order}
                         for c in s.scalars(select(PfContent).order_by(PfContent.sort_order))],
         },
@@ -159,10 +163,18 @@ def apply_import(s: Session, data: dict) -> list[str]:
                 continue
             _assign(st, {key: value}, (key,), "Settings", changes)
 
+    for g in _list(data, "role_messages"):
+        name = _name(g, "name", "role message")
+        row = _named(s, ReactionGroup, "name", name, f"Role message {name}", changes, sort_order=99)
+        _assign(row, g, ("description", "sort_order"), f"Role message {name}", changes)
+    s.flush()
+    groups = {g.name: g.id for g in s.scalars(select(ReactionGroup))}
+
     for c in _list(data, "categories"):
         name = _name(c, "name", "category")
         row = _named(s, Category, "name", name, f"Category {name}", changes, sort_order=99)
         _assign(row, c, ("role_id", "sort_order", "emoji"), f"Category {name}", changes)
+        _set_group(row, c, groups, f"Category {name}", changes)
 
     s.flush()
     cats = {c.name: c.id for c in s.scalars(select(Category))}
@@ -194,8 +206,21 @@ def apply_import(s: Session, data: dict) -> list[str]:
         row = _named(s, PfContent, "name", name, f"Content {name}", changes, sort_order=99)
         _assign(row, c, ("emoji", "role_id", "react_emoji", "min_gear_score", "active", "sort_order"),
                 f"Content {name}", changes)
+        _set_group(row, c, groups, f"Content {name}", changes)
     s.flush()
     return changes
+
+
+def _set_group(row, data: dict, groups: dict[str, int], label: str, changes: list[str]) -> None:
+    if "role_message" not in data:
+        return
+    name = data["role_message"] or ""
+    gid = groups.get(name) if name else None
+    if name and gid is None:
+        raise ImportError_(f"{label}: unknown role message {name!r}")
+    if row.group_id != gid:
+        row.group_id = gid
+        changes.append(f"{label}: role message → {name or 'default'}")
 
 
 def _list(data: dict, key: str) -> list[dict]:
@@ -271,7 +296,8 @@ def summary(s: Session) -> list[tuple[str, str, str]]:
         ("Settings", "Channels, boss reports, dashboard, party timing, defaults source", "all"),
         ("Events", "Schedules, alert toggles, ping toggles, message templates, dashboard placement",
          f"{events} events, {slots} alert slots"),
-        ("Roles", "Ping categories with their role IDs, order and reaction emojis", f"{n(Category)} categories"),
+        ("Roles", "Ping categories with role IDs, role messages, and each role's message and emoji",
+         f"{n(Category)} categories, {n(ReactionGroup)} role messages"),
         ("Party finder", "Classes and role IDs, type roles, default makeup, content with dungeon roles, gear brackets, time windows",
          f"{n(PfClass)} classes, {n(PfContent)} content"),
     ]

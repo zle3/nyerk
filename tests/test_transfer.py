@@ -90,3 +90,17 @@ def test_events_and_roles_round_trip_between_installs(s):
         assert cat2.role_id == 999999999999999999 and cat2.sort_order == 0
         assert rift2.dashboard_label == "Rift opens" and rift2.category.name == "Rift"
         assert slot2.ping is False and slot2.template == "{name} soon"
+
+
+def test_role_messages_round_trip(s):
+    from nyerk.models import ReactionGroup
+    g = ReactionGroup(name="Siege pings", description="Abyss", sort_order=3)
+    s.add(g)
+    s.flush()
+    s.scalar(select(Category).where(Category.name == "Shugo")).group_id = g.id
+    data = json.loads(json.dumps(transfer.export(s)))
+    assert {"name": "Siege pings", "description": "Abyss", "sort_order": 3} in data["role_messages"]
+    assert next(c for c in data["categories"] if c["name"] == "Shugo")["role_message"] == "Siege pings"
+    assert transfer.apply_import(s, data) == []
+    with pytest.raises(transfer.ImportError_, match="unknown role message"):
+        transfer.apply_import(s, {"nyerk_export": 1, "categories": [{"name": "Shugo", "role_message": "Nope"}]})

@@ -65,6 +65,19 @@ class Settings(Base):
     party_default_dps: Mapped[int] = mapped_column(Integer, default=3)
 
 
+class ReactionGroup(Base):
+    """One reaction roles message in the roles channel (split past 20)."""
+
+    __tablename__ = "reaction_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    description: Mapped[str] = mapped_column(String(200), default="")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # "category" / "content": where roles without a chosen message go.
+    default_for: Mapped[str] = mapped_column(String(16), default="")
+
+
 class Category(Base):
     __tablename__ = "categories"
 
@@ -74,6 +87,7 @@ class Category(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     # Reaction emoji in the roles message; blank = next number emoji.
     emoji: Mapped[str] = mapped_column(String(64), default="")
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("reaction_groups.id", ondelete="SET NULL"), nullable=True)
 
     events: Mapped[list["Event"]] = relationship(back_populates="category")
 
@@ -173,6 +187,9 @@ class BotState(Base):
     reaction_map: Mapped[dict] = mapped_column(JSON, default=dict)
     # {"<message id>": {"<emoji>": role_id}} for every roles message posted.
     reaction_messages: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Extra messages in the roles channel: class selector copy, remove-all.
+    roles_class_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    roles_clear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     last_tick_at: Mapped[int] = mapped_column(BigInteger, default=0)
     last_import_at: Mapped[int] = mapped_column(BigInteger, default=0)
     last_import_error: Mapped[str] = mapped_column(Text, default="")
@@ -244,6 +261,7 @@ class PfContent(Base):
     # Dungeon ping role: pinged when a party opens, offered as a reaction role.
     role_id: Mapped[int] = mapped_column(BigInteger, default=0)
     react_emoji: Mapped[str] = mapped_column(String(64), default="")
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("reaction_groups.id", ondelete="SET NULL"), nullable=True)
 
 
 class PfInterest(Base):

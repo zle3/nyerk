@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from . import schedules
 from .db import get_settings, get_state
-from .models import AlertSlot, Category, Event, PfBracket, PfClass, PfWindow
+from .models import AlertSlot, Category, Event, PfBracket, PfClass, PfWindow, ReactionGroup
 
 NY = "America/New_York"
 LEADS = (15, 5, 0)
@@ -105,4 +105,17 @@ def seed_party_finder(s: Session) -> bool:
     s.add_all(PfClass(name=n, emoji=e, class_type=t, sort_order=i) for i, (n, e, t) in enumerate(PF_CLASSES))
     s.add_all(PfBracket(label=l, min_score=a, max_score=b, sort_order=i) for i, (l, a, b) in enumerate(PF_BRACKETS))
     s.add_all(PfWindow(minutes=m, label=l) for m, l in PF_WINDOWS)
+    return True
+
+
+def seed_reaction_groups(s: Session) -> bool:
+    """The two default role messages: event pings and dungeon pings."""
+    if s.scalar(select(ReactionGroup).limit(1)) is not None:
+        return False
+    s.add_all([
+        ReactionGroup(name="Event pings", description="Timers and server events.", sort_order=0,
+                      default_for="category"),
+        ReactionGroup(name="Dungeon pings", description="Get pinged when a party opens for these.", sort_order=1,
+                      default_for="content"),
+    ])
     return True

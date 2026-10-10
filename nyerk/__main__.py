@@ -14,7 +14,7 @@ from . import db, housekeeping
 from .config import Config
 from .db import get_settings
 from .logbus import bus
-from .seed import seed, seed_party_finder, upgrade_defaults
+from .seed import seed, seed_party_finder, seed_reaction_groups, upgrade_defaults
 from .web.app import create_app, hash_password
 
 log = logging.getLogger("nyerk")
@@ -111,6 +111,7 @@ def main() -> None:
             log.info("Seeded default events and categories.")
         for what in upgrade_defaults(s):
             log.info("Updated default %s.", what)
+        seed_reaction_groups(s)
         if seed_party_finder(s):
             log.info("Seeded party finder classes, gear brackets and time windows.")
     init_password(cfg)

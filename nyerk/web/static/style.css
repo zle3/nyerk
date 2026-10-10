@@ -313,3 +313,4 @@ button[disabled] { opacity: 0.35; pointer-events: none; }
 td > input, td > select { min-width: 0; }
 td > .emoji-input { width: 4.25rem; text-align: center; }
 td > .order-input { width: 5rem; }
+.discord-buttons span.danger { background: #da373c; }
