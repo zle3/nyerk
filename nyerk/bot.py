@@ -72,8 +72,9 @@ class CustomTimeButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nye
 
 
 class PingSettingsButton(discord.ui.DynamicItem[discord.ui.Button],
-                         template=r"nyerk:roles:(?P<what>clear|quiet|quietoff)"):
+                         template=r"nyerk:roles:(?P<what>clear|quiet|quietoff|mine)"):
     LABELS = {
+        "mine": ("My roles", discord.ButtonStyle.primary, "📋"),
         "quiet": ("Quiet hours", discord.ButtonStyle.primary, "🌙"),
         "quietoff": ("Turn off quiet hours", discord.ButtonStyle.secondary, None),
         "clear": ("Remove all my ping roles", discord.ButtonStyle.danger, None),
@@ -91,7 +92,7 @@ class PingSettingsButton(discord.ui.DynamicItem[discord.ui.Button],
     async def callback(self, interaction: discord.Interaction) -> None:
         client = interaction.client
         await {"clear": client.clear_pings, "quiet": client.open_quiet_hours,
-               "quietoff": client.quiet_hours_off}[self.what](interaction)
+               "quietoff": client.quiet_hours_off, "mine": client.show_my_roles}[self.what](interaction)
 
 
 class QuietHoursModal(discord.ui.Modal, title="Quiet hours"):
@@ -587,7 +588,7 @@ class NyerkBot(discord.Client):
             posted[str(msg.id)] = {e.emoji: e.role_id for e in chunk}
             messages.append((msg, chunk))
         clear_view = discord.ui.View(timeout=None)
-        for what in ("quiet", "quietoff", "clear"):
+        for what in ("mine", "quiet", "quietoff", "clear"):
             clear_view.add_item(PingSettingsButton(what))
         try:
             clear_msg = await channel.send(reaction_roles.CLEAR_TEXT, view=clear_view, allowed_mentions=NO_MENTIONS)
@@ -670,6 +671,14 @@ class NyerkBot(discord.Client):
             made.append(name)
             bus.info("roles", f"Created dungeon role {name} ({role.id}).")
         return made
+
+    async def show_my_roles(self, interaction: discord.Interaction) -> None:
+        """Private overview: classes, ping roles, quiet hours, registration."""
+        member = interaction.user
+        held = {r.id for r in getattr(member, "roles", [])}
+        with db.session() as s:
+            text = my_roles_text(s, member.id, held, now())
+        await interaction.response.send_message(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
 
     # -- quiet hours -------------------------------------------------------------
 
@@ -791,3 +800,39 @@ class NyerkBot(discord.Client):
 def _slot_name(lead: int) -> str:
     return f"{lead} min" if lead else "event-time"
 
+
+
+def my_roles_text(s, user_id: int, held: set[int], t: int) -> str:
+    from .models import Category, PfInterest, RoleHolder
+
+    lines = ["## Your roles"]
+    classes = party.member_classes(s, held)
+    lines.append("**Classes:** " + (", ".join(f"{c.emoji} {c.name} ({party.TYPE_LABEL[c.class_type]})".strip()
+                                             for c in classes) or "none yet. Pick them on the class panel."))
+    events = [c.name for c in s.scalars(select(Category).where(Category.role_id != 0)
+                                        .order_by(Category.sort_order)) if c.role_id in held]
+    lines.append("**Event pings:** " + (", ".join(events) or "none"))
+    paused = {r.role_id for r in s.scalars(select(RoleHolder).where(RoleHolder.user_id == user_id,
+                                                                    RoleHolder.suspended.is_(True)))}
+    dungeons = []
+    for c in party.contents(s, False):
+        if c.role_id and c.role_id in held:
+            dungeons.append(party.party_title_for(c))
+        elif c.role_id and c.role_id in paused:
+            dungeons.append(f"{party.party_title_for(c)} (paused)")
+    lines.append("**Dungeon pings:** " + (", ".join(dungeons) or "none"))
+    q = quiet.get(s, user_id)
+    if q and q.enabled:
+        lines.append(f"**Quiet hours:** {quiet.window_text(q)}" + (" · quiet now" if q.state == "quiet" else ""))
+    else:
+        lines.append("**Quiet hours:** off")
+    reg = s.scalar(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active",
+                                            PfInterest.expires_at > t))
+    if reg:
+        names = ", ".join(party.party_title_for(c) for c in party.contents(s, False) if c.id in (reg.content_ids or []))
+        cls = reg.pf_class.name if reg.pf_class else "?"
+        lines.append(f"**Looking for a group:** {names} as {cls}, until <t:{reg.expires_at}:t> (<t:{reg.expires_at}:R>)")
+    p = party.live_party_for(s, user_id)
+    if p:
+        lines.append(f"**In a party:** {party.party_title(p)} ({p.status}, leader {p.leader_name})")
+    return "\n".join(lines)

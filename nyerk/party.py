@@ -63,19 +63,40 @@ def contents(s: Session, active_only: bool = True) -> list[PfContent]:
     return list(s.scalars(q))
 
 
+def member_classes(s: Session, role_ids: set[int]) -> list[PfClass]:
+    """A member's classes come from their roles on every click; they can
+    hold several."""
+    return [c for c in classes(s) if c.role_id and c.role_id in role_ids]
+
+
 def member_class(s: Session, role_ids: set[int]) -> PfClass | None:
-    """A member's class comes from their roles on every click."""
-    for c in classes(s):
-        if c.role_id and c.role_id in role_ids:
-            return c
-    return None
+    held = member_classes(s, role_ids)
+    return held[0] if held else None
+
+
+def require_classes(s: Session, who: Who) -> list[PfClass]:
+    held = member_classes(s, who.role_ids)
+    if not held:
+        raise PartyError("Pick your class on the class panel first.")
+    return held
 
 
 def require_class(s: Session, who: Who) -> PfClass:
-    c = member_class(s, who.role_ids)
-    if c is None:
-        raise PartyError("Pick your class on the class panel first.")
-    return c
+    return require_classes(s, who)[0]
+
+
+def pick_class_and_slot(party: PfParty, held: list[PfClass]) -> tuple[PfClass | None, str | None]:
+    """With several classes, play the one that fills a slot reserved for its
+    type first; otherwise any class that fits an open slot."""
+    for c in held:
+        slot = pick_slot(party, c.class_type)
+        if slot == c.class_type:
+            return c, slot
+    for c in held:
+        slot = pick_slot(party, c.class_type)
+        if slot:
+            return c, slot
+    return None, None
 
 
 def type_role_ids(settings: Settings) -> dict[str, int]:
@@ -103,31 +124,49 @@ def live_parties(s: Session, status: str | None = None) -> list[PfParty]:
 # Class selector
 
 
-def class_change(s: Session, who: Who, class_id: int | None) -> tuple[set[int], set[int], str]:
-    """Roles to add and remove, and the private reply. class_id None clears."""
+def class_change(s: Session, who: Who, class_id: int | None) -> tuple[set[int], set[int], str, list[PfClass]]:
+    """Toggle one class (or clear all with None). Members can hold several
+    classes; each type role stays while any held class has that type.
+    Returns roles to add, roles to remove, the private reply, and the
+    classes held afterwards."""
     settings = get_settings(s)
-    all_class = {c.role_id for c in classes(s) if c.role_id}
-    all_type = {r for r in type_role_ids(settings).values() if r}
-    owned = (all_class | all_type) & who.role_ids
+    all_classes = [c for c in classes(s) if c.role_id]
+    type_roles = type_role_ids(settings)
+    all_type = {r for r in type_roles.values() if r}
+    held = [c for c in all_classes if c.role_id in who.role_ids]
     if class_id is None:
-        return set(), owned, "Your class has been cleared."
+        owned = ({c.role_id for c in all_classes} | all_type) & who.role_ids
+        return set(), owned, "All your classes have been cleared.", []
     c = s.get(PfClass, class_id)
     if c is None:
         raise PartyError("That class no longer exists.")
     if not c.role_id:
         raise PartyError(f"{c.name} has no role set up yet. Ask an admin.")
-    type_role = type_role_ids(settings).get(c.class_type, 0)
-    add = {c.role_id} | ({type_role} if type_role else set())
-    note = "" if type_role else f" (the {TYPE_LABEL[c.class_type]} role is not set up yet)"
-    return add - who.role_ids, owned - add, f"You are now {c.name} ({TYPE_LABEL[c.class_type]}){note}."
+    if c in held:
+        held.remove(c)
+        verb = f"Removed {c.name}."
+    else:
+        held.append(c)
+        verb = f"Added {c.name}."
+    want_types = {type_roles.get(x.class_type, 0) for x in held} - {0}
+    want = {x.role_id for x in held} | want_types
+    owned = ({x.role_id for x in all_classes} | all_type) & who.role_ids
+    add, remove = want - who.role_ids, owned - want
+    held.sort(key=lambda x: (x.sort_order, x.id))
+    summary = ", ".join(f"{x.name} ({TYPE_LABEL[x.class_type]})" for x in held) or "none"
+    missing = sorted({TYPE_LABEL[x.class_type] for x in held if not type_roles.get(x.class_type)})
+    note = f" The {', '.join(missing)} role is not set up yet." if missing else ""
+    return add, remove, f"{verb} Your classes: {summary}.{note}", held
 
 
 # ----------------------------------------------------------------------------
 # Interest list
 
 
-def register(s: Session, who: Who, bracket_id: int, window_id: int, content_ids: list[int], now: int) -> PfInterest:
-    c = require_class(s, who)
+def register(s: Session, who: Who, bracket_id: int, window_id: int, content_ids: list[int], now: int,
+             class_id: int | None = None) -> PfInterest:
+    held = require_classes(s, who)
+    c = next((x for x in held if x.id == class_id), held[0])
     bracket, window = s.get(PfBracket, bracket_id), s.get(PfWindow, window_id)
     chosen = [x for x in (s.get(PfContent, i) for i in content_ids) if x is not None and x.active]
     if bracket is None or window is None or not chosen:
@@ -215,7 +254,7 @@ def _member(s: Session, party: PfParty, who: Who, c: PfClass, slot: str, now: in
 def create(s: Session, who: Who, content_id: int, size: int, requirement: str, custom: str,
            description: str, now: int) -> PfParty:
     settings = get_settings(s)
-    c = require_class(s, who)
+    held = require_classes(s, who)
     if live_party_for(s, who.user_id):
         raise PartyError("You are already in a party. Leave it before starting another.")
     content = s.get(PfContent, content_id)
@@ -228,9 +267,10 @@ def create(s: Session, who: Who, content_id: int, size: int, requirement: str, c
         status="open", created_at=now, expires_at=now + settings.party_lifetime_min * 60,
         ping_pending=True, members=[],
     )
-    slot = pick_slot(party, c.class_type)
+    c, slot = pick_class_and_slot(party, held)
     if slot is None:
-        raise PartyError(f"That makeup has no slot for your type ({TYPE_LABEL[c.class_type]}).")
+        types = "/".join(sorted({TYPE_LABEL[x.class_type] for x in held}))
+        raise PartyError(f"That makeup has no slot for your type ({types}).")
     s.add(party)
     _member(s, party, who, c, slot, now)
     s.flush()
@@ -243,12 +283,13 @@ def join(s: Session, party: PfParty, who: Who, now: int) -> bool:
         raise PartyError("That party is no longer open.")
     if any(m.user_id == who.user_id for m in party.members):
         raise PartyError("You are already in this party.")
-    c = require_class(s, who)
+    held = require_classes(s, who)
     if live_party_for(s, who.user_id):
         raise PartyError("You are already in another party. Leave it first.")
-    slot = pick_slot(party, c.class_type)
+    c, slot = pick_class_and_slot(party, held)
     if slot is None:
-        raise PartyError(f"No open slot for {TYPE_LABEL[c.class_type]} in this party.")
+        types = "/".join(sorted({TYPE_LABEL[x.class_type] for x in held}))
+        raise PartyError(f"No open slot for {types} in this party.")
     _member(s, party, who, c, slot, now)
     s.flush()
     if is_full(party):
@@ -439,8 +480,9 @@ def ready_text(p: PfParty) -> str:
 
 CLASS_PANEL = (
     "## AION 2 Classes\n"
-    "Pick your class. You get the class role and its type role (Tank, Support or DPS).\n"
-    "Party slots use your type."
+    "Pick every class you play. Each gives the class role and its type role (Tank, Support or DPS); "
+    "click a class again to remove it.\n"
+    "Parties put you in a slot one of your classes can fill. **My roles** shows what you have."
 )
 
 CREATE_PANEL = (

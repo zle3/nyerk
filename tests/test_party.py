@@ -30,15 +30,51 @@ def content(s, name="Fire Temple"):
     return s.scalar(select(PfContent).where(PfContent.name == name))
 
 
-def test_class_change_swaps_class_and_type_roles(pf):
+def test_classes_toggle_and_type_roles_follow(pf):
     s = pf
-    me = Who(1, "Rae", {1001, 2003, 555})  # Gladiator + DPS + unrelated
-    cleric = s.scalar(select(PfClass).where(PfClass.name == "Cleric"))
-    add, remove, text = party.class_change(s, me, cleric.id)
-    assert add == {cleric.role_id, 2002} and remove == {1001, 2003}
-    assert text == "You are now Cleric (Support)."
-    add, remove, _ = party.class_change(s, Who(1, "Rae", {cleric.role_id, 2002}), None)
-    assert add == set() and remove == {cleric.role_id, 2002}
+    by = {c.name: c for c in party.classes(s)}
+    me = Who(1, "Rae", {by["Gladiator"].role_id, 2003, 555})  # Gladiator + DPS + unrelated
+    add, remove, text, held = party.class_change(s, me, by["Cleric"].id)
+    assert add == {by["Cleric"].role_id, 2002} and remove == set()  # keeps Gladiator and DPS
+    assert text == "Added Cleric. Your classes: Gladiator (DPS), Cleric (Support)."
+    me.role_ids |= add
+    add, remove, text, held = party.class_change(s, me, by["Gladiator"].id)  # click again removes
+    assert add == set() and remove == {by["Gladiator"].role_id, 2003}     # DPS role goes with it
+    assert [c.name for c in held] == ["Cleric"]
+    me.role_ids -= remove
+    party.class_change(s, me, by["Ranger"].id)
+    add, remove, _, held = party.class_change(s, Who(1, "Rae", {by["Cleric"].role_id, by["Ranger"].role_id,
+                                                                2002, 2003}), None)
+    assert add == set() and remove == {by["Cleric"].role_id, by["Ranger"].role_id, 2002, 2003} and held == []
+
+
+def test_type_role_stays_while_another_class_has_it(pf):
+    s = pf
+    by = {c.name: c for c in party.classes(s)}
+    me = Who(1, "Rae", {by["Ranger"].role_id, by["Sorcerer"].role_id, 2003})
+    add, remove, _, _ = party.class_change(s, me, by["Ranger"].id)
+    assert remove == {by["Ranger"].role_id}  # Sorcerer still needs DPS
+
+
+def test_multi_class_member_fills_the_needed_slot(pf):
+    s = pf
+    by = {c.name: c for c in party.classes(s)}
+    p = party.create(s, who(s, 1, "Templar"), content(s).id, 5, "default", "", "", T)
+    for uid in (2, 3, 4):
+        party.join(s, p, who(s, uid, "Ranger"), T)
+    flex = Who(9, "Flex", {by["Ranger"].role_id, by["Cleric"].role_id})  # DPS is full, support is open
+    party.join(s, p, flex, T)
+    m = next(m for m in p.members if m.user_id == 9)
+    assert (m.class_name, m.slot_type) == ("Cleric", "support")
+
+
+def test_register_as_chosen_class(pf):
+    s = pf
+    by = {c.name: c for c in party.classes(s)}
+    flex = Who(9, "Flex", {by["Ranger"].role_id, by["Cleric"].role_id})
+    b, w = party.brackets(s)[0].id, party.windows(s)[0].id
+    row = party.register(s, flex, b, w, [content(s).id], T, class_id=by["Cleric"].id)
+    assert (row.class_id, row.class_type) == (by["Cleric"].id, "support")
 
 
 def test_makeup_rules(pf):

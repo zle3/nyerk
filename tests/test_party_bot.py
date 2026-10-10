@@ -97,7 +97,7 @@ def test_post_panels_in_order(s, monkeypatch):
     assert [t.splitlines()[0] for t in texts] == [
         "## AION 2 Classes", "## Looking for a group?", "## Start a party", "## Party status"]
     class_ids = [c.custom_id for c in ch.sent[0][0].view.children]
-    assert len(class_ids) == 9 and class_ids[-1] == "nyerk:pf:class:clear"
+    assert len(class_ids) == 10 and class_ids[-2:] == ["nyerk:pf:class:mine", "nyerk:pf:class:clear"]
     st = get_state(s)
     s.refresh(st)
     assert st.class_panel_message_id == ch.sent[0][0].id and st.party_status_message_id == ch.sent[3][0].id

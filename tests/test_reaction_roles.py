@@ -6,7 +6,7 @@ from sqlalchemy import select
 from nyerk import bot as botmod
 from nyerk import reaction_roles
 from nyerk.db import get_settings, get_state
-from nyerk.models import Category, PfContent, ReactionGroup
+from nyerk.models import Category, PfContent, ReactionGroup, RoleHolder
 
 from .test_bot import FakeChannel, FakeMessage
 
@@ -94,7 +94,7 @@ def test_post_roles_channel_order_and_mapping(s, monkeypatch):
     assert firsts == ["# 🎭 Roles", "## AION 2 Classes", "## Event pings", "## Dungeon pings", "## Ping settings"]
     header, classes, events, dungeons, clear = (m for m, _ in ch.sent)
     assert events.reactions == ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"] and dungeons.reactions == ["1️⃣", "2️⃣", "3️⃣"]
-    assert [c.custom_id for c in clear.view.children] == ["nyerk:roles:quiet", "nyerk:roles:quietoff", "nyerk:roles:clear"]
+    assert [c.custom_id for c in clear.view.children] == ["nyerk:roles:mine", "nyerk:roles:quiet", "nyerk:roles:quietoff", "nyerk:roles:clear"]
     state = get_state(s)
     s.refresh(state)
     assert state.reaction_messages[str(dungeons.id)]["1️⃣"] == 200_000_000_000_000_000
@@ -162,3 +162,22 @@ def test_remove_all_pings_keeps_class_role(s, monkeypatch):
     assert sorted(member.removed) == [100_000_000_000_000_000, 200_000_000_000_000_001]
     assert interaction.response.sent == [("Removed 2 ping roles.", True)]
     assert removed_reactions == [(555, "1️⃣", 77)]
+
+
+def test_my_roles_overview(s):
+    from nyerk import party, quiet
+    from nyerk.bot import my_roles_text
+    give_roles(s, n_dungeons=2)
+    cls = {c.name: c for c in party.classes(s)}
+    cls["Cleric"].role_id, cls["Ranger"].role_id = 1001, 1002
+    s.flush()
+    quiet.set_hours(s, 7, "Rae", 23, 7, "America/New_York", set())
+    s.add(RoleHolder(user_id=7, user_name="Rae", role_id=200_000_000_000_000_001, kind="ping", since=0,
+                     suspended=True))
+    s.flush()
+    held = {1001, 1002, 100_000_000_000_000_000, 200_000_000_000_000_000}
+    text = my_roles_text(s, 7, held, 0)
+    assert "Ranger (DPS)" in text and "Cleric (Support)" in text
+    assert "**Event pings:** World Boss" in text
+    assert "**Dungeon pings:** Dungeon 0, Dungeon 1 (paused)" in text
+    assert "**Quiet hours:** 11 PM (23:00) to 7 AM (07:00), Eastern (New York)" in text

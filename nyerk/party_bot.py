@@ -58,9 +58,10 @@ def _btn(custom_id: str, label: str, style=discord.ButtonStyle.secondary, emoji:
 # Persistent buttons. One DynamicItem per action, IDs under nyerk:pf:.
 
 
-class ClassButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:pf:class:(?P<id>\d+|clear)"):
+class ClassButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:pf:class:(?P<id>\d+|clear|mine)"):
     def __init__(self, key: str, label: str = "", emoji: str = "") -> None:
-        style = discord.ButtonStyle.danger if key == "clear" else discord.ButtonStyle.secondary
+        style = {"clear": discord.ButtonStyle.danger, "mine": discord.ButtonStyle.primary}.get(
+            key, discord.ButtonStyle.secondary)
         super().__init__(_btn(f"nyerk:pf:class:{key}", label or "Class", style, emoji))
         self.key = key
 
@@ -69,6 +70,9 @@ class ClassButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:pf
         return cls(match["id"])
 
     async def callback(self, interaction):
+        if self.key == "mine":
+            await interaction.client.show_my_roles(interaction)
+            return
         await pf(interaction).on_class(interaction, None if self.key == "clear" else int(self.key))
 
 
@@ -149,8 +153,12 @@ def _select(placeholder: str, options: list[tuple[str, str]], many: bool = False
 
 
 class RegisterModal(discord.ui.Modal, title="Register for a group"):
-    def __init__(self, bracket_opts, window_opts, content_opts) -> None:
+    def __init__(self, bracket_opts, window_opts, content_opts, class_opts=None) -> None:
         super().__init__(timeout=600)
+        self.cls = _select("Class you'll play", class_opts, default=class_opts[0][1]) if class_opts else None
+        if self.cls is not None:
+            self.add_item(discord.ui.Label(text="Playing as", component=self.cls,
+                                           description="You hold several classes; pick one for this run."))
         self.bracket = _select("Your gear score", bracket_opts)
         self.window = _select("How long you are free", window_opts)
         self.content = _select("Content you want", content_opts, many=True)
@@ -163,7 +171,8 @@ class RegisterModal(discord.ui.Modal, title="Register for a group"):
 
     async def on_submit(self, interaction):
         await pf(interaction).submit_register(
-            interaction, int(self.bracket.values[0]), int(self.window.values[0]), [int(v) for v in self.content.values])
+            interaction, int(self.bracket.values[0]), int(self.window.values[0]), [int(v) for v in self.content.values],
+            int(self.cls.values[0]) if self.cls is not None else None)
 
 
 class CreateModal(discord.ui.Modal, title="Create a party"):
@@ -219,8 +228,8 @@ class PartyFinder:
         who = who_of(interaction)
         try:
             with db.session() as s:
-                add, remove, text = party.class_change(s, who, class_id)
-                class_roles = {c.role_id for c in party.classes(s) if c.role_id}
+                add, remove, text, held = party.class_change(s, who, class_id)
+                held_roles = {c.role_id for c in held}
         except PartyError as exc:
             await reply(interaction, str(exc))
             return
@@ -235,13 +244,14 @@ class PartyFinder:
             await reply(interaction, "I couldn't change your roles. An admin has been told.")
             return
         await reply(interaction, text)
-        bus.info("party", f"{who.user_name}: {text.replace('You are now', 'now').replace('Your class has been cleared', 'class cleared')}")
-        class_role = next((r for r in add if r in class_roles), None) if class_id is not None else None
-        tracking.set_class(who.user_id, who.user_name, class_role)
+        bus.info("party", f"{who.user_name}: {text}")
+        tracking.set_classes(who.user_id, who.user_name, held_roles)
 
     async def on_reg(self, interaction) -> None:
         with db.session() as s:
-            has_class = party.member_class(s, who_of(interaction).role_ids) is not None
+            held = party.member_classes(s, who_of(interaction).role_ids)
+            has_class = bool(held)
+            cls = [(f"{x.name} ({party.TYPE_LABEL[x.class_type]})", str(x.id)) for x in held] if len(held) > 1 else None
             b = [(x.label, str(x.id)) for x in party.brackets(s)]
             w = [(x.label or f"{x.minutes} min", str(x.id)) for x in party.windows(s)]
             c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s)]
@@ -250,13 +260,13 @@ class PartyFinder:
         elif not (b and w and c):
             await reply(interaction, "Registration isn't set up yet (no content, gear scores or time windows).")
         else:
-            await interaction.response.send_modal(RegisterModal(b, w, c))
+            await interaction.response.send_modal(RegisterModal(b, w, c, cls))
 
-    async def submit_register(self, interaction, bracket_id, window_id, content_ids) -> None:
+    async def submit_register(self, interaction, bracket_id, window_id, content_ids, class_id=None) -> None:
         who = who_of(interaction)
         try:
             with db.session() as s:
-                row = party.register(s, who, bracket_id, window_id, content_ids, now())
+                row = party.register(s, who, bracket_id, window_id, content_ids, now(), class_id)
                 names = ", ".join(party.party_title_for(x) for x in party.contents(s, False) if x.id in row.content_ids)
                 until = row.expires_at
         except PartyError as exc:
@@ -372,8 +382,8 @@ class PartyFinder:
     # -- panels -------------------------------------------------------------------
 
     def _class_view(self, s) -> discord.ui.View:
-        items = [ClassButton(str(c.id), c.name, c.emoji) for c in party.classes(s) if c.role_id][:24]
-        return _view(*items, ClassButton("clear", "Clear class"))
+        items = [ClassButton(str(c.id), c.name, c.emoji) for c in party.classes(s) if c.role_id][:23]
+        return _view(*items, ClassButton("mine", "My roles", "📋"), ClassButton("clear", "Clear classes"))
 
     async def post_panels(self, which: str = "all") -> str:
         """Delete and repost panels in order: class, interest, create, status."""

@@ -13,12 +13,20 @@ def _now() -> int:
     return int(time.time())
 
 
-def set_class(user_id: int, user_name: str, role_id: int | None) -> None:
-    """A member holds at most one class role; None clears it."""
+def set_classes(user_id: int, user_name: str, role_ids: set[int]) -> None:
+    """Replace the member's class roles with `role_ids` (empty clears)."""
     with db.session() as s:
-        s.execute(delete(RoleHolder).where(RoleHolder.user_id == user_id, RoleHolder.kind == "class"))
-        if role_id:
-            s.add(RoleHolder(user_id=user_id, user_name=user_name, role_id=role_id, kind="class", since=_now()))
+        rows = {r.role_id: r for r in s.scalars(select(RoleHolder).where(
+            RoleHolder.user_id == user_id, RoleHolder.kind == "class"))}
+        for rid, row in rows.items():
+            if rid not in role_ids:
+                s.delete(row)
+        for rid in role_ids - set(rows):
+            s.add(RoleHolder(user_id=user_id, user_name=user_name, role_id=rid, kind="class", since=_now()))
+
+
+def set_class(user_id: int, user_name: str, role_id: int | None) -> None:
+    set_classes(user_id, user_name, {role_id} if role_id else set())
 
 
 def add_ping(user_id: int, user_name: str, role_id: int, suspended: bool = False) -> None:
