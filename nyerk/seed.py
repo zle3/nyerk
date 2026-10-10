@@ -86,6 +86,17 @@ PF_BRACKETS = [("1400-1599", 1400, 1599), ("1600-1899", 1600, 1899), ("1900-2100
 PF_WINDOWS = [(15, "15 min"), (30, "30 min"), (60, "1 hr"), (120, "2 hr"), (240, "4 hr")]
 
 
+def upgrade_defaults(s: Session) -> list[str]:
+    """Move existing installs off defaults that changed, without touching
+    anything the admin customised."""
+    st = get_settings(s)
+    done = []
+    if st.dashboard_title == "⏱️ AION2 Timers":
+        st.dashboard_title = "⏱️ AION 2 Timers"
+        done.append("dashboard title")
+    return done
+
+
 def seed_party_finder(s: Session) -> bool:
     """Party finder defaults, separately so existing installs get them too.
     Role IDs stay 0 until set in the admin page or imported."""

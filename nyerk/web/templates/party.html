@@ -40,30 +40,29 @@
 </form>
 
 <p class="section-label" id="classes">Classes</p>
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Name</th><th>Emoji</th><th>Class role ID</th><th>Type</th><th>Order</th><th></th></tr></thead>
-  <tbody>
-  {% for c in classes %}
-    <tr>
-      <td colspan="5">
-        <form method="post" action="/party/classes/{{ c.id }}" class="inline" id="class-{{ c.id }}">
-          {{ csrf_field() }}
-          <input type="text" name="name" value="{{ c.name }}" aria-label="Name" required>
-          <input type="text" name="emoji" value="{{ c.emoji }}" aria-label="Emoji" class="w-auto" size="4">
-          <input type="text" name="role_id" value="{{ c.role_id or '' }}" placeholder="Role ID" aria-label="Role ID" class="mono">
-          <select name="class_type" aria-label="Type" class="w-auto">{% for t in ('tank', 'support', 'dps') %}<option value="{{ t }}" {{ 'selected' if c.class_type == t }}>{{ TYPE_LABEL[t] }}</option>{% endfor %}</select>
-          <input type="number" name="sort_order" value="{{ c.sort_order }}" aria-label="Order" class="w-auto">
-          <button class="btn small secondary" type="submit">Save</button>
-        </form>
-      </td>
-      <td><form method="post" action="/party/classes/{{ c.id }}/delete" class="inline-form" data-confirm="Remove {{ c.name }}?">{{ csrf_field() }}<button class="btn icon" type="submit" aria-label="Remove {{ c.name }}">✕</button></form></td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-<form method="post" action="/party/classes/new" class="card inline">
+<form method="post" action="/party/classes/bulk">
+  {{ csrf_field() }}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Emoji</th><th>Class role ID</th><th>Type</th><th>Order</th><th></th></tr></thead>
+    <tbody>
+    {% for c in classes %}
+      <tr>
+        <td><input type="text" name="name_{{ c.id }}" value="{{ c.name }}" aria-label="Name" required></td>
+        <td><input type="text" name="emoji_{{ c.id }}" value="{{ c.emoji }}" aria-label="Emoji for {{ c.name }}" size="4" class="emoji-input"></td>
+        <td><input type="text" name="role_id_{{ c.id }}" value="{{ c.role_id or '' }}" placeholder="Role ID" aria-label="Role ID for {{ c.name }}" class="mono"></td>
+        <td><select name="class_type_{{ c.id }}" aria-label="Type for {{ c.name }}">{% for t in ('tank', 'support', 'dps') %}<option value="{{ t }}" {{ 'selected' if c.class_type == t }}>{{ TYPE_LABEL[t] }}</option>{% endfor %}</select></td>
+        <td><input type="number" name="sort_order_{{ c.id }}" value="{{ c.sort_order }}" aria-label="Order for {{ c.name }}" class="order-input"></td>
+        <td><button class="btn icon" type="submit" form="del-class-{{ c.id }}" aria-label="Remove {{ c.name }}">✕</button></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="actions"><button class="btn" type="submit">Save classes</button><span class="small muted">Saves every row at once. Repost the class selector panel afterwards to update its buttons.</span></div>
+</form>
+{% for c in classes %}<form method="post" action="/party/classes/{{ c.id }}/delete" id="del-class-{{ c.id }}" data-confirm="Remove {{ c.name }}?" hidden>{{ csrf_field() }}</form>{% endfor %}
+<form method="post" action="/party/classes/new" class="card inline mt">
   {{ csrf_field() }}
   <input type="text" name="name" placeholder="New class" required aria-label="New class name">
   <input type="text" name="emoji" placeholder="Emoji" class="w-auto" size="4" aria-label="Emoji">

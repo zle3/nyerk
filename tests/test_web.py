@@ -7,7 +7,7 @@ from sqlalchemy import select
 from nyerk import db
 from nyerk.config import Config
 from nyerk.db import get_settings
-from nyerk.models import Category, Event, UserTimer
+from nyerk.models import Category, Event, PfClass, UserTimer
 from nyerk.seed import seed, seed_party_finder
 from nyerk.web.app import create_app, hash_password
 
@@ -158,9 +158,21 @@ def test_party_page_and_crud(client):
                                       "party_default_dps": "3"})
     with db.session() as s:
         assert get_settings(s).tank_role_id == 555555555555555555
-    r = client.post("/party/classes/1", data={"csrf": csrf, "name": "Gladiator", "emoji": "⚔️",
-                                             "role_id": "bad", "class_type": "dps", "sort_order": "0"})
-    assert "not a Discord ID" in r.text
+    page = client.get("/party").text
+    form = {k: v for k, v in re.findall(r'name="((?:name|emoji|role_id|sort_order)_\d+)" value="([^"]*)"', page)}
+    form.update({f"class_type_{i}": t for i, t in re.findall(r'name="class_type_(\d+)".*?<option value="(\w+)" selected', page)})
+    ids = sorted({k.rsplit("_", 1)[1] for k in form})
+    assert len(ids) == 8
+    r = client.post("/party/classes/bulk", data={"csrf": csrf, **form, f"role_id_{ids[0]}": "777777777777777777",
+                                                 f"role_id_{ids[1]}": "888888888888888888"})
+    assert "Saved 2 classes" in r.text
+    with db.session() as s:
+        assert {c.role_id for c in s.scalars(select(PfClass))} >= {777777777777777777, 888888888888888888}
+    r = client.post("/party/classes/bulk", data={"csrf": csrf, **form, f"role_id_{ids[2]}": "bad"})
+    assert "Nothing saved" in r.text and "not a Discord ID" in r.text
+    r = client.post("/party/classes/bulk", data={"csrf": csrf, **form, f"role_id_{ids[2]}": "777777777777777777",
+                                                 f"role_id_{ids[0]}": "777777777777777777"})
+    assert "same role ID" in r.text
 
 
 def test_settings_export_import_flow(client):

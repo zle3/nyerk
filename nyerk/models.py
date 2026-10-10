@@ -35,7 +35,10 @@ class Settings(Base):
     time_style_near: Mapped[str] = mapped_column(String(1), default="t")
     time_style_far: Mapped[str] = mapped_column(String(1), default="f")
     # Dashboard headings (Discord markdown). Blank hides that heading.
-    dashboard_title: Mapped[str] = mapped_column(String(100), default="⏱️ AION2 Timers")
+    dashboard_title: Mapped[str] = mapped_column(String(100), default="⏱️ AION 2 Timers")
+    # Line above the title so the dashboard stands apart from the alerts.
+    # Discord has no horizontal rule in plain text, so it's characters.
+    dashboard_divider: Mapped[str] = mapped_column(String(100), default="━" * 22)
     dashboard_top_label: Mapped[str] = mapped_column(String(64), default="Server")
     dashboard_main_label: Mapped[str] = mapped_column(String(64), default="Upcoming events")
     oneoff_label: Mapped[str] = mapped_column(String(64), default="World bosses and one-offs")

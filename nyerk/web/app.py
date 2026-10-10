@@ -546,6 +546,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                 if tz not in available_timezones():
                     raise ValueError(f"Unknown time zone {tz!r}")
                 st.default_tz = tz
+                st.dashboard_divider = str(data.get("dashboard_divider", "")).strip()[:100]
                 st.dashboard_title = str(data.get("dashboard_title", "")).strip()[:100]
                 st.dashboard_top_label = str(data.get("dashboard_top_label", "")).strip()[:64]
                 st.dashboard_main_label = str(data.get("dashboard_main_label", "")).strip()[:64]
@@ -746,6 +747,41 @@ def create_app(cfg, bot=None) -> FastAPI:
         bus.info("config", "Party finder type roles and default makeup saved.")
         flash(request, "Saved. Repost the class panel if role IDs changed.")
         return back("/party")
+
+    @app.post("/party/classes/bulk")
+    async def party_classes_bulk(request: Request):
+        data = await form(request)
+        try:
+            with db.session() as s:
+                rows = party.classes(s)
+                updates = {}
+                for c in rows:
+                    sub = {k: data.get(f"{k}_{c.id}", "") for k in ("name", "emoji", "role_id", "class_type",
+                                                                    "sort_order")}
+                    updates[c.id] = _pf_values("classes", sub)
+                names = [u["name"].lower() for u in updates.values()]
+                if len(names) != len(set(names)):
+                    raise ValueError("Two classes have the same name")
+                roles = [u["role_id"] for u in updates.values() if u["role_id"]]
+                if len(roles) != len(set(roles)):
+                    raise ValueError("Two classes use the same role ID")
+                changed = []
+                for c in rows:
+                    for k, v in updates[c.id].items():
+                        if getattr(c, k) != v:
+                            setattr(c, k, v)
+                            changed.append(c.name)
+                changed = sorted(set(changed))
+        except ValueError as exc:
+            flash(request, f"Nothing saved: {exc}.", "err")
+            return back("/party#classes")
+        if changed:
+            bus.info("config", f"Party finder classes saved: {', '.join(changed)}.")
+            refresh()
+            flash(request, f"Saved {len(changed)} class{'es' if len(changed) != 1 else ''}. Repost the class selector panel to update its buttons.")
+        else:
+            flash(request, "No changes.")
+        return back("/party#classes")
 
     @app.post("/party/{kind}/new")
     async def party_add(request: Request, kind: str):

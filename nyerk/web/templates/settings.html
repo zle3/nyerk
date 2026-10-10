@@ -25,6 +25,7 @@
   <div class="card fields">
     <div class="field"><label for="keep_occurrences">Keep alerts for the last N occurrences</label><input id="keep_occurrences" name="keep_occurrences" type="number" min="1" max="50" value="{{ st.keep_occurrences }}"></div>
     <div class="field"><label for="dashboard_max_oneoffs">Max one-off lines</label><input id="dashboard_max_oneoffs" name="dashboard_max_oneoffs" type="number" min="1" max="60" value="{{ st.dashboard_max_oneoffs }}"></div>
+    <div class="field"><label for="dashboard_divider">Divider line</label><input id="dashboard_divider" name="dashboard_divider" type="text" maxlength="100" value="{{ st.dashboard_divider }}"><div class="help">Sits above the title to separate the dashboard from alerts. Blank hides it.</div></div>
     <div class="field"><label for="dashboard_title">Title</label><input id="dashboard_title" name="dashboard_title" type="text" maxlength="100" value="{{ st.dashboard_title }}"><div class="help">Large heading. Blank hides it.</div></div>
     <div class="field"><label for="dashboard_top_label">Resets and maintenance heading</label><input id="dashboard_top_label" name="dashboard_top_label" type="text" maxlength="64" value="{{ st.dashboard_top_label }}"></div>
     <div class="field"><label for="dashboard_main_label">Scheduled events heading</label><input id="dashboard_main_label" name="dashboard_main_label" type="text" maxlength="64" value="{{ st.dashboard_main_label }}"></div>

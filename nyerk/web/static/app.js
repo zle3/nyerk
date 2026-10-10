@@ -52,7 +52,7 @@
 
   // Destructive actions ask once. Everything else acts immediately.
   document.addEventListener("submit", (e) => {
-    const msg = e.target.dataset.confirm;
+    const msg = (e.submitter && e.submitter.dataset.confirm) || e.target.dataset.confirm;
     if (msg && !window.confirm(msg)) e.preventDefault();
   });
 

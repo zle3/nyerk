@@ -310,7 +310,9 @@ def build_dashboard(s: Session, settings: Settings, now: int) -> Dashboard:
             lines.append(f"+{len(oneoffs) - cap} more")
         sections.append((settings.oneoff_label, lines))
 
-    parts = [f"## {settings.dashboard_title.strip()}"] if settings.dashboard_title.strip() else []
+    parts = [settings.dashboard_divider.strip()] if settings.dashboard_divider.strip() else []
+    if settings.dashboard_title.strip():
+        parts.append(f"## {settings.dashboard_title.strip()}")
     for heading, lines in sections:
         if heading.strip():
             parts.append(f"### {heading.strip()}")

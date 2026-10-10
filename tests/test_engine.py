@@ -96,7 +96,9 @@ def test_dashboard_layout(s):
     timers.report(s, boss(s, "Silent Dartan"), 1, "R", now)
     dash = engine.build_dashboard(s, _settings(s), now)
     lines = dash.text.splitlines()
-    assert lines[0] == "## ⏱️ AION2 Timers"
+    assert lines[0] == "━" * 22
+    lines = lines[1:]
+    assert lines[0] == "## ⏱️ AION 2 Timers"
     assert lines[1] == "### Server"
     assert lines[2].startswith("Daily reset <t:") and lines[4].startswith("Maintenance starts")
     assert lines[5] == "### Upcoming events"
@@ -110,6 +112,7 @@ def test_dashboard_layout(s):
 def test_dashboard_blank_headings_fall_back_to_spacing(s):
     st = _settings(s)
     st.dashboard_title = st.dashboard_top_label = st.dashboard_main_label = st.oneoff_label = st.dashboard_footer = ""
+    st.dashboard_divider = ""
     dash = engine.build_dashboard(s, st, ny(2026, 10, 9, 12, 10))
     assert "#" not in dash.text
     assert dash.text.split("\n\n")[1].startswith("Dimensional Invasion")

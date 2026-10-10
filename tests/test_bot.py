@@ -71,7 +71,7 @@ def test_tick_sends_due_alert_and_reposts_dashboard(s, monkeypatch):
     ch = asyncio.run(run())
     contents = [m.content for m, _ in ch.sent]
     assert contents[0].startswith("Dimensional Invasion starts in 5 minutes")
-    assert contents[-1].startswith("## ")  # dashboard posted last
+    assert contents[-1].startswith("━")  # dashboard posted last
     assert ch.sent[-1][0].view is not None and len(ch.sent[-1][0].view.children) == 5
     assert s.scalar(select(SentMessage).where(SentMessage.slot == 5)).message_id == ch.sent[0][0].id
 
