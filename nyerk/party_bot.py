@@ -171,8 +171,9 @@ class CreateModal(discord.ui.Modal, title="Create a party"):
         super().__init__(timeout=600)
         self.content = _select("Content", content_opts)
         self.size = _select("Party size", [("5 players", "5"), ("20 players", "20")], default="5")
-        self.req = _select("Requirements", [("Default (1 tank, 1 support, 3 DPS)", "default"),
-                                            ("Custom", "custom"), ("No requirement", "none")], default="default")
+        self.req = _select("Requirements", [("Open: any class in any slot", "none"),
+                                            ("Standard: 1 tank, 1 support, 3 DPS", "default"),
+                                            ("Custom", "custom")], default="none")
         self.custom = discord.ui.TextInput(placeholder="e.g. 2/4/14", required=False, max_length=10)
         self.desc = discord.ui.TextInput(placeholder="e.g. fast clear, know the mechanics", required=False,
                                          max_length=100)
@@ -487,7 +488,8 @@ class PartyFinder:
             listing_key = party.digest(listing_text + "|" + ",".join(str(m.user_id) for m in p.members))
             kick = [(m.user_id, m.user_name) for m in p.members if m.user_id != p.leader_id]
             targets = party.ping_targets(s, p, now()) if status == "open" and p.ping_pending else []
-            ping_text = party.ping_text(p, targets) if targets else ""
+            ping_role = p.content.role_id if p.content and status == "open" and p.ping_pending else 0
+            ping_text = party.ping_text(p, targets, ping_role) if targets or ping_role else ""
             target_ids = [t.user_id for t in targets]
             warn = status == "open" and p.warned_at is not None
             warn_text = party.warning_text(p, settings) if warn else ""
@@ -532,7 +534,8 @@ class PartyFinder:
                     view = _view(PartyButton("join", pid), PartyButton("pass", pid))
                     try:
                         msg = await channel.send(ping_text, view=view, allowed_mentions=discord.AllowedMentions(
-                            everyone=False, roles=False, users=[discord.Object(u) for u in target_ids]))
+                            everyone=False, users=[discord.Object(u) for u in target_ids],
+                            roles=[discord.Object(ping_role)] if ping_role else False))
                         upd["ping_message_id"] = msg.id
                         upd["_pinged"] = target_ids
                     except discord.HTTPException as exc:

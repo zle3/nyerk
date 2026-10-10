@@ -7,7 +7,7 @@ from sqlalchemy import select
 from nyerk import db
 from nyerk.config import Config
 from nyerk.db import get_settings
-from nyerk.models import Category, Event, PfClass, UserTimer
+from nyerk.models import Category, Event, PfClass, PfContent, UserTimer
 from nyerk.seed import seed, seed_party_finder
 from nyerk.web.app import create_app, hash_password
 
@@ -192,3 +192,20 @@ def test_settings_export_import_flow(client):
     client.post("/settings/import/apply", data={"csrf": csrf, "raw": html.unescape(raw)})
     with db.session() as s:
         assert get_settings(s).party_channel_id == 666666666666666666
+
+
+def test_content_bulk_save_and_roles_preview(client):
+    csrf = _csrf(client)
+    client.post("/party/content/new", data={"csrf": csrf, "name": "Fire Temple", "emoji": "", "role_id": "",
+                                           "react_emoji": "", "min_gear_score": "1600", "sort_order": "0",
+                                           "active": "1"})
+    with db.session() as s:
+        cid = s.scalar(select(PfContent)).id
+    r = client.post("/party/content/bulk", data={
+        "csrf": csrf, f"name_{cid}": "Fire Temple", f"emoji_{cid}": "🔥", f"role_id_{cid}": "123456789012345679",
+        f"react_emoji_{cid}": "", f"min_gear_score_{cid}": "1700", f"sort_order_{cid}": "0", f"active_{cid}": "1"})
+    assert "Saved 1 dungeon" in r.text
+    page = client.get("/categories").text
+    assert "Dungeon pings" in page and "1️⃣ Fire Temple" in page
+    r = client.post("/party/content/create-roles", data={"csrf": csrf})
+    assert "Bot is not connected" in r.text

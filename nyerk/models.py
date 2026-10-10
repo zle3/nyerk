@@ -72,6 +72,8 @@ class Category(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True)
     role_id: Mapped[int] = mapped_column(BigInteger, default=0)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Reaction emoji in the roles message; blank = next number emoji.
+    emoji: Mapped[str] = mapped_column(String(64), default="")
 
     events: Mapped[list["Event"]] = relationship(back_populates="category")
 
@@ -169,6 +171,8 @@ class BotState(Base):
     # {"1️⃣": role_id, ...} as posted, so reordering in the admin page does not
     # silently change what an existing reaction grants.
     reaction_map: Mapped[dict] = mapped_column(JSON, default=dict)
+    # {"<message id>": {"<emoji>": role_id}} for every roles message posted.
+    reaction_messages: Mapped[dict] = mapped_column(JSON, default=dict)
     last_tick_at: Mapped[int] = mapped_column(BigInteger, default=0)
     last_import_at: Mapped[int] = mapped_column(BigInteger, default=0)
     last_import_error: Mapped[str] = mapped_column(Text, default="")
@@ -237,6 +241,9 @@ class PfContent(Base):
     min_gear_score: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Dungeon ping role: pinged when a party opens, offered as a reaction role.
+    role_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    react_emoji: Mapped[str] = mapped_column(String(64), default="")
 
 
 class PfInterest(Base):

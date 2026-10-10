@@ -4,7 +4,7 @@
 <div class="page-head">
   <div>
     <h1>Categories and roles</h1>
-    <p class="lede">Each category pings one existing Discord role. Order sets the number emoji in #aion-2-roles; a category without a role is left off. Nyerk never creates roles.</p>
+    <p class="lede">Each category pings one Discord role. The roles message in the roles channel lists these event roles first, then the dungeon roles from the Party finder page, numbered 1️⃣ 2️⃣ 3️⃣ in order unless you set an emoji. Entries without a role are left off.</p>
   </div>
   <form method="post" action="/categories/repost-roles" class="inline-form" data-confirm="Delete the current roles message and post a new one? Members keep their roles but will see fresh reactions.">
     <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -26,6 +26,7 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="text" name="name" value="{{ c.name }}" aria-label="Name" required>
       <input type="text" name="role_id" value="{{ c.role_id or '' }}" placeholder="Role ID" aria-label="Role ID for {{ c.name }}" class="mono" inputmode="numeric">
+      <input type="text" name="emoji" value="{{ c.emoji }}" placeholder="{{ numbered.get(c.id, 'auto') }}" aria-label="Reaction emoji for {{ c.name }}" size="4" title="Reaction emoji. Blank uses the next number.">
       <button class="btn small secondary" type="submit">Save</button>
     </form>
     <span class="sub">{{ counts.get(c.id, 0) }} event{{ 's' if counts.get(c.id, 0) != 1 }}</span>
@@ -36,6 +37,14 @@
   </div>
 {% endfor %}
 </div>
+
+<p class="section-label">Roles message preview</p>
+{% if chunks %}
+  {% for text in chunks %}<div class="discord mt">{{ text | discord }}</div>{% endfor %}
+  <p class="small muted">{{ dungeon_count }} dungeon role{{ 's' if dungeon_count != 1 }} included. Discord allows 20 reactions per message, so longer lists post as several messages.</p>
+{% else %}
+  <div class="card"><p class="muted">Nothing to post yet: add a role ID to a category here or to a dungeon on the Party finder page.</p></div>
+{% endif %}
 
 <p class="section-label">Add category</p>
 <form method="post" action="/categories" class="card inline">

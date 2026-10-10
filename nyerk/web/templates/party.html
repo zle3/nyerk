@@ -5,13 +5,13 @@
 <div class="page-head">
   <div>
     <h1>Party finder</h1>
-    <p class="lede">Class selector, interest list and party listings in the party channel{% if not st.party_channel_id %} (set the channel on the <a href="/settings">Settings</a> page first){% endif %}. Nyerk never creates roles: paste IDs of roles that exist.</p>
+    <p class="lede">Class selector, interest list and party listings in the party channel{% if not st.party_channel_id %} (set the channel on the <a href="/settings">Settings</a> page first){% endif %}. Paste IDs of existing roles; Nyerk only creates dungeon ping roles, and only when you click Create role.</p>
   </div>
 </div>
 
 <p class="section-label">Panels</p>
 <div class="card">
-  <p class="small muted">Panels post in this order: class selector, interest list, create party, party status. Posting all puts them at the bottom of the channel, so do it before parties open. Delete the old "AION 2 Classes" message by hand afterwards.</p>
+  <p class="small muted">Class roles stay here as buttons. Dungeon ping roles are offered as reactions in the roles channel (Roles page). Panels post in this order: class selector, interest list, create party, party status. Posting all puts them at the bottom of the channel, so do it before parties open. Delete the old "AION 2 Classes" message by hand afterwards.</p>
   <div class="actions">
     {% for which, label in (('all', 'Post all panels'), ('class', 'Class selector'), ('interest', 'Interest list'), ('create', 'Create party'), ('status', 'Party status')) %}
     <form method="post" action="/party-panels" class="inline-form" {% if which == 'all' %}data-confirm="Delete and repost all four panels?"{% endif %}>
@@ -73,35 +73,45 @@
 </form>
 <p class="small muted">Classes without a role ID are left off the panel.</p>
 
-<p class="section-label" id="content">Content</p>
-<div class="table-wrap">
-<table>
-  <tbody>
-  {% for c in contents %}
-    <tr class="{{ '' if c.active else 'off' }}">
-      <td>
-        <form method="post" action="/party/content/{{ c.id }}" class="inline">
-          {{ csrf_field() }}
-          <input type="text" name="name" value="{{ c.name }}" aria-label="Name" required>
-          <input type="text" name="emoji" value="{{ c.emoji }}" class="w-auto" size="4" aria-label="Emoji">
-          <input type="number" name="min_gear_score" value="{{ c.min_gear_score }}" class="w-auto" aria-label="Minimum gear score" title="Minimum gear score">
-          <input type="number" name="sort_order" value="{{ c.sort_order }}" class="w-auto" aria-label="Order">
-          <label class="switch"><input type="checkbox" name="active" value="1" {{ 'checked' if c.active }}><span class="track"></span>Active</label>
-          <button class="btn small secondary" type="submit">Save</button>
-        </form>
-      </td>
-      <td><form method="post" action="/party/content/{{ c.id }}/delete" class="inline-form" data-confirm="Remove {{ c.name }}?">{{ csrf_field() }}<button class="btn icon" type="submit" aria-label="Remove {{ c.name }}">✕</button></form></td>
-    </tr>
-  {% else %}
-    <tr><td class="muted">No content yet. Add the dungeons and activities people form groups for.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-<form method="post" action="/party/content/new" class="card inline">
+<p class="section-label" id="content">Content and dungeon roles</p>
+<form method="post" action="/party/content/bulk">
+  {{ csrf_field() }}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Emoji</th><th>Ping role ID</th><th>Reaction</th><th>Min gear</th><th>Order</th><th>Active</th><th></th></tr></thead>
+    <tbody>
+    {% for c in contents %}
+      <tr class="{{ '' if c.active else 'off' }}">
+        <td><input type="text" name="name_{{ c.id }}" value="{{ c.name }}" aria-label="Name" required></td>
+        <td><input type="text" name="emoji_{{ c.id }}" value="{{ c.emoji }}" size="4" class="emoji-input" aria-label="Title emoji for {{ c.name }}" title="Shown before the name in listings"></td>
+        <td>{% if c.role_id %}<input type="text" name="role_id_{{ c.id }}" value="{{ c.role_id }}" class="mono" aria-label="Ping role ID for {{ c.name }}">
+            {% else %}<div class="inline"><input type="text" name="role_id_{{ c.id }}" value="" placeholder="Role ID" class="mono" aria-label="Ping role ID for {{ c.name }}"><button class="btn small secondary" type="submit" form="mk-role-{{ c.id }}">Create role</button></div>{% endif %}</td>
+        <td><input type="text" name="react_emoji_{{ c.id }}" value="{{ c.react_emoji }}" placeholder="auto" size="4" class="emoji-input" aria-label="Reaction emoji for {{ c.name }}" title="Blank uses the next number emoji"></td>
+        <td><input type="number" name="min_gear_score_{{ c.id }}" value="{{ c.min_gear_score }}" class="order-input" aria-label="Minimum gear for {{ c.name }}"></td>
+        <td><input type="number" name="sort_order_{{ c.id }}" value="{{ c.sort_order }}" class="order-input" aria-label="Order for {{ c.name }}"></td>
+        <td><label class="switch"><input type="checkbox" name="active_{{ c.id }}" value="1" {{ 'checked' if c.active }}><span class="track"></span></label></td>
+        <td><button class="btn icon" type="submit" form="del-content-{{ c.id }}" aria-label="Remove {{ c.name }}">✕</button></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">No content yet. Add the dungeons and activities people form groups for.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if contents %}<div class="actions"><button class="btn" type="submit">Save content</button>
+    <button class="btn secondary" type="submit" form="mk-role-all">Create missing roles</button>
+    <span class="small muted">New parties ping the dungeon's role. Roles Nyerk creates are mentionable and named after the dungeon.</span></div>{% endif %}
+</form>
+{% for c in contents %}
+<form method="post" action="/party/content/{{ c.id }}/delete" id="del-content-{{ c.id }}" data-confirm="Remove {{ c.name }}?" hidden>{{ csrf_field() }}</form>
+{% if not c.role_id %}<form method="post" action="/party/content/create-roles" id="mk-role-{{ c.id }}" data-confirm="Create a Discord role named {{ c.name }}?" hidden>{{ csrf_field() }}<input type="hidden" name="content_id" value="{{ c.id }}"></form>{% endif %}
+{% endfor %}
+<form method="post" action="/party/content/create-roles" id="mk-role-all" data-confirm="Create a Discord role for every dungeon that has none?" hidden>{{ csrf_field() }}</form>
+<form method="post" action="/party/content/new" class="card inline mt">
   {{ csrf_field() }}
   <input type="text" name="name" placeholder="Dungeon or activity" required aria-label="New content name">
   <input type="text" name="emoji" placeholder="Emoji" class="w-auto" size="4" aria-label="Emoji">
+  <input type="text" name="role_id" placeholder="Role ID (optional)" class="mono" aria-label="Ping role ID">
   <input type="number" name="min_gear_score" placeholder="Min gear" class="w-auto" aria-label="Minimum gear score">
   <input type="number" name="sort_order" value="{{ contents|length }}" class="w-auto" aria-label="Order">
   <input type="hidden" name="active" value="1">

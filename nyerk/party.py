@@ -163,7 +163,7 @@ def parse_makeup(settings: Settings, size: int, requirement: str, custom: str) -
         return {"tank": 0, "support": 0, "dps": 0, "any": size}
     if requirement == "default":
         if size != 5:
-            raise PartyError("Default makeup is for 5 person parties. Pick Custom or No requirement for 20.")
+            raise PartyError("Standard makeup is for 5 person parties. Pick Open or Custom for 20.")
         counts = [settings.party_default_tank, settings.party_default_support, settings.party_default_dps]
     elif requirement == "custom":
         m = re.fullmatch(r"\s*(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{1,2})\s*", custom or "")
@@ -418,9 +418,9 @@ def listing_text(p: PfParty) -> str:
     return "\n".join(lines)[:LIMIT]
 
 
-def ping_text(p: PfParty, targets: list[PfInterest]) -> str:
+def ping_text(p: PfParty, targets: list[PfInterest], role_id: int = 0) -> str:
     minimum = p.content.min_gear_score if p.content else 0
-    mentions = " ".join(f"<@{t.user_id}>" for t in targets)
+    mentions = " ".join(([f"<@&{role_id}>"] if role_id else []) + [f"<@{t.user_id}>" for t in targets])
     gear = f" (min gear {minimum})" if minimum else ""
     return f"{mentions}\nA party opened for **{party_title(p)}**{gear}. Join below, or pass if you can't make it."[:LIMIT]
 

@@ -20,7 +20,7 @@ from markupsafe import Markup, escape
 from sqlalchemy import func, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import db, engine, party, schedules, shugo, timers, transfer
+from .. import db, engine, party, reaction_roles, schedules, shugo, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus
@@ -299,12 +299,12 @@ def create_app(cfg, bot=None) -> FastAPI:
             cats = list(s.scalars(select(Category).order_by(Category.sort_order, Category.id)))
             counts = dict(s.execute(select(Event.category_id, func.count()).group_by(Event.category_id)).all())
             state = get_state(s)
-            numbered, n = {}, 0
-            for c in cats:
-                if c.role_id and n < 10:
-                    numbered[c.id] = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"][n]
-                    n += 1
-            ctx = dict(cats=cats, counts=counts, numbered=numbered, posted=bool(state.reaction_message_id))
+            rows = reaction_roles.entries(s)
+            numbered = {e.ref_id: e.emoji for e in rows if e.kind == "category"}
+            chunks = [reaction_roles.message_text(c, i == 0) for i, c in enumerate(reaction_roles.chunks(rows))]
+            ctx = dict(cats=cats, counts=counts, numbered=numbered, chunks=chunks,
+                       posted=bool(state.reaction_messages or state.reaction_message_id),
+                       dungeon_count=sum(1 for e in rows if e.kind == "content"))
         return render(request, "categories.html", **ctx)
 
     @app.post("/categories")
@@ -355,6 +355,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             c = s.get(Category, cat_id) or _404()
             c.name = str(data.get("name", c.name)).strip() or c.name
             c.role_id = role_id
+            c.emoji = str(data.get("emoji", "")).strip()[:64]
             name = c.name
         bus.info("config", f"Category {name} saved (role {role_id or 'none'}).")
         refresh()
@@ -686,8 +687,8 @@ def create_app(cfg, bot=None) -> FastAPI:
                               ("sort_order", "int"))),
         "brackets": (PfBracket, (("label", "str"), ("min_score", "int"), ("max_score", "int"), ("sort_order", "int"))),
         "windows": (PfWindow, (("minutes", "int"), ("label", "str"))),
-        "content": (PfContent, (("name", "str"), ("emoji", "str"), ("min_gear_score", "int"), ("active", "bool"),
-                                ("sort_order", "int"))),
+        "content": (PfContent, (("name", "str"), ("emoji", "str"), ("role_id", "id"), ("react_emoji", "str"),
+                                ("min_gear_score", "int"), ("active", "bool"), ("sort_order", "int"))),
     }
 
     def _pf_values(kind: str, data) -> dict:
@@ -783,6 +784,55 @@ def create_app(cfg, bot=None) -> FastAPI:
         else:
             flash(request, "No changes.")
         return back("/party#classes")
+
+    @app.post("/party/content/bulk")
+    async def party_content_bulk(request: Request):
+        data = await form(request)
+        try:
+            with db.session() as s:
+                rows = party.contents(s, False)
+                updates = {c.id: _pf_values("content", {k: data.get(f"{k}_{c.id}", "") for k in (
+                    "name", "emoji", "role_id", "react_emoji", "min_gear_score", "sort_order")}
+                    | {"active": data.get(f"active_{c.id}")}) for c in rows}
+                names = [u["name"].lower() for u in updates.values()]
+                if len(names) != len(set(names)):
+                    raise ValueError("Two dungeons have the same name")
+                changed = sorted({c.name for c in rows for k, v in updates[c.id].items() if getattr(c, k) != v})
+                for c in rows:
+                    for k, v in updates[c.id].items():
+                        setattr(c, k, v)
+        except ValueError as exc:
+            flash(request, f"Nothing saved: {exc}.", "err")
+            return back("/party#content")
+        if changed:
+            bus.info("config", f"Party finder content saved: {', '.join(changed)}.")
+            refresh()
+        flash(request, f"Saved {len(changed)} dungeon{'s' if len(changed) != 1 else ''}. Repost the roles message if roles or emojis changed."
+              if changed else "No changes.")
+        return back("/party#content")
+
+    @app.post("/party/content/create-roles")
+    async def party_content_create_roles(request: Request):
+        data = await form(request)
+        bot = app.state.bot
+        if not bot or not bot.is_ready():
+            flash(request, "Bot is not connected.", "err")
+            return back("/party#content")
+        with db.session() as s:
+            only = str(data.get("content_id", "")).strip()
+            ids = [c.id for c in party.contents(s, False) if not c.role_id and (not only or str(c.id) == only)]
+        if not ids:
+            flash(request, "Every dungeon already has a role.")
+            return back("/party#content")
+        try:
+            made = await bot.create_content_roles(ids)
+        except Exception as exc:
+            bus.error("roles", f"Creating dungeon roles failed: {exc!r}")
+            flash(request, f"Discord refused: {exc}. Nyerk needs the Manage Roles permission.", "err")
+            return back("/party#content")
+        flash(request, f"Created {len(made)} role{'s' if len(made) != 1 else ''}: {', '.join(made)}. "
+                       "Post the roles message on the Roles page to offer them as reaction roles.")
+        return back("/party#content")
 
     @app.post("/party/{kind}/new")
     async def party_add(request: Request, kind: str):

@@ -66,7 +66,8 @@ def export(s: Session) -> dict:
         "nyerk_export": FORMAT,
         "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "settings": settings,
-        "categories": [{"name": c.name, "role_id": _out(c.role_id, "role_id"), "sort_order": c.sort_order}
+        "categories": [{"name": c.name, "role_id": _out(c.role_id, "role_id"), "sort_order": c.sort_order,
+                        "emoji": c.emoji}
                        for c in s.scalars(select(Category).order_by(Category.sort_order))],
         "events": events,
         "party_finder": {
@@ -78,7 +79,8 @@ def export(s: Session) -> dict:
                          for b in s.scalars(select(PfBracket).order_by(PfBracket.sort_order))],
             "windows": [{"minutes": w.minutes, "label": w.label}
                         for w in s.scalars(select(PfWindow).order_by(PfWindow.minutes))],
-            "content": [{"name": c.name, "emoji": c.emoji, "min_gear_score": c.min_gear_score,
+            "content": [{"name": c.name, "emoji": c.emoji, "role_id": _out(c.role_id, "role_id"),
+                         "react_emoji": c.react_emoji, "min_gear_score": c.min_gear_score,
                          "active": c.active, "sort_order": c.sort_order}
                         for c in s.scalars(select(PfContent).order_by(PfContent.sort_order))],
         },
@@ -160,7 +162,7 @@ def apply_import(s: Session, data: dict) -> list[str]:
     for c in _list(data, "categories"):
         name = _name(c, "name", "category")
         row = _named(s, Category, "name", name, f"Category {name}", changes, sort_order=99)
-        _assign(row, c, ("role_id", "sort_order"), f"Category {name}", changes)
+        _assign(row, c, ("role_id", "sort_order", "emoji"), f"Category {name}", changes)
 
     s.flush()
     cats = {c.name: c.id for c in s.scalars(select(Category))}
@@ -190,7 +192,8 @@ def apply_import(s: Session, data: dict) -> list[str]:
     for c in _list(pf, "content"):
         name = _name(c, "name", "content")
         row = _named(s, PfContent, "name", name, f"Content {name}", changes, sort_order=99)
-        _assign(row, c, ("emoji", "min_gear_score", "active", "sort_order"), f"Content {name}", changes)
+        _assign(row, c, ("emoji", "role_id", "react_emoji", "min_gear_score", "active", "sort_order"),
+                f"Content {name}", changes)
     s.flush()
     return changes
 
@@ -268,8 +271,8 @@ def summary(s: Session) -> list[tuple[str, str, str]]:
         ("Settings", "Channels, boss reports, dashboard, party timing, defaults source", "all"),
         ("Events", "Schedules, alert toggles, ping toggles, message templates, dashboard placement",
          f"{events} events, {slots} alert slots"),
-        ("Roles", "Ping categories with their role IDs and order", f"{n(Category)} categories"),
-        ("Party finder", "Classes and role IDs, type roles, default makeup, content, gear brackets, time windows",
+        ("Roles", "Ping categories with their role IDs, order and reaction emojis", f"{n(Category)} categories"),
+        ("Party finder", "Classes and role IDs, type roles, default makeup, content with dungeon roles, gear brackets, time windows",
          f"{n(PfClass)} classes, {n(PfContent)} content"),
     ]
 

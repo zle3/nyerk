@@ -62,7 +62,7 @@ Using Dockge? Create a stack named `nyerk`, paste in the contents of `compose.ya
 2. Sign in with your `ADMIN_PASSWORD`.
 3. **Settings:** paste your channel IDs and click **Save settings**. The dashboard appears in your timer channel within a minute.
 4. **Roles:** create roles in Discord for the pings you want (World Boss, Shugo, and so on), paste their IDs here, then click **Post roles message**.
-5. **Party finder** (optional): paste your class role IDs, add the dungeons people group for under **Content**, then click **Post all panels**.
+5. **Party finder** (optional): paste your class role IDs, add the dungeons people group for under **Content**, click **Create missing roles** so each dungeon gets a ping role, then **Post all panels** here and **Post roles message** on the Roles page.
 
 **5. Finish the Discord side**
 
@@ -129,9 +129,10 @@ Import merges: rows are matched by name, and anything missing from the file is l
 ### Party finder setup
 
 1. Settings: set **Party channel** and check the party timing values.
-2. Party finder page: paste the Tank, Support and DPS role IDs and the class role IDs (or import them), and add the **content** (dungeons and activities) with their minimum gear score.
+2. Party finder page: paste the Tank, Support and DPS role IDs and the class role IDs (or import them), and add the **content** (dungeons and activities) with their minimum gear score. Give each dungeon a ping role: paste an ID or click **Create role** (or **Create missing roles**). A new party pings that role and the members registered for it.
 3. Create the Tank, Support and DPS roles in Discord yourself, and move Nyerk's role above all class and type roles.
 4. Make #aion-2-party-finder read-only for members, then click **Post all panels**. Delete the old "AION 2 Classes" message by hand.
+5. Roles page: click **Post roles message**. The roles channel gets one list of event and dungeon ping roles, numbered 1️⃣ 2️⃣ 3️⃣ (then 🇦 🇧 after 🔟) unless you set an emoji, split into several messages past 20. Class roles stay as buttons in the party finder channel.
 
 ### Discord setup
 

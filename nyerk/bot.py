@@ -12,16 +12,15 @@ import discord
 from discord import app_commands
 from sqlalchemy import select
 
-from . import db, engine, party_bot, timers
+from . import db, engine, party_bot, reaction_roles, timers
 from .db import get_settings, get_state
 from .logbus import bus
-from .models import Category, SentMessage, UserTimer
+from .models import PfContent, SentMessage, UserTimer
 from .timeparse import humanize
 
 log = logging.getLogger("nyerk.bot")
 
 TICK_SECONDS = 30
-NUMBER_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 REACTION_PAUSE = 1.5
 NO_MENTIONS = discord.AllowedMentions.none()
 
@@ -496,48 +495,86 @@ class NyerkBot(discord.Client):
 
     # -- reaction roles --------------------------------------------------------
 
+    def _guild(self):
+        return self.get_guild(self.guild_id) if self.guild_id else (self.guilds[0] if self.guilds else None)
+
     async def post_roles_message(self) -> str:
+        """Delete the old roles message(s) and post event and dungeon ping
+        roles, 20 reactions per message, reactions added in order."""
         with db.session() as s:
             settings, state = get_settings(s), get_state(s)
-            cats = list(s.scalars(select(Category).where(Category.role_id != 0).order_by(Category.sort_order, Category.id)))
-            pairs = [(c.name, c.role_id) for c in cats]
-            channel_id, old_id = settings.roles_channel_id, state.reaction_message_id
-        guild = self.get_guild(self.guild_id) if self.guild_id else (self.guilds[0] if self.guilds else None)
-        missing = [n for n, r in pairs if guild is None or guild.get_role(r) is None]
-        pairs = [(n, r) for n, r in pairs if n not in missing][: len(NUMBER_EMOJI)]
+            rows = reaction_roles.entries(s)
+            channel_id = settings.roles_channel_id
+            old_ids = {int(k) for k in (state.reaction_messages or {})} | (
+                {state.reaction_message_id} if state.reaction_message_id else set())
+        guild = self._guild()
+        missing = [e.label for e in rows if guild is None or guild.get_role(e.role_id) is None]
+        rows = [e for e in rows if e.label not in missing]
         if missing:
-            bus.warn("roles", f"Skipped categories whose role does not exist: {', '.join(missing)}.")
+            bus.warn("roles", f"Skipped entries whose role does not exist: {', '.join(missing)}.")
         channel = await self._channel(channel_id)
         if channel is None:
             return "Roles channel not reachable."
-        if not pairs:
-            return "No category has a valid role yet."
-        if old_id:
+        if not rows:
+            return "No category or dungeon has a valid role yet."
+        for old in old_ids:
             try:
-                await channel.get_partial_message(old_id).delete()
+                await channel.get_partial_message(old).delete()
             except discord.HTTPException:
                 pass
-        lines = ["React to get pinged for an event category. Remove your reaction to stop."]
-        lines += [f"{NUMBER_EMOJI[i]} {name}" for i, (name, _) in enumerate(pairs)]
-        msg = await channel.send("\n".join(lines), allowed_mentions=NO_MENTIONS)
-        mapping = {NUMBER_EMOJI[i]: role_id for i, (_, role_id) in enumerate(pairs)}
+        posted: dict[str, dict[str, int]] = {}
+        messages = []
+        for i, chunk in enumerate(reaction_roles.chunks(rows)):
+            msg = await channel.send(reaction_roles.message_text(chunk, first=i == 0), allowed_mentions=NO_MENTIONS)
+            posted[str(msg.id)] = {e.emoji: e.role_id for e in chunk}
+            messages.append((msg, chunk))
         with db.session() as s:
             state = get_state(s)
-            state.reaction_message_id, state.reaction_map = msg.id, mapping
-        for i in range(len(pairs)):
-            await msg.add_reaction(NUMBER_EMOJI[i])
-            await asyncio.sleep(REACTION_PAUSE)  # keeps the reactions in numeric order
-        bus.info("roles", f"Reaction roles message posted with {len(pairs)} categories.")
-        return f"Posted with {len(pairs)} categories."
+            state.reaction_messages = posted
+            state.reaction_message_id, state.reaction_map = messages[0][0].id, {}
+        for msg, chunk in messages:
+            for e in chunk:
+                try:
+                    await msg.add_reaction(e.emoji)
+                except discord.HTTPException as exc:
+                    bus.error("roles", f"Could not add reaction {e.emoji} for {e.label}: {exc!r}")
+                await asyncio.sleep(REACTION_PAUSE)  # keeps the reactions in order
+        bus.info("roles", f"Reaction roles posted: {len(rows)} roles in {len(messages)} message(s).")
+        return f"Posted {len(rows)} roles in {len(messages)} message(s)."
+
+    async def create_content_roles(self, content_ids: list[int]) -> list[str]:
+        """Create a mentionable role for each dungeon without one."""
+        guild = self._guild()
+        if guild is None:
+            raise RuntimeError("Not connected to a server")
+        made = []
+        for cid in content_ids:
+            with db.session() as s:
+                c = s.get(PfContent, cid)
+                if c is None or c.role_id:
+                    continue
+                name = c.name
+            role = await guild.create_role(name=name[:100], mentionable=True,
+                                           reason="Nyerk dungeon ping role (party finder)")
+            with db.session() as s:
+                c = s.get(PfContent, cid)
+                if c is not None:
+                    c.role_id = role.id
+            made.append(name)
+            bus.info("roles", f"Created dungeon role {name} ({role.id}).")
+        return made
 
     async def _reaction(self, payload: discord.RawReactionActionEvent, add: bool) -> None:
         if self.user and payload.user_id == self.user.id or payload.guild_id is None:
             return
         with db.session() as s:
             state = get_state(s)
-            if payload.message_id != state.reaction_message_id:
+            mapping = (state.reaction_messages or {}).get(str(payload.message_id))
+            if mapping is None and payload.message_id == state.reaction_message_id:
+                mapping = state.reaction_map or {}  # message posted by an older version
+            if mapping is None:
                 return
-            role_id = (state.reaction_map or {}).get(str(payload.emoji))
+            role_id = mapping.get(str(payload.emoji))
         if not role_id:
             return
         guild = self.get_guild(payload.guild_id)

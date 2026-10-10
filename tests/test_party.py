@@ -46,7 +46,7 @@ def test_makeup_rules(pf):
     assert party.parse_makeup(st, 5, "default", "") == {"tank": 1, "support": 1, "dps": 3, "any": 0}
     assert party.parse_makeup(st, 20, "custom", "2/4/10") == {"tank": 2, "support": 4, "dps": 10, "any": 4}
     assert party.parse_makeup(st, 20, "none", "")["any"] == 20
-    with pytest.raises(PartyError, match="Default makeup is for 5"):
+    with pytest.raises(PartyError, match="Standard makeup is for 5"):
         party.parse_makeup(st, 20, "default", "")
     with pytest.raises(PartyError, match="needs 21"):
         party.parse_makeup(st, 20, "custom", "5/5/11")

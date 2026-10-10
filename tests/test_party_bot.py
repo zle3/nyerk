@@ -101,3 +101,24 @@ def test_post_panels_in_order(s, monkeypatch):
     st = get_state(s)
     s.refresh(st)
     assert st.class_panel_message_id == ch.sent[0][0].id and st.party_status_message_id == ch.sent[3][0].id
+
+
+def test_new_party_pings_dungeon_role(s, monkeypatch):
+    cid = setup(s)
+    s.get(PfContent, cid).role_id = 4242
+    party.create(s, who(s, 1, "Templar"), cid, 5, "none", "", "", T)
+    s.commit()
+    ch = FakeChannel()
+    monkeypatch.setattr(party_bot, "now", lambda: T + 5)
+    asyncio.run(party_bot.PartyFinder(StubBot(ch)).sync())
+    ping = ch.sent[1]
+    assert ping[0].content.startswith("<@&4242>\nA party opened for **Fire Temple**")
+    assert [r.id for r in ping[1].roles] == [4242] and ping[1].users == []
+
+
+def test_create_form_defaults_to_open(s):
+    async def build():
+        return party_bot.CreateModal([("Fire Temple", "1")]).to_dict()
+    req = asyncio.run(build())["components"][2]["component"]
+    assert [o["value"] for o in req["options"] if o["default"]] == ["none"]
+    assert req["options"][0]["label"].startswith("Open")
