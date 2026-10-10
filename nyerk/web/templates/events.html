@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Events{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Events</h1>
+    <p class="lede">Each event has a schedule and up to three alert slots. ● sends the alert, 🔔 pings the category role.</p>
+  </div>
+  <a class="btn" href="/events/new">New event</a>
+</div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Event</th><th>Schedule</th><th>Next</th><th>15 min</th><th>5 min</th><th>At time</th><th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}{% set e = r.e %}
+    <tr class="{{ '' if e.enabled else 'off' }}">
+      <td><a href="/events/{{ e.id }}"><strong>{{ e.name }}</strong></a><br>
+        <span class="small muted">{{ e.category.name if e.category else "No category" }}{% if e.location %} · {{ e.location }}{% endif %}</span></td>
+      <td class="small">{{ r.describe }}{% if e.schedule_type == 'kill_report' %}<br><span class="muted">{{ e.respawn_minutes // 60 }} h {{ e.respawn_minutes % 60 }} m respawn</span>{% endif %}</td>
+      <td class="small">{% if r.next %}<time data-ts="{{ r.next }}" data-style="R"></time>{% elif e.schedule_type == 'kill_report' %}<span class="muted">on report</span>{% else %}<span class="muted">none</span>{% endif %}</td>
+      {% for lead in (15, 5, 0) %}{% set sl = r.slots.get(lead) %}
+      <td>{% if sl and sl.enabled %}●{% if sl.ping %} 🔔{% endif %}{% else %}<span class="muted">–</span>{% endif %}</td>
+      {% endfor %}
+      <td>
+        <form method="post" action="/events/{{ e.id }}/toggle" class="inline-form">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="btn small {{ 'secondary' if e.enabled else '' }}" type="submit">{{ 'Disable' if e.enabled else 'Enable' }}</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

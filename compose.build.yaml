@@ -1,0 +1,37 @@
+# Local build from source (development). The server uses compose.yaml.
+#   docker compose -f compose.build.yaml up -d --build
+services:
+  nyerk:
+    build: .
+    image: nyerk:latest
+    # Rebuild on every deploy, so Dockge's Deploy/Update picks up new code
+    # instead of reusing the first image it built.
+    pull_policy: build
+    container_name: nyerk
+    restart: unless-stopped
+    # Values come from the stack's .env (Dockge's env editor). Listing them
+    # here instead of env_file works on every Compose version, with or
+    # without a .env file.
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:-}
+      GUILD_ID: ${GUILD_ID:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      NYERK_RESET_PASSWORD: ${NYERK_RESET_PASSWORD:-}
+      WEB_TLS: ${WEB_TLS:-self-signed}
+      WEB_PORT: ${WEB_PORT:-8443}
+      TLS_CERT_FILE: ${TLS_CERT_FILE:-}
+      TLS_KEY_FILE: ${TLS_KEY_FILE:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      NYERK_WEB_ONLY: ${NYERK_WEB_ONLY:-}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+    volumes:
+      - ./data:/data          # SQLite DB, backups, logs, TLS cert
+    ports:
+      - "${WEB_PORT:-8443}:${WEB_PORT:-8443}"   # admin page; keep LAN-only
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, socket; socket.create_connection(('127.0.0.1', int(os.environ.get('WEB_PORT', 8443))), 3)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3

@@ -1,0 +1,15 @@
+<div class="table-wrap">
+  <table class="log">
+    <tbody>
+    {% for l in logs %}
+      <tr>
+        <td><time data-ts="{{ l.at }}" data-style="f"></time></td>
+        <td>{% if l.level == 'ERROR' %}<span class="pill err">{{ l.kind }}</span>{% elif l.level == 'WARNING' %}<span class="pill warn">{{ l.kind }}</span>{% else %}<span class="pill">{{ l.kind }}</span>{% endif %}</td>
+        <td>{{ l.text | discord }}</td>
+      </tr>
+    {% else %}
+      <tr><td class="muted">Nothing logged yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>

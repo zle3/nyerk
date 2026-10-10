@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="lede">Applies on the next scheduler check, no restart needed.</p>
+
+<form method="post" action="/settings">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <p class="section-label">Channels</p>
+  <div class="card fields">
+    <div class="field"><label for="timer_channel_id">Timer channel</label><input id="timer_channel_id" name="timer_channel_id" class="mono" type="text" value="{{ st.timer_channel_id or '' }}"><div class="help">#aion-2-timer. Alerts and the dashboard.</div></div>
+    <div class="field"><label for="roles_channel_id">Roles channel</label><input id="roles_channel_id" name="roles_channel_id" class="mono" type="text" value="{{ st.roles_channel_id or '' }}"><div class="help">#aion-2-roles. Reaction roles message.</div></div>
+    <div class="field"><label for="log_channel_id">Log channel</label><input id="log_channel_id" name="log_channel_id" class="mono" type="text" value="{{ st.log_channel_id or '' }}"><div class="help">#logs.</div></div>
+  </div>
+
+  <p class="section-label">Boss reports</p>
+  <div class="card fields">
+    <div class="field"><label for="user_timer_limit">Active timers per user</label><input id="user_timer_limit" name="user_timer_limit" type="number" min="1" max="100" value="{{ st.user_timer_limit }}"></div>
+    <div class="field"><label for="report_offset_min">Report offset (minutes)</label><input id="report_offset_min" name="report_offset_min" type="number" min="0" max="120" value="{{ st.report_offset_min }}"><div class="help">A report with no time assumes the kill happened this long ago.</div></div>
+    <div class="field"><label for="default_tz">Server time zone</label><input id="default_tz" name="default_tz" type="text" list="tz-list" value="{{ st.default_tz }}"><div class="help">Used to read times like "14:30" in reports.</div></div>
+  </div>
+
+  <p class="section-label">Dashboard and cleanup</p>
+  <div class="card fields">
+    <div class="field"><label for="keep_occurrences">Keep alerts for the last N occurrences</label><input id="keep_occurrences" name="keep_occurrences" type="number" min="1" max="50" value="{{ st.keep_occurrences }}"></div>
+    <div class="field"><label for="dashboard_max_oneoffs">Max one-off lines</label><input id="dashboard_max_oneoffs" name="dashboard_max_oneoffs" type="number" min="1" max="60" value="{{ st.dashboard_max_oneoffs }}"></div>
+    <div class="field"><label for="dashboard_title">Title</label><input id="dashboard_title" name="dashboard_title" type="text" maxlength="100" value="{{ st.dashboard_title }}"><div class="help">Large heading. Blank hides it.</div></div>
+    <div class="field"><label for="dashboard_top_label">Resets and maintenance heading</label><input id="dashboard_top_label" name="dashboard_top_label" type="text" maxlength="64" value="{{ st.dashboard_top_label }}"></div>
+    <div class="field"><label for="dashboard_main_label">Scheduled events heading</label><input id="dashboard_main_label" name="dashboard_main_label" type="text" maxlength="64" value="{{ st.dashboard_main_label }}"></div>
+    <div class="field"><label for="oneoff_label">Boss and one-off heading</label><input id="oneoff_label" name="oneoff_label" type="text" maxlength="64" value="{{ st.oneoff_label }}"></div>
+    <div class="field"><label for="dashboard_footer">Footer</label><input id="dashboard_footer" name="dashboard_footer" type="text" maxlength="200" value="{{ st.dashboard_footer }}"><div class="help">Small grey line at the bottom. Blank hides it.</div></div>
+    <div class="field"><label for="time_style_near">Time style within 24 h</label>
+      <select id="time_style_near" name="time_style_near">{% for k, label in TS_STYLES.items() %}<option value="{{ k }}" {{ 'selected' if st.time_style_near == k }}>:{{ k }} · {{ label }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="time_style_far">Time style beyond 24 h</label>
+      <select id="time_style_far" name="time_style_far">{% for k, label in TS_STYLES.items() %}<option value="{{ k }}" {{ 'selected' if st.time_style_far == k }}>:{{ k }} · {{ label }}</option>{% endfor %}</select></div>
+  </div>
+
+  <p class="section-label">Defaults source</p>
+  <div class="card fields">
+    <div class="field"><label for="shugo_url">Timer page</label><input id="shugo_url" name="shugo_url" type="url" value="{{ st.shugo_url }}"></div>
+    <div class="field"><label for="shugo_region">Region heading</label><input id="shugo_region" name="shugo_region" type="text" value="{{ st.shugo_region }}"></div>
+  </div>
+  <datalist id="tz-list">{% for z in COMMON_TZ %}<option value="{{ z }}">{% endfor %}</datalist>
+  <div class="savebar"><span class="small muted">Channel IDs: right-click a channel › Copy Channel ID.</span><button class="btn" type="submit">Save settings</button></div>
+</form>
+
+<p class="section-label">Admin password</p>
+<form method="post" action="/settings/password" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="text" name="username" value="admin" autocomplete="username" hidden>
+  <div class="fields">
+    <div class="field"><label for="current">Current</label><input id="current" name="current" type="password" autocomplete="current-password" required></div>
+    <div class="field"><label for="new">New</label><input id="new" name="new" type="password" autocomplete="new-password" minlength="10" required></div>
+    <div class="field"><label for="confirm">Confirm</label><input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="10" required></div>
+  </div>
+  <button class="btn secondary" type="submit">Change password</button>
+</form>
+{% endblock %}

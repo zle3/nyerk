@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Overview</h1>
+    <p class="lede">What #aion-2-timer shows right now, and what Nyerk has been doing.</p>
+  </div>
+  <form method="post" action="/dashboard/repost" class="inline-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn secondary" type="submit">Repost dashboard</button>
+  </form>
+</div>
+
+{% if pending_changes %}
+<div class="banner">
+  <span>shugo.gg lists {{ pending_changes }} change{{ 's' if pending_changes != 1 }} to review.</span>
+  <a class="btn small" href="/defaults">Review</a>
+</div>
+{% endif %}
+
+<div class="grid">
+  <div class="card stat">
+    <span class="label">Discord</span>
+    {% if bot_status is none %}
+      <span class="value">Off</span><span class="label">Web-only mode</span>
+    {% elif bot_status.connected %}
+      <span class="value">Online</span>
+      <span class="label">{{ bot_status.user }} · {{ bot_status.guild or "no server" }}{% if bot_status.latency_ms is not none %} · {{ bot_status.latency_ms }} ms{% endif %}</span>
+    {% else %}
+      <span class="value">Offline</span><span class="label">Reconnecting</span>
+    {% endif %}
+  </div>
+  <div class="card stat">
+    <span class="label">Active boss timers</span>
+    <span class="value">{{ active }}</span>
+    <span class="label"><a href="/timers">View all</a></span>
+  </div>
+  <div class="card stat">
+    <span class="label">Last scheduler check</span>
+    <span class="value">{% if state.last_tick_at %}<time data-ts="{{ state.last_tick_at }}" data-style="R"></time>{% else %}Never{% endif %}</span>
+    <span class="label">Runs every 30 seconds</span>
+  </div>
+</div>
+
+<p class="section-label">Dashboard preview</p>
+<div class="discord">{{ dash.text | discord }}{% if dash.bosses %}
+<div class="discord-buttons">{% for _, name in dash.bosses %}<span>{{ name }} died</span>{% endfor %}<span class="primary">Custom time</span></div>{% endif %}</div>
+<p class="small muted">Times show in your browser's time zone, the same way Discord shows them to each member.</p>
+
+<p class="section-label">Recent activity</p>
+{% include "_logs.html" %}
+<p><a href="/logs">All logs</a></p>
+{% endblock %}

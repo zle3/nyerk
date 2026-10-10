@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+{% block content %}
+<h1>Logs</h1>
+<p class="lede">The last 500 entries. The same lines go to #logs and to <code>data/logs/nyerk.log</code>.</p>
+{% include "_logs.html" %}
+{% endblock %}

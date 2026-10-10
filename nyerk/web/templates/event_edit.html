@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% macro v(key, default) %}{{ values.get(key, default) if values else default }}{% endmacro %}
+{% block title %}{{ e.name if e else "New event" }}{% endblock %}
+{% block content %}
+<p><a href="/events">‹ Events</a></p>
+<h1>{{ e.name if e else "New event" }}</h1>
+{% if error %}<div class="flash err" role="alert">{{ error }}</div>{% endif %}
+
+<form method="post" action="{{ '/events/%d' % e.id if e else '/events/new' }}">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+
+  <p class="section-label">Basics</p>
+  <div class="card">
+    <div class="fields">
+      <div class="field"><label for="name">Name</label>
+        <input id="name" name="name" type="text" required maxlength="100" value="{{ v('name', e.name if e else '') }}"></div>
+      <div class="field"><label for="category_id">Category</label>
+        <select id="category_id" name="category_id">
+          <option value="">None</option>
+          {% for c in cats %}<option value="{{ c.id }}" {{ 'selected' if e and e.category_id == c.id }}>{{ c.name }}</option>{% endfor %}
+        </select>
+        <div class="help">Pings go to this category's role.</div></div>
+      <div class="field"><label for="location">Location</label>
+        <input id="location" name="location" type="text" maxlength="100" value="{{ v('location', e.location if e else '') }}"></div>
+    </div>
+    <label class="switch"><input type="checkbox" name="enabled" value="1" {{ 'checked' if not e or e.enabled }}><span class="track"></span>Enabled</label>
+  </div>
+
+  <p class="section-label">Schedule</p>
+  <div class="card">
+    <div class="fields">
+      <div class="field"><label for="schedule_type">Type</label>
+        <select id="schedule_type" name="schedule_type" data-schedule-type>
+          {% for key, st in types.items() %}<option value="{{ key }}" {{ 'selected' if (e and e.schedule_type == key) or (not e and key == 'weekly') }}>{{ st.label }}</option>{% endfor %}
+        </select></div>
+      <div class="field"><label for="duration_minutes">Duration (minutes)</label>
+        <input id="duration_minutes" name="duration_minutes" type="number" min="0" value="{{ v('duration_minutes', e.duration_minutes if e else 0) }}">
+        <div class="help">Used for "ends" lines and the <code>{end_full}</code> field.</div></div>
+      <div class="field" data-boss-only><label for="respawn_minutes">Respawn (minutes)</label>
+        <input id="respawn_minutes" name="respawn_minutes" type="number" min="0" value="{{ v('respawn_minutes', e.respawn_minutes if e else 0) }}">
+        <div class="help">Kill time plus this is the alert time.</div></div>
+    </div>
+    {% for key, st in types.items() %}
+    <fieldset data-params-for="{{ key }}">
+      <div class="fields">
+      {% for f in st.fields %}{% set name = 'p_%s_%s' % (key, f.name) %}
+        {% set cur = e.schedule_params.get(f.name) if e and e.schedule_type == key else None %}
+        <div class="field"><label for="{{ name }}">{{ f.label }}</label>
+        {% if f.kind == 'days' %}
+          <div class="days">{% for d in DAYS %}<label><input type="checkbox" name="{{ name }}" value="{{ d }}" {{ 'checked' if cur and d in cur }}><span>{{ d.capitalize() }}</span></label>{% endfor %}</div>
+        {% elif f.kind == 'tz' %}
+          <input id="{{ name }}" name="{{ name }}" type="text" list="tz-list" value="{{ cur or tz_default }}">
+        {% elif f.kind == 'times' %}
+          <input id="{{ name }}" name="{{ name }}" type="text" placeholder="02:00, 05:00" value="{{ cur | join(', ') if cur else '' }}">
+        {% elif f.kind == 'int' %}
+          <input id="{{ name }}" name="{{ name }}" type="number" value="{{ cur if cur is not none else '' }}">
+        {% elif f.kind == 'datetime' %}
+          <input id="{{ name }}" name="{{ name }}" type="text" placeholder="2026-12-01 12:00" value="{{ cur or '' }}">
+        {% else %}
+          <input id="{{ name }}" name="{{ name }}" type="text" placeholder="HH:MM" value="{{ cur or '' }}">
+        {% endif %}
+        {% if f.help %}<div class="help">{{ f.help }}</div>{% endif %}
+        </div>
+      {% endfor %}
+      </div>
+    </fieldset>
+    {% endfor %}
+    <datalist id="tz-list">{% for z in COMMON_TZ %}<option value="{{ z }}">{% endfor %}</datalist>
+    {% if preview %}
+      <p class="small muted">Next: {% for p in preview %}<time data-ts="{{ p }}" data-style="f"></time>{{ ", " if not loop.last }}{% endfor %}</p>
+    {% endif %}
+    {% if e and e.edited_fields %}
+      <p class="small"><span class="pill accent">Hand-edited</span> The defaults import will not overwrite these:</p>
+      {% for f in e.edited_fields %}
+        <label class="switch small"><input type="checkbox" name="unlock_{{ f }}" value="1"><span class="track"></span>Let shugo.gg update {{ 'the schedule' if f == 'schedule' else 'the duration' }} again</label>
+      {% endfor %}
+    {% endif %}
+  </div>
+
+  <p class="section-label">Alerts</p>
+  {% if e %}
+  {% for sl in e.slots %}
+  <div class="card">
+    <div class="actions spread">
+      <h3>{{ "At event time" if sl.lead_minutes == 0 else "%d minutes before" % sl.lead_minutes }}</h3>
+      <div class="actions">
+        <label class="switch"><input type="checkbox" name="slot_{{ sl.lead_minutes }}_enabled" value="1" {{ 'checked' if sl.enabled }}><span class="track"></span>Send</label>
+        <label class="switch"><input type="checkbox" name="slot_{{ sl.lead_minutes }}_ping" value="1" {{ 'checked' if sl.ping }}><span class="track"></span>Ping role</label>
+      </div>
+    </div>
+    <div class="field mt">
+      <label for="tmpl{{ sl.lead_minutes }}">Message template</label>
+      <textarea id="tmpl{{ sl.lead_minutes }}" name="slot_{{ sl.lead_minutes }}_template" placeholder="{{ default_templates.get(sl.lead_minutes, default_templates[15 if sl.lead_minutes else 0]) }}">{{ sl.template }}</textarea>
+      <div class="help">Blank uses the default shown in grey. Lines with only <code>{role}</code> are dropped when the ping is off.</div>
+    </div>
+    {% if sl.lead_minutes not in (15, 5, 0) %}
+      <label class="switch small"><input type="checkbox" name="slot_remove" value="{{ sl.lead_minutes }}"><span class="track"></span>Remove this slot on save</label>
+    {% endif %}
+  </div>
+  {% endfor %}
+  <div class="card">
+    <div class="fields">
+      <div class="field"><label for="new_slot_lead">Add an alert slot (minutes before)</label>
+        <input id="new_slot_lead" name="new_slot_lead" type="number" min="0" placeholder="e.g. 30"></div>
+    </div>
+    <p class="small muted">Fields: {% for f in template_fields %}<code>{{ '{' ~ f ~ '}' }}</code>{{ " " }}{% endfor %}</p>
+  </div>
+  {% else %}
+  <div class="card"><p class="muted small">Alert slots (15 min, 5 min, at time) are created off. Turn them on after saving.</p></div>
+  {% endif %}
+
+  <p class="section-label">Dashboard</p>
+  <div class="card">
+    <div class="fields">
+      <div class="field"><label for="dashboard">Placement</label>
+        <select id="dashboard" name="dashboard">
+          {% for val, label in (('main', 'Upcoming events'), ('top', 'Pinned at the top'), ('hidden', 'Hidden')) %}
+          <option value="{{ val }}" {{ 'selected' if (e and e.dashboard == val) or (not e and val == 'main') }}>{{ label }}</option>{% endfor %}
+        </select></div>
+      <div class="field"><label for="dashboard_label">Line label</label>
+        <input id="dashboard_label" name="dashboard_label" type="text" placeholder="{name} starts" value="{{ v('dashboard_label', e.dashboard_label if e else '') }}"></div>
+      <div class="field"><label for="dashboard_label_active">Label while running</label>
+        <input id="dashboard_label_active" name="dashboard_label_active" type="text" placeholder="{name} ends" value="{{ v('dashboard_label_active', e.dashboard_label_active if e else '') }}">
+        <div class="help">Pinned events with a duration only.</div></div>
+      <div class="field"><label for="sort_order">Sort order</label>
+        <input id="sort_order" name="sort_order" type="number" value="{{ v('sort_order', e.sort_order if e else 0) }}">
+        <div class="help">Also orders the boss buttons.</div></div>
+    </div>
+  </div>
+
+  <div class="savebar">
+    <span class="small muted">{{ "Changes apply on the next scheduler check." if e else "New events start disabled until saved as enabled." }}</span>
+    <button class="btn" type="submit">Save</button>
+  </div>
+</form>
+
+{% if e %}
+<form method="post" action="/events/{{ e.id }}/delete" data-confirm="Delete {{ e.name }}? Its timers and alert history go with it." class="mt-l">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="btn danger small" type="submit">Delete event</button>
+</form>
+{% endif %}
+{% endblock %}

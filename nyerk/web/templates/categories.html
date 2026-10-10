@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Roles{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Categories and roles</h1>
+    <p class="lede">Each category pings one existing Discord role. Order sets the number emoji in #aion-2-roles; a category without a role is left off. Nyerk never creates roles.</p>
+  </div>
+  <form method="post" action="/categories/repost-roles" class="inline-form" data-confirm="Delete the current roles message and post a new one? Members keep their roles but will see fresh reactions.">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn" type="submit">{{ 'Repost' if posted else 'Post' }} roles message</button>
+  </form>
+</div>
+
+<div class="list">
+{% for c in cats %}
+  <div class="row">
+    <div class="actions">
+      <form method="post" action="/categories/{{ c.id }}/move" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="dir" value="up">
+        <button class="btn icon" type="submit" aria-label="Move {{ c.name }} up" {{ 'disabled' if loop.first }}>↑</button></form>
+      <form method="post" action="/categories/{{ c.id }}/move" class="inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="dir" value="down">
+        <button class="btn icon" type="submit" aria-label="Move {{ c.name }} down" {{ 'disabled' if loop.last }}>↓</button></form>
+    </div>
+    <span class="title">{{ numbered.get(c.id, '·') }}</span>
+    <form method="post" action="/categories/{{ c.id }}" class="grow inline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="text" name="name" value="{{ c.name }}" aria-label="Name" required>
+      <input type="text" name="role_id" value="{{ c.role_id or '' }}" placeholder="Role ID" aria-label="Role ID for {{ c.name }}" class="mono" inputmode="numeric">
+      <button class="btn small secondary" type="submit">Save</button>
+    </form>
+    <span class="sub">{{ counts.get(c.id, 0) }} event{{ 's' if counts.get(c.id, 0) != 1 }}</span>
+    <form method="post" action="/categories/{{ c.id }}/delete" class="inline-form" data-confirm="Delete category {{ c.name }}?">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="btn icon" type="submit" aria-label="Delete {{ c.name }}">✕</button>
+    </form>
+  </div>
+{% endfor %}
+</div>
+
+<p class="section-label">Add category</p>
+<form method="post" action="/categories" class="card inline">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="text" name="name" placeholder="Name" required aria-label="New category name">
+  <input type="text" name="role_id" placeholder="Role ID (optional)" class="mono" aria-label="New category role ID">
+  <button class="btn" type="submit">Add</button>
+</form>
+<p class="small muted">Copy a role ID in Discord with Developer Mode on: Server Settings › Roles › right-click the role › Copy Role ID. Nyerk's own role must sit above every category role, and it needs Manage Roles.</p>
+{% endblock %}

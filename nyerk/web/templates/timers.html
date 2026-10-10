@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Boss timers{% endblock %}
+{% block content %}
+<h1>Boss timers</h1>
+<p class="lede">Kill reports from /nyerk worldboss and the dashboard buttons. One active timer per boss; you can cancel any of them.</p>
+
+<p class="section-label">Active</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Boss</th><th>Reported by</th><th>Killed</th><th>Alert</th><th></th></tr></thead>
+  <tbody>
+  {% for t in active %}
+    <tr>
+      <td><strong>{{ t.event.name }}</strong><br><span class="small muted">#{{ t.id }} · {{ 'countdown' if t.mode == 'countdown' else 'kill report' }}</span></td>
+      <td>{{ t.user_name }}<br><span class="small muted"><time data-ts="{{ t.created_at }}" data-style="R"></time></span></td>
+      <td class="small">{% if t.killed_at %}<time data-ts="{{ t.killed_at }}" data-style="f"></time>{% else %}<span class="muted">–</span>{% endif %}</td>
+      <td class="small"><time data-ts="{{ t.fire_at }}" data-style="f"></time><br><span class="muted"><time data-ts="{{ t.fire_at }}" data-style="R"></time></span></td>
+      <td><form method="post" action="/timers/{{ t.id }}/cancel" class="inline-form" data-confirm="Cancel the {{ t.event.name }} timer reported by {{ t.user_name }}?">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn small danger" type="submit">Cancel</button></form></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No active timers.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<p class="section-label">Recent</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Boss</th><th>Reported by</th><th>Alert</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for t in recent %}
+    <tr class="off">
+      <td>{{ t.event.name }}</td><td>{{ t.user_name }}</td>
+      <td class="small"><time data-ts="{{ t.fire_at }}" data-style="f"></time></td>
+      <td><span class="pill {{ 'ok' if t.status == 'done' else '' }}">{{ t.status }}</span></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">Nothing yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}Nyerk{% endblock %} · Nyerk</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+{% block body %}
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/">
+      <span class="dot {% if bot_status is none %}{% elif bot_status.connected %}on{% else %}off{% endif %}"
+            title="{% if bot_status is none %}Discord disabled{% elif bot_status.connected %}Connected{% else %}Disconnected{% endif %}"></span>
+      Nyerk
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="/" class="{{ 'active' if nav == 'overview' }}">Overview</a>
+      <a href="/events" class="{{ 'active' if nav in ('events', 'event_edit') }}">Events</a>
+      <a href="/timers" class="{{ 'active' if nav == 'timers' }}">Boss timers</a>
+      <a href="/maintenance" class="{{ 'active' if nav == 'maintenance' }}">Maintenance</a>
+      <a href="/categories" class="{{ 'active' if nav == 'categories' }}">Roles</a>
+      <a href="/defaults" class="{{ 'active' if nav == 'defaults' }}">Defaults{% if pending_changes %}<span class="badge">{{ pending_changes }}</span>{% endif %}</a>
+      <a href="/settings" class="{{ 'active' if nav == 'settings' }}">Settings</a>
+      <a href="/logs" class="{{ 'active' if nav == 'logs' }}">Logs</a>
+    </nav>
+    <form method="post" action="/logout" class="inline-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="btn plain small" type="submit">Sign out</button>
+    </form>
+  </div>
+</header>
+<main>
+  {% for kind, text in flashes %}<div class="flash {{ kind }}" role="status">{{ text }}</div>{% endfor %}
+  {% block content %}{% endblock %}
+</main>
+{% endblock %}
+</body>
+</html>

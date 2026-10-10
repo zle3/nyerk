@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Maintenance{% endblock %}
+{% block content %}
+<h1>Maintenance</h1>
+{% if not m %}
+  <p class="lede">No weekly event in the Maintenance category. Create one on the Events page.</p>
+{% else %}
+<p class="lede">The regular weekly window is pinned to UTC, so its New York time moves an hour earlier on November 1. An override replaces the regular window for one week only.</p>
+
+<p class="section-label">Regular window (UTC)</p>
+<form method="post" action="/maintenance/regular" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="fields">
+    <div class="field"><label for="day">Day</label>
+      <select id="day" name="day">{% for d in DAYS %}<option value="{{ d }}" {{ 'selected' if d == m.schedule_params.days[0] }}>{{ d.capitalize() }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="start">Starts</label><input id="start" name="start" type="text" value="{{ m.schedule_params.time }}" placeholder="06:30"></div>
+    <div class="field"><label for="end">Ends</label><input id="end" name="end" type="text" value="{{ end_time }}" placeholder="10:00">
+      <div class="help">An end earlier than the start runs past midnight.</div></div>
+  </div>
+  <button class="btn" type="submit">Save window</button>
+</form>
+
+<p class="section-label">Upcoming weeks</p>
+<div class="list">
+{% for w in weeks %}{% set o = w.override %}
+  <div class="row">
+    <div class="grow">
+      <div class="title">
+        {% if o and o.schedule_params.cancelled %}<s><time data-ts="{{ w.at }}" data-style="F"></time></s> <span class="pill err">cancelled</span>
+        {% elif o %}<time data-ts="{{ ot.timestamp(o.schedule_params) }}" data-style="F"></time> <span class="pill warn">moved</span>
+        {% else %}<time data-ts="{{ w.at }}" data-style="F"></time>{% endif %}
+      </div>
+      <div class="sub">
+        {% if o and not o.schedule_params.cancelled %}{{ o.duration_minutes }} min, until <time data-ts="{{ ot.timestamp(o.schedule_params) + o.duration_minutes * 60 }}" data-style="t"></time>
+        {% elif not o %}Regular · until <time data-ts="{{ w.end }}" data-style="t"></time> · {{ w.at | fmt_ts('UTC') }}{% endif %}
+      </div>
+    </div>
+    {% if o %}
+    <form method="post" action="/maintenance/override/{{ o.id }}/delete" class="inline-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn small secondary" type="submit">Restore regular</button>
+    </form>
+    {% endif %}
+    <details>
+      <summary class="btn small {{ 'secondary' if not o else 'plain' }}">Override</summary>
+      <form method="post" action="/maintenance/override" class="card mt">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="replaces" value="{{ w.at }}">
+        <div class="field"><label>Change</label>
+          <select name="action" data-override-action><option value="move">Move or extend</option><option value="cancel">Cancel this week</option></select></div>
+        <div data-times>
+          <div class="fields">
+            <div class="field"><label>Start</label><input name="start" type="text" value="{{ w.at | fmt_ts('UTC') | replace(' UTC', '') }}" placeholder="2026-10-14 06:30"></div>
+            <div class="field"><label>End</label><input name="end" type="text" placeholder="2026-10-14 11:00"></div>
+            <div class="field"><label>Time zone</label><select name="tz"><option>UTC</option><option>{{ tz }}</option></select></div>
+          </div>
+          <div class="help">Format YYYY-MM-DD HH:MM.</div>
+        </div>
+        <button class="btn small mt" type="submit">Save override</button>
+      </form>
+    </details>
+  </div>
+{% endfor %}
+</div>
+
+<p class="section-label">Emergency maintenance</p>
+<form method="post" action="/maintenance/override" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="replaces" value="0"><input type="hidden" name="action" value="move">
+  <div class="fields">
+    <div class="field"><label for="es">Start</label><input id="es" name="start" type="text" placeholder="2026-10-16 05:00"></div>
+    <div class="field"><label for="ee">End</label><input id="ee" name="end" type="text" placeholder="2026-10-16 07:00"></div>
+    <div class="field"><label for="etz">Time zone</label><select id="etz" name="tz"><option>{{ tz }}</option><option>UTC</option></select></div>
+  </div>
+  <button class="btn" type="submit">Add window</button>
+</form>
+{% if extra %}
+<div class="list">
+  {% for o in extra %}
+  <div class="row">
+    <div class="grow"><div class="title"><time data-ts="{{ ot.timestamp(o.schedule_params) }}" data-style="F"></time></div>
+      <div class="sub">{{ o.duration_minutes }} min</div></div>
+    <form method="post" action="/maintenance/override/{{ o.id }}/delete" class="inline-form" data-confirm="Remove this emergency window?">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn small danger" type="submit">Remove</button></form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

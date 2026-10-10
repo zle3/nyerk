@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Defaults{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Defaults from shugo.gg</h1>
+    <p class="lede">Nyerk reads the {{ settings.shugo_region }} table once a day. Nothing changes until you approve it here, and fields you edited by hand are never overwritten.</p>
+  </div>
+  <form method="post" action="/defaults/check" class="inline-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn" type="submit">Check now</button>
+  </form>
+</div>
+
+<p class="small muted">Last check: {% if last %}<time data-ts="{{ last }}" data-style="f"></time> (<time data-ts="{{ last }}" data-style="R"></time>){% else %}never{% endif %}.
+{% if error %}<span class="pill err">failed</span> {{ error }} Last good values are kept.{% endif %}</p>
+
+{% if pending and pending.changes %}
+<form method="post" action="/defaults/apply">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="list">
+  {% for c in pending.changes %}{% set locked = c.fields.values() | selectattr('locked') | list | length == c.fields | length %}
+    <div class="row">
+      <label class="switch"><input type="checkbox" name="change" value="{{ c.key }}" {{ 'disabled' if locked else 'checked' }}><span class="track"></span></label>
+      <div class="grow">
+        <div class="title">{{ c.name }} {% if c.kind == 'new' %}<span class="pill accent">new, added disabled</span>{% endif %}</div>
+        {% for fname, f in c.fields.items() %}
+          <div class="sub">{{ 'Schedule' if fname == 'schedule' else 'Duration' }}:
+            {% if c.kind == 'update' %}<s>{{ f.old }}</s> → {% endif %}{{ f.new }}{% if fname == 'duration_minutes' %} min{% endif %}
+            {% if f.locked %}<span class="pill">hand-edited, kept</span>{% endif %}</div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+  <div class="actions">
+    <button class="btn" type="submit">Apply selected</button>
+  </div>
+</form>
+<form method="post" action="/defaults/dismiss" class="mt">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn plain small" type="submit">Dismiss review</button>
+</form>
+{% else %}
+<div class="card"><p class="muted">Everything matches shugo.gg. Nothing to review.</p></div>
+{% endif %}
+{% endblock %}
