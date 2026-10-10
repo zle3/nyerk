@@ -1,8 +1,16 @@
 # Nyerk
 
-AION2 event alerts for one Discord server (NA East, Siel, Elyos). It posts plain-text alerts and role pings to #aion-2-timer, keeps a live dashboard with world boss report buttons as the last message there, runs reaction roles in #aion-2-roles, and logs to #logs. A password-protected web admin on the LAN configures all of it.
+**AION 2 event timers and party finder for Discord**, configured from a password-protected web admin on your LAN. Built for one server (NA East, Siel, Elyos).
 
-It also runs a **party finder** in #aion-2-party-finder: a class selector that gives class and Tank/Support/DPS roles, an interest list that pings registered members when a matching party opens, and 5 or 20 person party listings with join, leave, kick, extend and a shared party status message.
+**Timers** (#aion-2-timer)
+- Plain-text alerts with optional role pings for scheduled events, world boss respawns, resets and maintenance.
+- A live dashboard, always the newest message, with one-click world boss kill reports.
+- Reaction roles in #aion-2-roles so members choose which pings they get, and activity logged to #logs.
+
+**Party finder** (#aion-2-party-finder)
+- A class selector that hands out class and Tank/Support/DPS roles.
+- An interest list that pings registered members when a matching party opens.
+- 5 or 20 person party listings with join, leave, kick, extend, and a shared party status message.
 
 No channel or role IDs are in this repository. Set them in the admin page, or import them (see **Settings export and import** below).
 
