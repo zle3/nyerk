@@ -335,9 +335,13 @@ def build_dashboard(s: Session, settings: Settings, now: int) -> Dashboard:
 # Cleanup
 
 
-def messages_to_delete(s: Session, keep: int) -> list[SentMessage]:
+CLEANUP_MIN_AGE = 3600  # never clean up an alert younger than this
+
+
+def messages_to_delete(s: Session, keep: int, now: int | None = None) -> list[SentMessage]:
     """Alert messages beyond the `keep` most recent occurrences per event.
-    A world boss kill report counts as one occurrence (keyed by timer)."""
+    A world boss kill report counts as one occurrence (keyed by timer).
+    Alerts sent within the last hour are never returned, as a safety net."""
     rows = list(
         s.scalars(
             select(SentMessage).where(SentMessage.message_id.is_not(None), SentMessage.deleted.is_(False))
@@ -351,4 +355,6 @@ def messages_to_delete(s: Session, keep: int) -> list[SentMessage]:
         keys = sorted(groups, key=lambda k: k[1], reverse=True)
         for k in keys[max(1, keep):]:
             doomed.extend(groups[k])
+    if now is not None:
+        doomed = [r for r in doomed if r.sent_at <= now - CLEANUP_MIN_AGE]
     return doomed

@@ -399,7 +399,11 @@ class NyerkBot(discord.Client):
             for timer in s.scalars(select(UserTimer).where(UserTimer.status == "active", UserTimer.fire_at <= t)):
                 timer.status = "done"
             get_state(s).last_tick_at = t
-            doomed = [(m.id, m.channel_id, m.message_id) for m in engine.messages_to_delete(s, keep)]
+            names = {e.id: e.name for e in engine.load_events(s)}
+            doomed = [(m.id, m.channel_id, m.message_id,
+                       f"{names.get(m.event_id, f'event {m.event_id}')} {_slot_name(m.slot)} alert "
+                       f"for {engine.ts(m.occurrence_at, 'f')}")
+                      for m in engine.messages_to_delete(s, keep, t)]
 
         await self._cleanup(doomed)
         repost = posted > 0 or self._force_repost
@@ -411,13 +415,15 @@ class NyerkBot(discord.Client):
             log.exception("party finder tick failed")
             bus.error("party", f"Party finder tick failed: {exc!r}")
 
-    async def _cleanup(self, doomed: list[tuple[int, int | None, int]]) -> None:
-        for row_id, channel_id, message_id in doomed:
+    async def _cleanup(self, doomed: list[tuple[int, int | None, int, str]]) -> None:
+        for row_id, channel_id, message_id, what in doomed:
             channel = await self._channel(channel_id or 0)
             ok = True
             if channel is not None:
                 try:
                     await channel.get_partial_message(message_id).delete()
+                    bus.info("cleanup", f"Deleted {what} (message {message_id}): older than the last "
+                                        f"occurrences kept.", discord=False)
                 except discord.NotFound:
                     pass
                 except discord.HTTPException as exc:
@@ -442,6 +448,11 @@ class NyerkBot(discord.Client):
         last_id = getattr(channel, "last_message_id", None)
         self._force_repost = not dash_id or (last_id is not None and last_id != dash_id)
 
+    @staticmethod
+    def _is_alert(message_id: int) -> bool:
+        with db.session() as s:
+            return s.scalar(select(SentMessage.id).where(SentMessage.message_id == message_id).limit(1)) is not None
+
     async def update_dashboard(self, repost: bool = False) -> None:
         with db.session() as s:
             settings, state = get_settings(s), get_state(s)
@@ -456,9 +467,12 @@ class NyerkBot(discord.Client):
         new_id = old_id
         try:
             if repost or not old_id:
-                if old_id:
+                if old_id and self._is_alert(old_id):
+                    bus.error("error", f"Stored dashboard ID {old_id} is an alert message; not deleting it.")
+                elif old_id:
                     try:
                         await channel.get_partial_message(old_id).delete()
+                        log.info("deleted previous dashboard %s", old_id)
                     except discord.NotFound:
                         pass
                 msg = await channel.send(dash.text, view=view, allowed_mentions=NO_MENTIONS)

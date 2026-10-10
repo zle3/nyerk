@@ -148,3 +148,11 @@ def test_cleanup_keeps_two_occurrences(s):
 def _settings(s):
     from nyerk.db import get_settings
     return get_settings(s)
+
+
+def test_cleanup_never_touches_recent_alerts(s):
+    for i, occ in enumerate([100, 200, 300]):
+        s.add(SentMessage(message_id=2000 + i, event_id=8, occurrence_at=occ, slot=5, sent_at=10_000 + i))
+    s.flush()
+    assert engine.messages_to_delete(s, keep=1, now=10_100) == []           # all younger than an hour
+    assert [m.message_id for m in engine.messages_to_delete(s, keep=1, now=20_000)] == [2001, 2000]

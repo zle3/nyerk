@@ -118,3 +118,21 @@ def test_boss_ping_allows_only_the_role(s, monkeypatch):
     assert "reported by Raelin" in msg.content
     assert mentions.users is False and mentions.everyone is False
     assert [r.id for r in mentions.roles] == [777]
+
+
+def test_dashboard_never_deletes_an_alert(s, monkeypatch):
+    clock = [ny(2026, 10, 9, 13, 25, 1)]
+    get_state(s).last_tick_at = clock[0] - 30
+    s.commit()
+
+    async def run():
+        b, ch = make_bot(monkeypatch, clock)
+        await b.tick()
+        alert_id = ch.sent[0][0].id
+        get_state(s).dashboard_message_id = alert_id  # corrupt the stored dashboard ID
+        s.commit()
+        await b.update_dashboard(repost=True)
+        return ch, alert_id
+
+    ch, alert_id = asyncio.run(run())
+    assert alert_id not in ch.deleted
