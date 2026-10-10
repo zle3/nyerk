@@ -58,7 +58,14 @@
 
 <p class="section-label">Export and import</p>
 <div class="card">
-  <p class="small muted">The export holds every setting, category, event, alert template and party finder list, with channel and role IDs. It never holds the admin password, the bot token, timers or parties. Import merges: rows are matched by name, and anything not in the file is left alone, so a short file with only IDs works too.</p>
+  <p class="small muted">One JSON file with everything you configure in these tabs, channel and role IDs included:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tab</th><th>Included</th><th>Now</th></tr></thead>
+      <tbody>{% for tab, what, count in export_counts %}<tr><td><strong>{{ tab }}</strong></td><td class="small">{{ what }}</td><td class="small muted">{{ count }}</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+  <p class="small muted">Not included: the admin password, the bot token, boss timers, parties, registrations and one-week maintenance overrides. Import merges: categories, events and classes are matched by name, and anything not in the file is left alone, so a short file with only IDs works too.</p>
   <div class="actions">
     <a class="btn secondary" href="/settings/export">Export settings</a>
   </div>

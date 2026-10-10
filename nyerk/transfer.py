@@ -254,5 +254,25 @@ def _import_event(s: Session, e: dict, cats: dict[str, int], changes: list[str])
             _assign(target, sl, ("enabled", "ping", "template"), f"{label} {lead} min slot", changes)
 
 
+def summary(s: Session) -> list[tuple[str, str, str]]:
+    """(admin tab, what is exported, count) for the Settings page."""
+    from sqlalchemy import func
+
+    def n(model, *where):
+        return s.scalar(select(func.count()).select_from(model).where(*where)) or 0
+
+    events = n(Event, Event.overrides_event_id.is_(None))
+    slots = s.scalar(select(func.count()).select_from(AlertSlot).join(Event)
+                     .where(Event.overrides_event_id.is_(None))) or 0
+    return [
+        ("Settings", "Channels, boss reports, dashboard, party timing, defaults source", "all"),
+        ("Events", "Schedules, alert toggles, ping toggles, message templates, dashboard placement",
+         f"{events} events, {slots} alert slots"),
+        ("Roles", "Ping categories with their role IDs and order", f"{n(Category)} categories"),
+        ("Party finder", "Classes and role IDs, type roles, default makeup, content, gear brackets, time windows",
+         f"{n(PfClass)} classes, {n(PfContent)} content"),
+    ]
+
+
 def filename() -> str:
     return f"nyerk-settings-{time.strftime('%Y%m%d-%H%M')}.json"

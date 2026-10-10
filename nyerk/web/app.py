@@ -520,7 +520,8 @@ def create_app(cfg, bot=None) -> FastAPI:
         require(request)
         with db.session() as s:
             settings = get_settings(s)
-        return render(request, "settings.html", st=settings)
+            counts = transfer.summary(s)
+        return render(request, "settings.html", st=settings, export_counts=counts)
 
     @app.post("/settings")
     async def settings_save(request: Request):

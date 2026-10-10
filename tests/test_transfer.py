@@ -63,3 +63,30 @@ def test_import_merges_events_and_categories(s):
 def test_bad_files(s, bad, msg):
     with pytest.raises(transfer.ImportError_, match=msg):
         transfer.apply_import(s, bad)
+
+
+def test_events_and_roles_round_trip_between_installs(s):
+    """Change Events and Roles tab settings, export, import into a fresh install."""
+    from nyerk import db
+    from nyerk.seed import seed, seed_party_finder
+
+    cat = s.scalar(select(Category).where(Category.name == "Rift"))
+    cat.role_id, cat.sort_order = 999999999999999999, 0
+    rift = s.scalar(select(Event).where(Event.name == "Spacetime Rift"))
+    rift.dashboard_label = "Rift opens"
+    slot = next(sl for sl in rift.slots if sl.lead_minutes == 5)
+    slot.ping, slot.template = False, "{name} soon"
+    s.commit()
+    data = json.loads(json.dumps(transfer.export(s)))
+
+    db.init_engine(":memory:")
+    with db.session() as fresh:
+        seed(fresh)
+        seed_party_finder(fresh)
+        transfer.apply_import(fresh, data)
+        cat2 = fresh.scalar(select(Category).where(Category.name == "Rift"))
+        rift2 = fresh.scalar(select(Event).where(Event.name == "Spacetime Rift"))
+        slot2 = next(sl for sl in rift2.slots if sl.lead_minutes == 5)
+        assert cat2.role_id == 999999999999999999 and cat2.sort_order == 0
+        assert rift2.dashboard_label == "Rift opens" and rift2.category.name == "Rift"
+        assert slot2.ping is False and slot2.template == "{name} soon"
