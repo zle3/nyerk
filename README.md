@@ -14,6 +14,15 @@
 - **Quiet hours**: members pick a daily window (in their own time zone) when their dungeon ping roles are paused, then given back.
 - A **Stats** page: class distribution, content demand, party activity by day and hour, and the most active members.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Timer alerts and the live dashboard in Discord](docs/images/discord-timers.png) | ![Roles channel: class selector, ping roles and ping settings](docs/images/discord-roles.png) |
+| **Timers:** alerts with role pings, then the dashboard with one-click boss reports | **Roles channel:** class selector, event and dungeon ping roles, quiet hours |
+| ![Party finder panels in Discord](docs/images/discord-party-finder.png) | ![Web admin overview](docs/images/admin-overview.png) |
+| **Party finder:** class picker, interest list, create party, party status | **Web admin:** bot status, dashboard preview and recent activity |
+
 No channel or role IDs are in this repository. Set them in the admin page, or import them (see **Settings export and import** below).
 
 ## Quick start

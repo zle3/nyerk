@@ -6,3 +6,4 @@ tests
 .git
 .github
 compose*.yaml
+docs
