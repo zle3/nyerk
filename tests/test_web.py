@@ -229,3 +229,11 @@ def test_role_messages_and_assignment(client):
     r = client.post(f"/roles/groups/{gid}/delete", data={"csrf": csrf})
     with db.session() as s:
         assert s.get(Category, sid).group_id is None  # falls back to the default message
+
+
+def test_roles_header(client):
+    csrf = _csrf(client)
+    r = client.post("/roles/header", data={"csrf": csrf, "roles_header": "# Pick roles\nhi"})
+    assert "Header saved" in r.text and 'class="h1">Pick roles' in r.text
+    with db.session() as s:
+        assert get_settings(s).roles_header == "# Pick roles\nhi"

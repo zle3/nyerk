@@ -156,3 +156,28 @@ def test_cleanup_never_touches_recent_alerts(s):
     s.flush()
     assert engine.messages_to_delete(s, keep=1, now=10_100) == []           # all younger than an hour
     assert [m.message_id for m in engine.messages_to_delete(s, keep=1, now=20_000)] == [2001, 2000]
+
+
+def test_upgrade_adds_text_columns_with_real_newlines(tmp_path):
+    import sqlite3
+
+    from nyerk import db
+    from nyerk.db import get_settings
+
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE settings (id INTEGER PRIMARY KEY, timer_channel_id BIGINT)")
+    con.execute("INSERT INTO settings (id, timer_channel_id) VALUES (1, 5)")
+    con.commit()
+    con.close()
+    db.init_engine(path)
+    with db.session() as s:
+        assert get_settings(s).roles_header.splitlines()[1].startswith("Pick your class")
+
+
+def test_upgrade_repairs_escaped_newlines(s):
+    from nyerk.seed import upgrade_defaults
+    st = _settings(s)
+    st.roles_header = "# Roles\\nPick"
+    assert "roles header" in upgrade_defaults(s)
+    assert st.roles_header == "# Roles\nPick"

@@ -91,14 +91,15 @@ def test_post_roles_channel_order_and_mapping(s, monkeypatch):
     monkeypatch.setattr(botmod, "REACTION_PAUSE", 0)
     asyncio.run(b.post_roles_message())
     firsts = [m.content.splitlines()[0] for m, _ in ch.sent]
-    assert firsts == ["## Event pings", "## Dungeon pings", "## AION 2 Classes", "## Remove all pings"]
-    events, dungeons, classes, clear = (m for m, _ in ch.sent)
+    assert firsts == ["# 🎭 Roles", "## AION 2 Classes", "## Event pings", "## Dungeon pings", "## Remove all pings"]
+    header, classes, events, dungeons, clear = (m for m, _ in ch.sent)
     assert events.reactions == ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"] and dungeons.reactions == ["1️⃣", "2️⃣", "3️⃣"]
     assert [c.custom_id for c in clear.view.children] == ["nyerk:roles:clear"]
     state = get_state(s)
     s.refresh(state)
     assert state.reaction_messages[str(dungeons.id)]["1️⃣"] == 200_000_000_000_000_000
     assert state.roles_class_message_id == classes.id and state.roles_clear_message_id == clear.id
+    assert state.roles_header_message_id == header.id
 
 
 def test_create_missing_dungeon_roles(s, monkeypatch):

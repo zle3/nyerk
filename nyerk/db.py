@@ -55,8 +55,16 @@ def _add_missing_columns(engine: Engine) -> None:
                 default = ""
                 if col.default is not None and not callable(col.default.arg):
                     val = col.default.arg
-                    default = f" DEFAULT {int(val) if isinstance(val, bool) else repr(val)}"
-                conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {ddl_type}{default}'))
+                    default = f" DEFAULT {_sql_literal(val)}"
+                conn.exec_driver_sql(f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {ddl_type}{default}')
+
+
+def _sql_literal(val) -> str:
+    if isinstance(val, bool):
+        return str(int(val))
+    if isinstance(val, (int, float)):
+        return repr(val)
+    return "'" + str(val).replace("'", "''") + "'"  # real newlines, not Python escapes
 
 
 def engine() -> Engine:

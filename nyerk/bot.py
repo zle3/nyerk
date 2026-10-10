@@ -513,9 +513,9 @@ class NyerkBot(discord.Client):
         return self.get_guild(self.guild_id) if self.guild_id else (self.guilds[0] if self.guilds else None)
 
     async def post_roles_message(self) -> str:
-        """Repost everything in the roles channel, in order: one message per
-        role message group (split past 20 reactions), a copy of the class
-        selector, then the Remove all pings message."""
+        """Repost everything in the roles channel, top to bottom: the header,
+        a copy of the class selector, one message per role message group
+        (split past 20 reactions), then the Remove all pings message."""
         guild = self._guild()
         with db.session() as s:
             settings, state = get_settings(s), get_state(s)
@@ -523,9 +523,11 @@ class NyerkBot(discord.Client):
             missing = {e.role_id: e.label for e in everything if guild is None or guild.get_role(e.role_id) is None}
             plan = reaction_roles.messages(s, skip=set(missing))
             class_text, class_view = party.CLASS_PANEL, self.pf._class_view(s)
+            header = (settings.roles_header or "").strip()
             channel_id = settings.roles_channel_id
             old_ids = {int(k) for k in (state.reaction_messages or {})} | {
-                x for x in (state.reaction_message_id, state.roles_class_message_id, state.roles_clear_message_id) if x}
+                x for x in (state.reaction_message_id, state.roles_header_message_id, state.roles_class_message_id,
+                            state.roles_clear_message_id) if x}
         if missing:
             bus.warn("roles", f"Skipped entries whose role does not exist: {', '.join(sorted(missing.values()))}.")
         channel = await self._channel(channel_id)
@@ -537,16 +539,17 @@ class NyerkBot(discord.Client):
                 await channel.get_partial_message(old).delete()
             except discord.HTTPException:
                 pass
+        header_msg = await channel.send(header[:2000], allowed_mentions=NO_MENTIONS) if header else None
+        try:
+            class_msg = await channel.send(class_text, view=class_view, allowed_mentions=NO_MENTIONS)
+        finally:
+            class_view.stop()
         posted: dict[str, dict[str, int]] = {}
         messages = []
         for text, chunk in plan:
             msg = await channel.send(text, allowed_mentions=NO_MENTIONS)
             posted[str(msg.id)] = {e.emoji: e.role_id for e in chunk}
             messages.append((msg, chunk))
-        try:
-            class_msg = await channel.send(class_text, view=class_view, allowed_mentions=NO_MENTIONS)
-        finally:
-            class_view.stop()
         clear_view = discord.ui.View(timeout=None)
         clear_view.add_item(ClearPingsButton())
         try:
@@ -557,6 +560,7 @@ class NyerkBot(discord.Client):
             state = get_state(s)
             state.reaction_messages = posted
             state.reaction_message_id, state.reaction_map = 0, {}
+            state.roles_header_message_id = header_msg.id if header_msg else 0
             state.roles_class_message_id, state.roles_clear_message_id = class_msg.id, clear_msg.id
         for msg, chunk in messages:
             for e in chunk:
@@ -566,8 +570,8 @@ class NyerkBot(discord.Client):
                     bus.error("roles", f"Could not add reaction {e.emoji} for {e.label}: {exc!r}")
                 await asyncio.sleep(REACTION_PAUSE)  # keeps the reactions in order
         roles = sum(len(c) for _, c in messages)
-        bus.info("roles", f"Roles channel posted: {roles} ping roles in {len(messages)} message(s), "
-                          f"class selector, remove-all.")
+        bus.info("roles", f"Roles channel posted: {'header, ' if header else ''}class selector, "
+                          f"{roles} ping roles in {len(messages)} message(s), remove-all.")
         return f"Posted {roles} ping roles in {len(messages)} message(s)."
 
     async def clear_pings(self, interaction: discord.Interaction) -> None:

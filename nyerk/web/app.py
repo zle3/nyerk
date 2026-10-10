@@ -49,9 +49,10 @@ def discord_preview(text: str) -> Markup:
     html = re.sub(r"&lt;@&amp;(\d+)&gt;", r'<span class="mention">@role \1</span>', html)
     html = re.sub(r"^### (.*)$", r'<span class="h3">\1</span>', html, flags=re.M)
     html = re.sub(r"^## (.*)$", r'<span class="h2">\1</span>', html, flags=re.M)
+    html = re.sub(r"^# (.*)$", r'<span class="h1">\1</span>', html, flags=re.M)
     html = re.sub(r"^-# (.*)$", r'<span class="subtext">\1</span>', html, flags=re.M)
     # Headings are block-level, so the newline after them would double the gap.
-    html = re.sub(r'(<span class="(?:h2|h3|subtext)">[^\n]*</span>)\n', r"\1", html)
+    html = re.sub(r'(<span class="(?:h1|h2|h3|subtext)">[^\n]*</span>)\n', r"\1", html)
     return Markup(html)
 
 
@@ -309,6 +310,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                        for c in party.contents(s, False)]
             previews = [text for text, _ in reaction_roles.messages(s)]
             ctx = dict(cats=cats, counts=counts, groups=groups, assign=assign, emoji_of=emoji_of,
+                       roles_header=get_settings(s).roles_header,
                        previews=previews, class_preview=party.CLASS_PANEL, clear_preview=reaction_roles.CLEAR_TEXT,
                        posted=bool(state.reaction_messages or state.reaction_message_id))
         return render(request, "categories.html", **ctx)
@@ -329,6 +331,19 @@ def create_app(cfg, bot=None) -> FastAPI:
         bus.info("config", f"Category {name} added.")
         flash(request, f"Added {name}.")
         return back("/categories")
+
+    @app.post("/roles/header")
+    async def roles_header_save(request: Request):
+        data = await form(request)
+        text = str(data.get("roles_header", "")).replace("\r\n", "\n").strip()
+        if len(text) > 500:
+            flash(request, "Keep the header under 500 characters.", "err")
+            return back("/categories#header")
+        with db.session() as s:
+            get_settings(s).roles_header = text
+        bus.info("config", "Roles channel header saved.")
+        flash(request, "Header saved. Repost the roles channel to apply.")
+        return back("/categories#header")
 
     @app.post("/roles/groups")
     async def roles_groups_save(request: Request):

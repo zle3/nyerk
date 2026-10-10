@@ -94,6 +94,12 @@ def upgrade_defaults(s: Session) -> list[str]:
     if st.dashboard_title == "⏱️ AION2 Timers":
         st.dashboard_title = "⏱️ AION 2 Timers"
         done.append("dashboard title")
+    # Columns added by older upgrades stored "\n" as two characters.
+    for col in ("roles_header", "dashboard_footer"):
+        value = getattr(st, col) or ""
+        if "\\n" in value:
+            setattr(st, col, value.replace("\\n", "\n"))
+            done.append(col.replace("_", " "))
     return done
 
 

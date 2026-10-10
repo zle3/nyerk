@@ -48,6 +48,10 @@ class Settings(Base):
     shugo_region: Mapped[str] = mapped_column(String(64), default="NA East")
     admin_password_hash: Mapped[str] = mapped_column(String(255), default="")
 
+    # First message in the roles channel. Blank posts no header.
+    roles_header: Mapped[str] = mapped_column(
+        String(500), default="# 🎭 Roles\nPick your class, then the pings you want. Change them any time.")
+
     # Party finder
     party_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
     party_lifetime_min: Mapped[int] = mapped_column(Integer, default=60)
@@ -188,6 +192,7 @@ class BotState(Base):
     # {"<message id>": {"<emoji>": role_id}} for every roles message posted.
     reaction_messages: Mapped[dict] = mapped_column(JSON, default=dict)
     # Extra messages in the roles channel: class selector copy, remove-all.
+    roles_header_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     roles_class_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     roles_clear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     last_tick_at: Mapped[int] = mapped_column(BigInteger, default=0)
