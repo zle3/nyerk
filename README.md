@@ -82,6 +82,52 @@ Using Dockge? Create a stack named `nyerk`, paste in the contents of `compose.ya
 
 That's it. Everything else, such as event times, alert toggles and message wording, can be changed in the web page at any time. The sections below cover the details.
 
+## Setup checklist
+
+Everything a new server needs, in order. Items marked *optional* can be skipped.
+
+**Before starting Nyerk**
+- [ ] Discord application and bot created; bot token copied
+- [ ] Bot invited with the `bot` and `applications.commands` scopes and its permissions (the Quick start link includes them)
+- [ ] `.env` (or Dockge's env box) with `DISCORD_TOKEN`, `GUILD_ID` and `ADMIN_PASSWORD`
+- [ ] *Optional:* `WEB_TLS=off` if a reverse proxy handles HTTPS; `PUID`/`PGID` if the data folder must belong to a specific host user
+
+**In Discord**
+- [ ] Channels for timers, reaction roles, logs and the party finder
+- [ ] Timer and party finder channels read-only for members (members keep Use Application Commands); Nyerk allowed to post, manage messages and read history there
+- [ ] Ping roles for the event categories you want (World Boss, Shugo, Rift, …), each mentionable
+- [ ] Class roles (one per class) and Tank, Support and DPS roles
+- [ ] Nyerk's role dragged above every role it hands out
+- [ ] *Optional:* Manage Messages in the roles channel, so Remove all pings can also clear reactions
+
+**Web admin → Settings**
+- [ ] Timer, roles, log and party channel IDs
+- [ ] Server time zone (defaults to America/New_York)
+- [ ] *Optional:* change the admin password, timer limit per user, report offset (1 minute), dashboard headings and party timings
+- [ ] *Optional:* import a settings file instead of typing IDs (Export and import)
+
+**Web admin → Roles**
+- [ ] Role ID for each event ping category
+- [ ] *Optional:* channel header text, extra role messages, which message each role goes in, custom emojis
+- [ ] **Post roles channel**
+
+**Web admin → Party finder**
+- [ ] Class role IDs (one Save for all), then Tank, Support and DPS role IDs
+- [ ] Content: the dungeons and activities people group for, with minimum gear score
+- [ ] Dungeon ping roles: paste IDs or click **Create missing roles**
+- [ ] *Optional:* gear score brackets, availability windows, default makeup
+- [ ] **Post all panels**, then delete any old class message by hand
+
+**Web admin → Events, Maintenance, Defaults**
+- [ ] Check boss respawn times and which alerts send and ping
+- [ ] Check the weekly maintenance window
+- [ ] *Optional:* review shugo.gg suggestions on Defaults (Artifact Siege, Siege Bosses, Nahma, Watcher Kaira)
+
+**Check it works**
+- [ ] Dashboard appears in the timer channel within a minute
+- [ ] #logs shows "Nyerk online"
+- [ ] A test boss report, a class pick and a ping reaction all work
+
 ## Run it
 
 Every push to `main` runs the tests in GitHub Actions, builds the image and publishes it as `ghcr.io/zle3/nyerk:latest` (plus a `sha-xxxxxxx` tag, and `1.2.0`-style tags for `v1.2.0` git tags). The server only needs `compose.yaml`; it never sees the source.
