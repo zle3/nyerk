@@ -14,6 +14,63 @@
 
 No channel or role IDs are in this repository. Set them in the admin page, or import them (see **Settings export and import** below).
 
+## Quick start
+
+No coding needed. You need a computer or server that stays on and has [Docker](https://docs.docker.com/get-docker/) installed, and admin rights on your Discord server. Plan on about 20 minutes.
+
+**1. Create the bot in Discord**
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**. Name it (for example Nyerk).
+2. Open **Bot**, click **Reset Token** and copy the token. Treat it like a password: never share it or post it anywhere.
+3. Open **General Information** and copy the **Application ID**.
+4. Invite the bot by opening this link with your Application ID pasted in, then pick your server:
+   `https://discord.com/oauth2/authorize?client_id=YOUR_APPLICATION_ID&scope=bot+applications.commands&permissions=2415995968`
+
+**2. Get your server's IDs**
+
+In Discord, open **User Settings → Advanced** and turn on **Developer Mode**. Now you can right-click things and choose **Copy ID**. Copy:
+- your **server** (right-click the server icon),
+- the channels you want to use for timers, reaction roles, logs and the party finder.
+
+**3. Start Nyerk**
+
+Make a folder, open a terminal in it, and run:
+
+```bash
+curl -O https://raw.githubusercontent.com/zle3/nyerk/main/compose.yaml
+```
+
+In the same folder, create a file named `.env` with these three lines, filled in:
+
+```
+DISCORD_TOKEN=paste-your-bot-token
+GUILD_ID=paste-your-server-id
+ADMIN_PASSWORD=pick-a-long-password
+```
+
+Then start it:
+
+```bash
+docker compose up -d
+```
+
+Using Dockge? Create a stack named `nyerk`, paste in the contents of `compose.yaml`, put the three lines in the env box, and click **Deploy**.
+
+**4. Set it up in the web page**
+
+1. Open `https://YOUR-COMPUTER-IP:8443` (type the `https://`). Your browser will warn about the certificate. That's expected, so accept it.
+2. Sign in with your `ADMIN_PASSWORD`.
+3. **Settings:** paste your channel IDs and click **Save settings**. The dashboard appears in your timer channel within a minute.
+4. **Roles:** create roles in Discord for the pings you want (World Boss, Shugo, and so on), paste their IDs here, then click **Post roles message**.
+5. **Party finder** (optional): paste your class role IDs, add the dungeons people group for under **Content**, then click **Post all panels**.
+
+**5. Finish the Discord side**
+
+- Drag Nyerk's role above every role it hands out (Server Settings → Roles).
+- Make the timer and party finder channels read-only for members. Buttons still work.
+
+That's it. Everything else, such as event times, alert toggles and message wording, can be changed in the web page at any time. The sections below cover the details.
+
 ## Run it
 
 Every push to `main` runs the tests in GitHub Actions, builds the image and publishes it as `ghcr.io/zle3/nyerk:latest` (plus a `sha-xxxxxxx` tag, and `1.2.0`-style tags for `v1.2.0` git tags). The server only needs `compose.yaml`; it never sees the source.
