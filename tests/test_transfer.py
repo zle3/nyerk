@@ -1,0 +1,65 @@
+import json
+
+import pytest
+from sqlalchemy import select
+
+from nyerk import transfer
+from nyerk.db import get_settings
+from nyerk.models import Category, Event, PfClass
+
+
+def test_export_has_no_secrets_and_ids_are_strings(s):
+    get_settings(s).admin_password_hash = "secret-hash"
+    get_settings(s).timer_channel_id = 1234567890123456789
+    data = transfer.export(s)
+    raw = json.dumps(data)
+    assert "secret-hash" not in raw and "admin_password_hash" not in raw
+    assert data["settings"]["timer_channel_id"] == "1234567890123456789"
+    assert {e["name"] for e in data["events"]} >= {"Silent Dartan", "Spacetime Rift"}
+    assert len(data["party_finder"]["classes"]) == 8
+
+
+def test_round_trip_is_a_no_op(s):
+    data = json.loads(json.dumps(transfer.export(s)))
+    assert transfer.apply_import(s, data) == []
+
+
+def test_partial_id_file(s):
+    changes = transfer.apply_import(s, {
+        "nyerk_export": 1,
+        "settings": {"party_channel_id": "222222222222222222"},
+        "party_finder": {"classes": [{"name": "Cleric", "role_id": "<@&333333333333333333>"}]},
+    })
+    assert get_settings(s).party_channel_id == 222222222222222222
+    assert s.scalar(select(PfClass).where(PfClass.name == "Cleric")).role_id == 333333333333333333
+    assert len(changes) == 2
+
+
+def test_import_merges_events_and_categories(s):
+    transfer.apply_import(s, {
+        "nyerk_export": 1,
+        "categories": [{"name": "Siege", "role_id": "444444444444444444"}],
+        "events": [
+            {"name": "Artifact Siege", "category": "Siege", "schedule_type": "weekly",
+             "schedule_params": {"days": ["mon"], "time": "21:00", "tz": "America/New_York"},
+             "slots": [{"lead_minutes": 15, "enabled": True, "ping": True}]},
+            {"name": "Shugo Festival", "enabled": False},
+        ],
+    })
+    siege = s.scalar(select(Event).where(Event.name == "Artifact Siege"))
+    assert siege.category.name == "Siege" and siege.schedule_params["days"] == ["mon"]
+    assert {sl.lead_minutes: sl.ping for sl in siege.slots}[15] is True
+    assert not s.scalar(select(Event).where(Event.name == "Shugo Festival")).enabled
+    assert s.scalar(select(Category).where(Category.name == "World Boss")) is not None  # untouched
+
+
+@pytest.mark.parametrize("bad,msg", [
+    ({}, "Not a Nyerk settings file"),
+    ({"nyerk_export": 1, "settings": {"timer_channel_id": "12ab"}}, "not a Discord ID"),
+    ({"nyerk_export": 1, "settings": {"user_timer_limit": "lots"}}, "whole number"),
+    ({"nyerk_export": 1, "events": [{"name": "X"}]}, "need a schedule_type"),
+    ({"nyerk_export": 1, "party_finder": {"classes": [{"name": "X", "class_type": "healer"}]}}, "tank, support or dps"),
+])
+def test_bad_files(s, bad, msg):
+    with pytest.raises(transfer.ImportError_, match=msg):
+        transfer.apply_import(s, bad)

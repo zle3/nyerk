@@ -11,6 +11,7 @@
     <div class="field"><label for="timer_channel_id">Timer channel</label><input id="timer_channel_id" name="timer_channel_id" class="mono" type="text" value="{{ st.timer_channel_id or '' }}"><div class="help">#aion-2-timer. Alerts and the dashboard.</div></div>
     <div class="field"><label for="roles_channel_id">Roles channel</label><input id="roles_channel_id" name="roles_channel_id" class="mono" type="text" value="{{ st.roles_channel_id or '' }}"><div class="help">#aion-2-roles. Reaction roles message.</div></div>
     <div class="field"><label for="log_channel_id">Log channel</label><input id="log_channel_id" name="log_channel_id" class="mono" type="text" value="{{ st.log_channel_id or '' }}"><div class="help">#logs.</div></div>
+    <div class="field"><label for="party_channel_id">Party channel</label><input id="party_channel_id" name="party_channel_id" class="mono" type="text" value="{{ st.party_channel_id or '' }}"><div class="help">#aion-2-party-finder. Panels, listings and pings.</div></div>
   </div>
 
   <p class="section-label">Boss reports</p>
@@ -35,6 +36,16 @@
       <select id="time_style_far" name="time_style_far">{% for k, label in TS_STYLES.items() %}<option value="{{ k }}" {{ 'selected' if st.time_style_far == k }}>:{{ k }} · {{ label }}</option>{% endfor %}</select></div>
   </div>
 
+  <p class="section-label">Party timing (minutes)</p>
+  <div class="card fields">
+    <div class="field"><label for="party_lifetime_min">Listing lifetime</label><input id="party_lifetime_min" name="party_lifetime_min" type="number" min="5" value="{{ st.party_lifetime_min }}"></div>
+    <div class="field"><label for="party_warn_min">Leader warning before close</label><input id="party_warn_min" name="party_warn_min" type="number" min="1" value="{{ st.party_warn_min }}"></div>
+    <div class="field"><label for="party_extend_min">Extension length</label><input id="party_extend_min" name="party_extend_min" type="number" min="5" value="{{ st.party_extend_min }}"></div>
+    <div class="field"><label for="party_max_extensions">Max extensions</label><input id="party_max_extensions" name="party_max_extensions" type="number" min="0" value="{{ st.party_max_extensions }}"><div class="help">A count, not minutes.</div></div>
+    <div class="field"><label for="party_status_hold_min">Full party stays in status</label><input id="party_status_hold_min" name="party_status_hold_min" type="number" min="5" value="{{ st.party_status_hold_min }}"><div class="help">Unless the leader presses Done first.</div></div>
+    <div class="field"><label for="party_ping_gap_min">Ping limit per member</label><input id="party_ping_gap_min" name="party_ping_gap_min" type="number" min="0" value="{{ st.party_ping_gap_min }}"><div class="help">At most one interest ping per this many minutes.</div></div>
+  </div>
+
   <p class="section-label">Defaults source</p>
   <div class="card fields">
     <div class="field"><label for="shugo_url">Timer page</label><input id="shugo_url" name="shugo_url" type="url" value="{{ st.shugo_url }}"></div>
@@ -43,6 +54,22 @@
   <datalist id="tz-list">{% for z in COMMON_TZ %}<option value="{{ z }}">{% endfor %}</datalist>
   <div class="savebar"><span class="small muted">Channel IDs: right-click a channel › Copy Channel ID.</span><button class="btn" type="submit">Save settings</button></div>
 </form>
+
+<p class="section-label">Export and import</p>
+<div class="card">
+  <p class="small muted">The export holds every setting, category, event, alert template and party finder list, with channel and role IDs. It never holds the admin password, the bot token, timers or parties. Import merges: rows are matched by name, and anything not in the file is left alone, so a short file with only IDs works too.</p>
+  <div class="actions">
+    <a class="btn secondary" href="/settings/export">Export settings</a>
+  </div>
+  <form method="post" action="/settings/import" enctype="multipart/form-data" class="mt">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="inline">
+      <input type="file" name="file" accept="application/json,.json" aria-label="Settings file">
+      <button class="btn" type="submit">Preview import</button>
+    </div>
+    <p class="small muted">You'll see every change before anything is applied.</p>
+  </form>
+</div>
 
 <p class="section-label">Admin password</p>
 <form method="post" action="/settings/password" class="card">

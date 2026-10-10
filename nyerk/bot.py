@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from sqlalchemy import select
 
-from . import db, engine, timers
+from . import db, engine, party_bot, timers
 from .db import get_settings, get_state
 from .logbus import bus
 from .models import Category, SentMessage, UserTimer
@@ -214,11 +214,12 @@ class NyerkBot(discord.Client):
         self._tasks: list[asyncio.Task] = []
         self._started = False
         self.last_tick_ok: int = 0
+        self.pf = party_bot.PartyFinder(self)
 
     # -- lifecycle ---------------------------------------------------------
 
     async def setup_hook(self) -> None:
-        self.add_dynamic_items(BossButton, CustomTimeButton)
+        self.add_dynamic_items(BossButton, CustomTimeButton, *party_bot.ITEMS)
         if self.guild_id:
             guild = discord.Object(self.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -404,6 +405,11 @@ class NyerkBot(discord.Client):
         repost = posted > 0 or self._force_repost
         self._force_repost = False
         await self.update_dashboard(repost=repost)
+        try:
+            await self.pf.tick()
+        except Exception as exc:  # the party finder must never stop timer alerts
+            log.exception("party finder tick failed")
+            bus.error("party", f"Party finder tick failed: {exc!r}")
 
     async def _cleanup(self, doomed: list[tuple[int, int | None, int]]) -> None:
         for row_id, channel_id, message_id in doomed:

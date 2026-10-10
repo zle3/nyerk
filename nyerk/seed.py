@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from . import schedules
 from .db import get_settings, get_state
-from .models import AlertSlot, Category, Event
+from .models import AlertSlot, Category, Event, PfBracket, PfClass, PfWindow
 
 NY = "America/New_York"
 LEADS = (15, 5, 0)
@@ -46,14 +46,13 @@ def make_slots(spec) -> list[AlertSlot]:
 
 def seed(s: Session) -> bool:
     """Insert defaults when the database is empty. Returns True if seeded."""
-    settings = get_settings(s)
+    get_settings(s)
     get_state(s)
     if s.scalar(select(Category).limit(1)) is not None:
         return False
 
-    settings.timer_channel_id = 100000000000000001
-    settings.roles_channel_id = 100000000000000002
-    settings.log_channel_id = 100000000000000003
+    # Channel and role IDs are never in the code: set them on the Settings
+    # page or import a settings file (Settings > Import).
 
     cats = {name: Category(name=name, sort_order=i) for i, name in enumerate(CATEGORIES)}
     s.add_all(cats.values())
@@ -76,4 +75,23 @@ def seed(s: Session) -> bool:
             source="shugo.gg" if key else "scope", source_key=key,
         ))
         order += 1
+    return True
+
+
+PF_CLASSES = [
+    ("Gladiator", "⚔️", "dps"), ("Templar", "🛡️", "tank"), ("Assassin", "🗡️", "dps"), ("Ranger", "🏹", "dps"),
+    ("Sorcerer", "🪄", "dps"), ("Spiritmaster", "📖", "dps"), ("Cleric", "✝️", "support"), ("Chanter", "🎸", "support"),
+]
+PF_BRACKETS = [("1400-1599", 1400, 1599), ("1600-1899", 1600, 1899), ("1900-2100", 1900, 2100)]
+PF_WINDOWS = [(15, "15 min"), (30, "30 min"), (60, "1 hr"), (120, "2 hr"), (240, "4 hr")]
+
+
+def seed_party_finder(s: Session) -> bool:
+    """Party finder defaults, separately so existing installs get them too.
+    Role IDs stay 0 until set in the admin page or imported."""
+    if s.scalar(select(PfClass).limit(1)) is not None:
+        return False
+    s.add_all(PfClass(name=n, emoji=e, class_type=t, sort_order=i) for i, (n, e, t) in enumerate(PF_CLASSES))
+    s.add_all(PfBracket(label=l, min_score=a, max_score=b, sort_order=i) for i, (l, a, b) in enumerate(PF_BRACKETS))
+    s.add_all(PfWindow(minutes=m, label=l) for m, l in PF_WINDOWS)
     return True

@@ -8,7 +8,7 @@ from nyerk import db
 from nyerk.config import Config
 from nyerk.db import get_settings
 from nyerk.models import Category, Event, UserTimer
-from nyerk.seed import seed
+from nyerk.seed import seed, seed_party_finder
 from nyerk.web.app import create_app, hash_password
 
 
@@ -19,6 +19,7 @@ def client(tmp_path, monkeypatch):
     db.init_engine(":memory:")
     with db.session() as s:
         seed(s)
+        seed_party_finder(s)
         get_settings(s).admin_password_hash = hash_password("correct horse")
     c = TestClient(create_app(Config()))
     page = c.get("/login")
@@ -54,7 +55,7 @@ def test_wrong_password(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("path", ["/", "/events", "/events/1", "/events/5", "/events/new", "/categories",
-                                  "/timers", "/maintenance", "/settings", "/defaults", "/logs"])
+                                  "/timers", "/maintenance", "/settings", "/defaults", "/logs", "/party"])
 def test_pages_render(client, path):
     r = client.get(path)
     assert r.status_code == 200, r.text[:500]
@@ -125,11 +126,13 @@ def test_maintenance_override_and_cancel_timer(client):
 
 def test_settings_validation(client):
     csrf = _csrf(client)
-    base = {"csrf": csrf, "timer_channel_id": "100000000000000001", "roles_channel_id": "", "log_channel_id": "",
+    base = {"csrf": csrf, "timer_channel_id": "111111111111111111", "roles_channel_id": "", "log_channel_id": "",
             "user_timer_limit": "7", "report_offset_min": "5", "keep_occurrences": "2",
             "dashboard_max_oneoffs": "20", "default_tz": "America/New_York", "time_style_near": "t",
             "time_style_far": "f", "oneoff_label": "One-offs", "shugo_url": "https://shugo.gg/timers",
-            "shugo_region": "NA East"}
+            "shugo_region": "NA East", "party_lifetime_min": "60", "party_warn_min": "10",
+            "party_extend_min": "60", "party_max_extensions": "2", "party_status_hold_min": "120",
+            "party_ping_gap_min": "15"}
     client.post("/settings", data=base)
     with db.session() as s:
         assert get_settings(s).user_timer_limit == 7
@@ -142,3 +145,38 @@ def test_settings_validation(client):
 def test_repost_roles_route_not_shadowed(client):
     r = client.post("/categories/repost-roles", data={"csrf": _csrf(client)})
     assert r.status_code == 200 and "Bot is not connected" in r.text
+
+
+def test_party_page_and_crud(client):
+    assert client.get("/party").status_code == 200
+    csrf = _csrf(client)
+    r = client.post("/party/content/new", data={"csrf": csrf, "name": "Fire Temple", "emoji": "🔥",
+                                               "min_gear_score": "1600", "sort_order": "0", "active": "1"})
+    assert r.status_code == 200 and "Fire Temple" in r.text
+    client.post("/party/types", data={"csrf": csrf, "tank_role_id": "555555555555555555", "support_role_id": "",
+                                      "dps_role_id": "", "party_default_tank": "1", "party_default_support": "1",
+                                      "party_default_dps": "3"})
+    with db.session() as s:
+        assert get_settings(s).tank_role_id == 555555555555555555
+    r = client.post("/party/classes/1", data={"csrf": csrf, "name": "Gladiator", "emoji": "⚔️",
+                                             "role_id": "bad", "class_type": "dps", "sort_order": "0"})
+    assert "not a Discord ID" in r.text
+
+
+def test_settings_export_import_flow(client):
+    import json
+    exported = client.get("/settings/export")
+    assert exported.status_code == 200 and "attachment" in exported.headers["content-disposition"]
+    data = exported.json()
+    data["settings"]["party_channel_id"] = "666666666666666666"
+    csrf = _csrf(client)
+    preview = client.post("/settings/import", data={"csrf": csrf},
+                          files={"file": ("n.json", json.dumps(data).encode(), "application/json")})
+    assert preview.status_code == 200 and "party_channel_id" in preview.text
+    with db.session() as s:
+        assert get_settings(s).party_channel_id == 0  # preview changed nothing
+    raw = re.search(r'<textarea name="raw" hidden>(.*?)</textarea>', preview.text, re.S)[1]
+    import html
+    client.post("/settings/import/apply", data={"csrf": csrf, "raw": html.unescape(raw)})
+    with db.session() as s:
+        assert get_settings(s).party_channel_id == 666666666666666666

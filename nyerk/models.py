@@ -45,6 +45,22 @@ class Settings(Base):
     shugo_region: Mapped[str] = mapped_column(String(64), default="NA East")
     admin_password_hash: Mapped[str] = mapped_column(String(255), default="")
 
+    # Party finder
+    party_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    party_lifetime_min: Mapped[int] = mapped_column(Integer, default=60)
+    party_warn_min: Mapped[int] = mapped_column(Integer, default=10)
+    party_extend_min: Mapped[int] = mapped_column(Integer, default=60)
+    party_max_extensions: Mapped[int] = mapped_column(Integer, default=2)
+    party_status_hold_min: Mapped[int] = mapped_column(Integer, default=120)
+    party_ping_gap_min: Mapped[int] = mapped_column(Integer, default=15)
+    tank_role_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    support_role_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    dps_role_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    # Makeup of the 5 person "Default" requirement.
+    party_default_tank: Mapped[int] = mapped_column(Integer, default=1)
+    party_default_support: Mapped[int] = mapped_column(Integer, default=1)
+    party_default_dps: Mapped[int] = mapped_column(Integer, default=3)
+
 
 class Category(Base):
     __tablename__ = "categories"
@@ -155,6 +171,13 @@ class BotState(Base):
     last_import_error: Mapped[str] = mapped_column(Text, default="")
     pending_import: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_backup_day: Mapped[str] = mapped_column(String(10), default="")
+    # Party finder panels
+    class_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    interest_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    interest_panel_hash: Mapped[str] = mapped_column(String(64), default="")
+    party_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    party_status_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    party_status_hash: Mapped[str] = mapped_column(String(64), default="")
 
 
 class LogEntry(Base):
@@ -167,3 +190,121 @@ class LogEntry(Base):
     level: Mapped[str] = mapped_column(String(8))
     kind: Mapped[str] = mapped_column(String(32))
     text: Mapped[str] = mapped_column(Text)
+
+
+# ----------------------------------------------------------------------------
+# Party finder
+
+
+class PfClass(Base):
+    __tablename__ = "pf_classes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    emoji: Mapped[str] = mapped_column(String(64), default="")
+    role_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    class_type: Mapped[str] = mapped_column(String(16), default="dps")  # tank | support | dps
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PfBracket(Base):
+    __tablename__ = "pf_brackets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    label: Mapped[str] = mapped_column(String(32), unique=True)
+    min_score: Mapped[int] = mapped_column(Integer, default=0)
+    max_score: Mapped[int] = mapped_column(Integer, default=0)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PfWindow(Base):
+    __tablename__ = "pf_windows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    minutes: Mapped[int] = mapped_column(Integer, unique=True)
+    label: Mapped[str] = mapped_column(String(32), default="")
+
+
+class PfContent(Base):
+    __tablename__ = "pf_content"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    emoji: Mapped[str] = mapped_column(String(64), default="")
+    min_gear_score: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PfInterest(Base):
+    __tablename__ = "pf_interest"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    user_name: Mapped[str] = mapped_column(String(100), default="")
+    class_id: Mapped[int | None] = mapped_column(ForeignKey("pf_classes.id", ondelete="SET NULL"), nullable=True)
+    class_type: Mapped[str] = mapped_column(String(16), default="")
+    bracket_id: Mapped[int | None] = mapped_column(ForeignKey("pf_brackets.id", ondelete="SET NULL"), nullable=True)
+    content_ids: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    expires_at: Mapped[int] = mapped_column(BigInteger)
+    last_pinged_at: Mapped[int] = mapped_column(BigInteger, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active | cancelled | expired | joined
+
+    pf_class: Mapped[PfClass | None] = relationship()
+    bracket: Mapped[PfBracket | None] = relationship()
+
+
+class PfParty(Base):
+    __tablename__ = "pf_parties"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int | None] = mapped_column(ForeignKey("pf_content.id", ondelete="SET NULL"), nullable=True)
+    leader_id: Mapped[int] = mapped_column(BigInteger)
+    leader_name: Mapped[str] = mapped_column(String(100), default="")
+    size: Mapped[int] = mapped_column(Integer, default=5)
+    requirement: Mapped[str] = mapped_column(String(16), default="default")  # default | custom | none
+    # {"tank": n, "support": n, "dps": n, "any": n}
+    makeup: Mapped[dict] = mapped_column(JSON, default=dict)
+    description: Mapped[str] = mapped_column(String(100), default="")
+    # open | full | closed | expired | done
+    status: Mapped[str] = mapped_column(String(16), default="open")
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    expires_at: Mapped[int] = mapped_column(BigInteger)
+    extensions_used: Mapped[int] = mapped_column(Integer, default=0)
+    warned_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    filled_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Seconds left on the listing when it filled; restored if it reopens.
+    remaining_s: Mapped[int] = mapped_column(Integer, default=0)
+    ended_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Discord messages. The reconciler posts/edits/deletes to match status.
+    listing_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    listing_hash: Mapped[str] = mapped_column(String(64), default="")
+    ping_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    ping_pending: Mapped[bool] = mapped_column(Boolean, default=False)
+    warning_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    ready_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    ready_pinged: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    content: Mapped[PfContent | None] = relationship()
+    members: Mapped[list["PfPartyMember"]] = relationship(
+        back_populates="party", cascade="all, delete-orphan", order_by="PfPartyMember.joined_at"
+    )
+
+
+class PfPartyMember(Base):
+    __tablename__ = "pf_party_members"
+    __table_args__ = (UniqueConstraint("party_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    party_id: Mapped[int] = mapped_column(ForeignKey("pf_parties.id", ondelete="CASCADE"))
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    user_name: Mapped[str] = mapped_column(String(100), default="")
+    class_id: Mapped[int | None] = mapped_column(ForeignKey("pf_classes.id", ondelete="SET NULL"), nullable=True)
+    class_name: Mapped[str] = mapped_column(String(64), default="")
+    class_type: Mapped[str] = mapped_column(String(16), default="")
+    slot_type: Mapped[str] = mapped_column(String(16), default="any")
+    bracket_label: Mapped[str] = mapped_column(String(32), default="")
+    joined_at: Mapped[int] = mapped_column(BigInteger)
+
+    party: Mapped[PfParty] = relationship(back_populates="members")

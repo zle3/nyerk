@@ -20,11 +20,13 @@ from markupsafe import Markup, escape
 from sqlalchemy import func, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import db, engine, schedules, shugo, timers
+from .. import db, engine, party, schedules, shugo, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus
-from ..models import AlertSlot, Category, Event, LogEntry, UserTimer
+from ..models import (
+    AlertSlot, Category, Event, LogEntry, PfBracket, PfClass, PfContent, PfInterest, PfParty, PfWindow, UserTimer,
+)
 from ..seed import make_slots, NONE
 
 HERE = Path(__file__).parent
@@ -526,10 +528,13 @@ def create_app(cfg, bot=None) -> FastAPI:
         try:
             with db.session() as s:
                 st = get_settings(s)
-                for key in ("timer_channel_id", "roles_channel_id", "log_channel_id"):
+                for key in ("timer_channel_id", "roles_channel_id", "log_channel_id", "party_channel_id"):
                     setattr(st, key, _snowflake(data.get(key)))
                 for key, lo, hi in (("user_timer_limit", 1, 100), ("report_offset_min", 0, 120),
-                                    ("keep_occurrences", 1, 50), ("dashboard_max_oneoffs", 1, 60)):
+                                    ("keep_occurrences", 1, 50), ("dashboard_max_oneoffs", 1, 60),
+                                    ("party_lifetime_min", 5, 720), ("party_warn_min", 1, 120),
+                                    ("party_extend_min", 5, 720), ("party_max_extensions", 0, 10),
+                                    ("party_status_hold_min", 5, 1440), ("party_ping_gap_min", 0, 240)):
                     val = int(str(data.get(key, "")).strip() or "x")
                     if not lo <= val <= hi:
                         raise ValueError(f"{key.replace('_', ' ')} must be {lo}-{hi}")
@@ -615,6 +620,237 @@ def create_app(cfg, bot=None) -> FastAPI:
             get_state(s).pending_import = None
         flash(request, "Review dismissed.")
         return back("/defaults")
+
+    # -- settings export / import ---------------------------------------------------
+
+    @app.get("/settings/export")
+    async def settings_export(request: Request):
+        require(request)
+        import json
+        from fastapi.responses import Response
+
+        with db.session() as s:
+            data = transfer.export(s)
+        bus.info("admin", "Settings exported.", discord=False)
+        return Response(json.dumps(data, indent=2, ensure_ascii=False), media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{transfer.filename()}"'})
+
+    @app.post("/settings/import", response_class=HTMLResponse)
+    async def settings_import_preview(request: Request):
+        data = await form(request)
+        import json
+
+        upload = data.get("file")
+        raw = ""
+        if upload is not None and hasattr(upload, "read"):
+            raw = (await upload.read()).decode("utf-8-sig", errors="replace")
+        raw = raw or str(data.get("text", ""))
+        if not raw.strip():
+            flash(request, "Choose a settings file or paste its contents.", "err")
+            return back("/settings")
+        if len(raw) > 2_000_000:
+            flash(request, "That file is too large to be a Nyerk settings file.", "err")
+            return back("/settings")
+        try:
+            parsed = json.loads(raw)
+            with db.session() as s:
+                changes = transfer.apply_import(s, parsed)
+                s.rollback()  # preview only
+        except (json.JSONDecodeError, transfer.ImportError_) as exc:
+            flash(request, f"Can't import: {exc}", "err")
+            return back("/settings")
+        return render(request, "import_preview.html", changes=changes, raw=raw)
+
+    @app.post("/settings/import/apply")
+    async def settings_import_apply(request: Request):
+        data = await form(request)
+        import json
+
+        try:
+            with db.session() as s:
+                changes = transfer.apply_import(s, json.loads(str(data.get("raw", ""))))
+        except (json.JSONDecodeError, transfer.ImportError_) as exc:
+            flash(request, f"Can't import: {exc}", "err")
+            return back("/settings")
+        bus.info("config", f"Settings imported: {len(changes)} change(s).")
+        refresh()
+        flash(request, f"Imported {len(changes)} change(s). Repost panels or the roles message if role IDs changed.")
+        return back("/settings")
+
+    # -- party finder ----------------------------------------------------------------
+
+    PF_KINDS = {
+        "classes": (PfClass, (("name", "str"), ("emoji", "str"), ("role_id", "id"), ("class_type", "type"),
+                              ("sort_order", "int"))),
+        "brackets": (PfBracket, (("label", "str"), ("min_score", "int"), ("max_score", "int"), ("sort_order", "int"))),
+        "windows": (PfWindow, (("minutes", "int"), ("label", "str"))),
+        "content": (PfContent, (("name", "str"), ("emoji", "str"), ("min_gear_score", "int"), ("active", "bool"),
+                                ("sort_order", "int"))),
+    }
+
+    def _pf_values(kind: str, data) -> dict:
+        model, fields = PF_KINDS[kind]
+        out = {}
+        for key, typ in fields:
+            raw = str(data.get(key, "")).strip()
+            if typ == "bool":
+                out[key] = bool(data.get(key))
+            elif typ == "id":
+                out[key] = _snowflake(raw)
+            elif typ == "int":
+                out[key] = _int(data, key, 0, 0 if key != "sort_order" else -1000, 100000)
+            elif typ == "type":
+                if raw not in party.TYPES:
+                    raise ValueError("Type must be tank, support or dps")
+                out[key] = raw
+            else:
+                out[key] = raw[:80]
+        first = fields[0][0]
+        if not out[first]:
+            raise ValueError(f"{first.replace('_', ' ').capitalize()} is required")
+        return out
+
+    @app.get("/party", response_class=HTMLResponse)
+    async def party_page(request: Request):
+        require(request)
+        t = int(time.time())
+        with db.session() as s:
+            settings, state = get_settings(s), get_state(s)
+            parties = party.live_parties(s)
+            interests = list(s.scalars(select(PfInterest).where(PfInterest.status == "active",
+                                                               PfInterest.expires_at > t)
+                                       .order_by(PfInterest.expires_at)))
+            for r in interests:
+                _ = r.pf_class, r.bracket
+            ctx = dict(st=settings, state=state, classes=party.classes(s), brackets=party.brackets(s),
+                       windows=party.windows(s), contents=party.contents(s, False), parties=parties,
+                       interests=interests, content_names={c.id: c.name for c in party.contents(s, False)},
+                       TYPE_LABEL=party.TYPE_LABEL)
+        return render(request, "party.html", **ctx)
+
+    @app.post("/party/types")
+    async def party_types(request: Request):
+        data = await form(request)
+        try:
+            with db.session() as s:
+                st = get_settings(s)
+                for key in ("tank_role_id", "support_role_id", "dps_role_id"):
+                    setattr(st, key, _snowflake(data.get(key)))
+                for key in ("party_default_tank", "party_default_support", "party_default_dps"):
+                    setattr(st, key, _int(data, key, 0, 0, 5))
+                if st.party_default_tank + st.party_default_support + st.party_default_dps > 5:
+                    raise ValueError("The default makeup can't need more than 5 players")
+        except ValueError as exc:
+            flash(request, str(exc), "err")
+            return back("/party")
+        bus.info("config", "Party finder type roles and default makeup saved.")
+        flash(request, "Saved. Repost the class panel if role IDs changed.")
+        return back("/party")
+
+    @app.post("/party/{kind}/new")
+    async def party_add(request: Request, kind: str):
+        data = await form(request)
+        if kind not in PF_KINDS:
+            raise HTTPException(404)
+        model = PF_KINDS[kind][0]
+        try:
+            values = _pf_values(kind, data)
+            with db.session() as s:
+                s.add(model(**values))
+        except ValueError as exc:
+            flash(request, str(exc), "err")
+            return back(f"/party#{kind}")
+        except Exception:
+            flash(request, "That already exists.", "err")
+            return back(f"/party#{kind}")
+        bus.info("config", f"Party finder {kind}: added {next(iter(values.values()))}.")
+        refresh()
+        return back(f"/party#{kind}")
+
+    @app.post("/party/{kind}/{row_id}")
+    async def party_save(request: Request, kind: str, row_id: int):
+        data = await form(request)
+        if kind not in PF_KINDS:
+            raise HTTPException(404)
+        model = PF_KINDS[kind][0]
+        try:
+            values = _pf_values(kind, data)
+            with db.session() as s:
+                row = s.get(model, row_id) or _404()
+                for k, v in values.items():
+                    setattr(row, k, v)
+        except ValueError as exc:
+            flash(request, str(exc), "err")
+            return back(f"/party#{kind}")
+        except HTTPException:
+            raise
+        except Exception:
+            flash(request, "That name is already used.", "err")
+            return back(f"/party#{kind}")
+        bus.info("config", f"Party finder {kind}: saved {next(iter(values.values()))}.")
+        refresh()
+        flash(request, "Saved." + (" Repost the class panel to update its buttons." if kind == "classes" else ""))
+        return back(f"/party#{kind}")
+
+    @app.post("/party/{kind}/{row_id}/delete")
+    async def party_delete(request: Request, kind: str, row_id: int):
+        await form(request)
+        if kind not in PF_KINDS:
+            raise HTTPException(404)
+        with db.session() as s:
+            row = s.get(PF_KINDS[kind][0], row_id) or _404()
+            s.delete(row)
+        bus.info("config", f"Party finder {kind}: removed #{row_id}.")
+        refresh()
+        return back(f"/party#{kind}")
+
+    @app.post("/party-panels")
+    async def party_panels(request: Request):
+        data = await form(request)
+        which = str(data.get("which", "all"))
+        bot = app.state.bot
+        if which not in ("all", "class", "interest", "create", "status"):
+            raise HTTPException(400)
+        if not bot or not bot.is_ready():
+            flash(request, "Bot is not connected.", "err")
+            return back("/party")
+
+        async def _run():
+            try:
+                await bot.pf.post_panels(which)
+            except Exception as exc:
+                bus.error("party", f"Panel post failed: {exc!r}")
+
+        asyncio.create_task(_run())
+        flash(request, "Posting panels. Check #aion-2-party-finder in a moment.")
+        return back("/party")
+
+    @app.post("/party-parties/{pid}/close")
+    async def party_close(request: Request, pid: int):
+        await form(request)
+        with db.session() as s:
+            p = s.get(PfParty, pid) or _404()
+            if p.status in party.LIVE:
+                party.end(p, "closed", int(time.time()))
+                title = party.party_title(p)
+            else:
+                title = ""
+        if title:
+            bus.info("party", f"Party #{pid} ({title}) closed by admin.")
+            refresh()
+        return back("/party")
+
+    @app.post("/party-interest/{rid}/cancel")
+    async def party_interest_cancel(request: Request, rid: int):
+        await form(request)
+        with db.session() as s:
+            r = s.get(PfInterest, rid) or _404()
+            name = r.user_name
+            if r.status == "active":
+                r.status = "cancelled"
+        bus.info("party", f"Registration of {name} cancelled by admin.")
+        refresh()
+        return back("/party")
 
     return app
 

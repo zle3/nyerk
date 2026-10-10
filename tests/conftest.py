@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from nyerk import db
-from nyerk.seed import seed
+from nyerk.seed import seed, seed_party_finder
 
 NY = ZoneInfo("America/New_York")
 
@@ -18,5 +18,6 @@ def s():
     db.init_engine(":memory:")
     with db.session() as session:
         seed(session)
+        seed_party_finder(session)
         session.flush()
         yield session

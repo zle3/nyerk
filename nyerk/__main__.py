@@ -14,7 +14,7 @@ from . import db, housekeeping
 from .config import Config
 from .db import get_settings
 from .logbus import bus
-from .seed import seed
+from .seed import seed, seed_party_finder
 from .web.app import create_app, hash_password
 
 log = logging.getLogger("nyerk")
@@ -109,6 +109,8 @@ def main() -> None:
     with db.session() as s:
         if seed(s):
             log.info("Seeded default events and categories.")
+        if seed_party_finder(s):
+            log.info("Seeded party finder classes, gear brackets and time windows.")
     init_password(cfg)
     try:
         asyncio.run(amain(cfg))

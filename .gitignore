@@ -35,3 +35,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Server-specific Discord IDs and scope notes stay local (import them in Settings)
+nyerk-settings*.json
+*.local.json
+Nyerk Scope Document.md
+Nyerk Party Finder Scope.md

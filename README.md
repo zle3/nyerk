@@ -2,7 +2,9 @@
 
 AION2 event alerts for one Discord server (NA East, Siel, Elyos). It posts plain-text alerts and role pings to #aion-2-timer, keeps a live dashboard with world boss report buttons as the last message there, runs reaction roles in #aion-2-roles, and logs to #logs. A password-protected web admin on the LAN configures all of it.
 
-The full spec is in `Nyerk Scope Document.md`.
+It also runs a **party finder** in #aion-2-party-finder: a class selector that gives class and Tank/Support/DPS roles, an interest list that pings registered members when a matching party opens, and 5 or 20 person party listings with join, leave, kick, extend and a shared party status message.
+
+No channel or role IDs are in this repository. Set them in the admin page, or import them (see **Settings export and import** below).
 
 ## Run it
 
@@ -40,6 +42,31 @@ Data lands in `/opt/stacks/nyerk/data`. On start the container hands it to `PUID
 cp .env.example .env        # fill in DISCORD_TOKEN, GUILD_ID, ADMIN_PASSWORD
 docker compose -f compose.build.yaml up -d --build
 ```
+
+### Settings export and import
+
+**Settings → Export settings** downloads one JSON file with every setting, ping category, event, alert template and party finder list, IDs included. It never contains the admin password or the bot token. **Settings → Preview import** shows every change before anything is applied.
+
+Import merges: rows are matched by name, and anything missing from the file is left alone. A short file that only sets IDs is enough:
+
+```json
+{
+  "nyerk_export": 1,
+  "settings": { "timer_channel_id": "…", "roles_channel_id": "…", "log_channel_id": "…", "party_channel_id": "…",
+                "tank_role_id": "…", "support_role_id": "…", "dps_role_id": "…" },
+  "categories": [ { "name": "World Boss", "role_id": "…" } ],
+  "party_finder": { "classes": [ { "name": "Cleric", "role_id": "…" } ] }
+}
+```
+
+`nyerk-settings*.json` is git-ignored, so keep your own copy next to the repo without committing it.
+
+### Party finder setup
+
+1. Settings: set **Party channel** and check the party timing values.
+2. Party finder page: paste the Tank, Support and DPS role IDs and the class role IDs (or import them), and add the **content** (dungeons and activities) with their minimum gear score.
+3. Create the Tank, Support and DPS roles in Discord yourself, and move Nyerk's role above all class and type roles.
+4. Make #aion-2-party-finder read-only for members, then click **Post all panels**. Delete the old "AION 2 Classes" message by hand.
 
 ### Discord setup
 

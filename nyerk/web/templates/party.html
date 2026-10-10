@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Party finder{% endblock %}
+{% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Party finder</h1>
+    <p class="lede">Class selector, interest list and party listings in the party channel{% if not st.party_channel_id %} (set the channel on the <a href="/settings">Settings</a> page first){% endif %}. Nyerk never creates roles: paste IDs of roles that exist.</p>
+  </div>
+</div>
+
+<p class="section-label">Panels</p>
+<div class="card">
+  <p class="small muted">Panels post in this order: class selector, interest list, create party, party status. Posting all puts them at the bottom of the channel, so do it before parties open. Delete the old "AION 2 Classes" message by hand afterwards.</p>
+  <div class="actions">
+    {% for which, label in (('all', 'Post all panels'), ('class', 'Class selector'), ('interest', 'Interest list'), ('create', 'Create party'), ('status', 'Party status')) %}
+    <form method="post" action="/party-panels" class="inline-form" {% if which == 'all' %}data-confirm="Delete and repost all four panels?"{% endif %}>
+      {{ csrf_field() }}<input type="hidden" name="which" value="{{ which }}">
+      <button class="btn small {{ '' if which == 'all' else 'secondary' }}" type="submit">{{ label }}</button>
+    </form>
+    {% endfor %}
+  </div>
+  <p class="small muted">Posted: class {{ '✓' if state.class_panel_message_id else '–' }} · interest {{ '✓' if state.interest_panel_message_id else '–' }} · create {{ '✓' if state.party_panel_message_id else '–' }} · status {{ '✓' if state.party_status_message_id else '–' }}</p>
+</div>
+
+<p class="section-label" id="types">Class type roles and default makeup</p>
+<form method="post" action="/party/types" class="card">
+  {{ csrf_field() }}
+  <div class="fields">
+    <div class="field"><label for="tank_role_id">Tank role ID</label><input id="tank_role_id" name="tank_role_id" class="mono" type="text" value="{{ st.tank_role_id or '' }}"></div>
+    <div class="field"><label for="support_role_id">Support role ID</label><input id="support_role_id" name="support_role_id" class="mono" type="text" value="{{ st.support_role_id or '' }}"></div>
+    <div class="field"><label for="dps_role_id">DPS role ID</label><input id="dps_role_id" name="dps_role_id" class="mono" type="text" value="{{ st.dps_role_id or '' }}"></div>
+  </div>
+  <div class="fields">
+    <div class="field"><label for="party_default_tank">Default: tanks</label><input id="party_default_tank" name="party_default_tank" type="number" min="0" max="5" value="{{ st.party_default_tank }}"></div>
+    <div class="field"><label for="party_default_support">Default: supports</label><input id="party_default_support" name="party_default_support" type="number" min="0" max="5" value="{{ st.party_default_support }}"></div>
+    <div class="field"><label for="party_default_dps">Default: DPS</label><input id="party_default_dps" name="party_default_dps" type="number" min="0" max="5" value="{{ st.party_default_dps }}"><div class="help">The 5 person "Default" requirement. Unused slots are open to any type.</div></div>
+  </div>
+  <button class="btn" type="submit">Save</button>
+</form>
+
+<p class="section-label" id="classes">Classes</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Name</th><th>Emoji</th><th>Class role ID</th><th>Type</th><th>Order</th><th></th></tr></thead>
+  <tbody>
+  {% for c in classes %}
+    <tr>
+      <td colspan="5">
+        <form method="post" action="/party/classes/{{ c.id }}" class="inline" id="class-{{ c.id }}">
+          {{ csrf_field() }}
+          <input type="text" name="name" value="{{ c.name }}" aria-label="Name" required>
+          <input type="text" name="emoji" value="{{ c.emoji }}" aria-label="Emoji" class="w-auto" size="4">
+          <input type="text" name="role_id" value="{{ c.role_id or '' }}" placeholder="Role ID" aria-label="Role ID" class="mono">
+          <select name="class_type" aria-label="Type" class="w-auto">{% for t in ('tank', 'support', 'dps') %}<option value="{{ t }}" {{ 'selected' if c.class_type == t }}>{{ TYPE_LABEL[t] }}</option>{% endfor %}</select>
+          <input type="number" name="sort_order" value="{{ c.sort_order }}" aria-label="Order" class="w-auto">
+          <button class="btn small secondary" type="submit">Save</button>
+        </form>
+      </td>
+      <td><form method="post" action="/party/classes/{{ c.id }}/delete" class="inline-form" data-confirm="Remove {{ c.name }}?">{{ csrf_field() }}<button class="btn icon" type="submit" aria-label="Remove {{ c.name }}">✕</button></form></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<form method="post" action="/party/classes/new" class="card inline">
+  {{ csrf_field() }}
+  <input type="text" name="name" placeholder="New class" required aria-label="New class name">
+  <input type="text" name="emoji" placeholder="Emoji" class="w-auto" size="4" aria-label="Emoji">
+  <input type="text" name="role_id" placeholder="Role ID" class="mono" aria-label="Role ID">
+  <select name="class_type" class="w-auto" aria-label="Type"><option value="tank">Tank</option><option value="support">Support</option><option value="dps" selected>DPS</option></select>
+  <input type="number" name="sort_order" value="{{ classes|length }}" class="w-auto" aria-label="Order">
+  <button class="btn small" type="submit">Add</button>
+</form>
+<p class="small muted">Classes without a role ID are left off the panel.</p>
+
+<p class="section-label" id="content">Content</p>
+<div class="table-wrap">
+<table>
+  <tbody>
+  {% for c in contents %}
+    <tr class="{{ '' if c.active else 'off' }}">
+      <td>
+        <form method="post" action="/party/content/{{ c.id }}" class="inline">
+          {{ csrf_field() }}
+          <input type="text" name="name" value="{{ c.name }}" aria-label="Name" required>
+          <input type="text" name="emoji" value="{{ c.emoji }}" class="w-auto" size="4" aria-label="Emoji">
+          <input type="number" name="min_gear_score" value="{{ c.min_gear_score }}" class="w-auto" aria-label="Minimum gear score" title="Minimum gear score">
+          <input type="number" name="sort_order" value="{{ c.sort_order }}" class="w-auto" aria-label="Order">
+          <label class="switch"><input type="checkbox" name="active" value="1" {{ 'checked' if c.active }}><span class="track"></span>Active</label>
+          <button class="btn small secondary" type="submit">Save</button>
+        </form>
+      </td>
+      <td><form method="post" action="/party/content/{{ c.id }}/delete" class="inline-form" data-confirm="Remove {{ c.name }}?">{{ csrf_field() }}<button class="btn icon" type="submit" aria-label="Remove {{ c.name }}">✕</button></form></td>
+    </tr>
+  {% else %}
+    <tr><td class="muted">No content yet. Add the dungeons and activities people form groups for.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<form method="post" action="/party/content/new" class="card inline">
+  {{ csrf_field() }}
+  <input type="text" name="name" placeholder="Dungeon or activity" required aria-label="New content name">
+  <input type="text" name="emoji" placeholder="Emoji" class="w-auto" size="4" aria-label="Emoji">
+  <input type="number" name="min_gear_score" placeholder="Min gear" class="w-auto" aria-label="Minimum gear score">
+  <input type="number" name="sort_order" value="{{ contents|length }}" class="w-auto" aria-label="Order">
+  <input type="hidden" name="active" value="1">
+  <button class="btn small" type="submit">Add</button>
+</form>
+
+<div class="grid">
+  <div>
+    <p class="section-label" id="brackets">Gear score brackets</p>
+    <div class="list">
+    {% for b in brackets %}
+      <div class="row">
+        <form method="post" action="/party/brackets/{{ b.id }}" class="grow inline">
+          {{ csrf_field() }}
+          <input type="text" name="label" value="{{ b.label }}" aria-label="Label" required>
+          <input type="number" name="min_score" value="{{ b.min_score }}" class="w-auto" aria-label="Min">
+          <input type="number" name="max_score" value="{{ b.max_score }}" class="w-auto" aria-label="Max">
+          <input type="hidden" name="sort_order" value="{{ b.sort_order }}">
+          <button class="btn small secondary" type="submit">Save</button>
+        </form>
+        <form method="post" action="/party/brackets/{{ b.id }}/delete" class="inline-form">{{ csrf_field() }}<button class="btn icon" type="submit" aria-label="Remove {{ b.label }}">✕</button></form>
+      </div>
+    {% endfor %}
+      <div class="row">
+        <form method="post" action="/party/brackets/new" class="grow inline">
+          {{ csrf_field() }}
+          <input type="text" name="label" placeholder="2100+" required aria-label="New bracket label">
+          <input type="number" name="min_score" placeholder="Min" class="w-auto" aria-label="Min">
+          <input type="number" name="max_score" placeholder="Max" class="w-auto" aria-label="Max">
+          <input type="hidden" name="sort_order" value="{{ brackets|length }}">
+          <button class="btn small" type="submit">Add</button>
+        </form>
+      </div>
+    </div>
+    <p class="small muted">Pings go to members whose bracket maximum reaches the content's minimum.</p>
+  </div>
+  <div>
+    <p class="section-label" id="windows">Availability windows</p>
+    <div class="list">
+    {% for w in windows %}
+      <div class="row">
+        <form method="post" action="/party/windows/{{ w.id }}" class="grow inline">
+          {{ csrf_field() }}
+          <input type="number" name="minutes" value="{{ w.minutes }}" class="w-auto" aria-label="Minutes" required>
+          <input type="text" name="label" value="{{ w.label }}" aria-label="Label">
+          <button class="btn small secondary" type="submit">Save</button>
+        </form>
+        <form method="post" action="/party/windows/{{ w.id }}/delete" class="inline-form">{{ csrf_field() }}<button class="btn icon" type="submit" aria-label="Remove {{ w.label }}">✕</button></form>
+      </div>
+    {% endfor %}
+      <div class="row">
+        <form method="post" action="/party/windows/new" class="grow inline">
+          {{ csrf_field() }}
+          <input type="number" name="minutes" placeholder="Minutes" class="w-auto" required aria-label="New window minutes">
+          <input type="text" name="label" placeholder="Label, e.g. 3 hr" aria-label="Label">
+          <button class="btn small" type="submit">Add</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="section-label">Open and full parties</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Party</th><th>Leader</th><th>Players</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for p in parties %}
+    <tr>
+      <td><strong>{{ p.content.name if p.content else 'Party' }}</strong><br><span class="small muted">#{{ p.id }} · {{ p.requirement }}{% if p.description %} · {{ p.description }}{% endif %}</span></td>
+      <td>{{ p.leader_name }}</td>
+      <td class="num">{{ p.members|length }}/{{ p.size }}</td>
+      <td>{% if p.status == 'open' %}<span class="pill ok">open</span> <span class="small muted">closes <time data-ts="{{ p.expires_at }}" data-style="R"></time></span>{% else %}<span class="pill accent">full</span>{% endif %}</td>
+      <td><form method="post" action="/party-parties/{{ p.id }}/close" class="inline-form" data-confirm="Close this party? Its messages are deleted.">{{ csrf_field() }}<button class="btn small danger" type="submit">Close</button></form></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No open parties.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<p class="section-label">Registrations</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Member</th><th>Class</th><th>Gear</th><th>Content</th><th>Until</th><th></th></tr></thead>
+  <tbody>
+  {% for r in interests %}
+    <tr>
+      <td>{{ r.user_name }}</td>
+      <td>{{ r.pf_class.name if r.pf_class else '?' }} <span class="small muted">{{ TYPE_LABEL.get(r.class_type, '') }}</span></td>
+      <td>{{ r.bracket.label if r.bracket else '?' }}</td>
+      <td class="small">{% for cid in r.content_ids %}{{ content_names.get(cid, '?') }}{{ ', ' if not loop.last }}{% endfor %}</td>
+      <td class="small"><time data-ts="{{ r.expires_at }}" data-style="R"></time></td>
+      <td><form method="post" action="/party-interest/{{ r.id }}/cancel" class="inline-form">{{ csrf_field() }}<button class="btn small secondary" type="submit">Cancel</button></form></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">Nobody is registered.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}
