@@ -127,7 +127,7 @@ class CustomTimeModal(discord.ui.Modal, title="Report a world boss"):
         self.respawns_in = discord.ui.TextInput(placeholder="e.g. 1h 20m", required=False, max_length=40)
         self.add_item(discord.ui.Label(text="Boss", component=self.boss))
         self.add_item(discord.ui.Label(
-            text="Killed at", description="When it died. Leave both blank for 5 minutes ago.", component=self.killed_at))
+            text="Killed at", description="When it died. Leave both blank if it just died.", component=self.killed_at))
         self.add_item(discord.ui.Label(
             text="Or respawns in", description="Time left on the respawn. Fill one field, not both.",
             component=self.respawns_in))
@@ -174,7 +174,7 @@ async def my_timer_autocomplete(interaction: discord.Interaction, current: str):
 @nyerk_group.command(name="worldboss", description="Report a world boss kill and start its respawn timer")
 @app_commands.describe(
     boss="The boss that was killed",
-    killed_at="When it died, e.g. '10 min ago' or '14:30'. Blank = 5 minutes ago.",
+    killed_at="When it died, e.g. '10 min ago' or '14:30'. Blank = it just died.",
     respawns_in="Time left on its respawn, e.g. '1h 20m'. Use instead of killed_at.",
 )
 @app_commands.autocomplete(boss=boss_autocomplete)

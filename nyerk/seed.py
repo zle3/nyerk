@@ -94,6 +94,9 @@ def upgrade_defaults(s: Session) -> list[str]:
     if st.dashboard_title == "⏱️ AION2 Timers":
         st.dashboard_title = "⏱️ AION 2 Timers"
         done.append("dashboard title")
+    if st.report_offset_min == 5:  # old default; 1 minute since 2026-10-10
+        st.report_offset_min = 1
+        done.append("report offset (5 → 1 minute)")
     # Columns added by older upgrades stored "\n" as two characters.
     for col in ("roles_header", "dashboard_footer"):
         value = getattr(st, col) or ""

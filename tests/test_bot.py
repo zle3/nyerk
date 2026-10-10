@@ -102,7 +102,7 @@ def test_boss_ping_allows_only_the_role(s, monkeypatch):
     start = ny(2026, 10, 9, 12, 0)
     timers.report(s, boss, 1, "Raelin", start)
     s.commit()
-    fire = start + 5 * 3600 + 55 * 60
+    fire = start + 5 * 3600 + 59 * 60  # 6 h respawn, kill assumed 1 minute before the report
     clock = [fire - 15 * 60 + 2]
     get_state(s).last_tick_at = clock[0] - 30
     s.commit()

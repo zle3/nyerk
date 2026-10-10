@@ -10,11 +10,11 @@ def boss(s, name="Soul Ruler Kashapa"):
     return s.scalar(select(Event).where(Event.name == name))
 
 
-def test_blank_report_assumes_kill_five_minutes_ago(s):
+def test_blank_report_assumes_kill_one_minute_ago(s):
     now = ny(2026, 10, 9, 12, 0)
     r = timers.report(s, boss(s), 1, "Raelin", now)
     assert r.ok
-    assert r.timer.fire_at == now + 5 * 3600 + 55 * 60
+    assert r.timer.fire_at == now + 5 * 3600 + 59 * 60
     assert "Active timers: 1/10" in r.reply
 
 
@@ -181,3 +181,13 @@ def test_upgrade_repairs_escaped_newlines(s):
     st.roles_header = "# Roles\\nPick"
     assert "roles header" in upgrade_defaults(s)
     assert st.roles_header == "# Roles\nPick"
+
+
+def test_old_default_report_offset_upgraded(s):
+    from nyerk.seed import upgrade_defaults
+    st = _settings(s)
+    st.report_offset_min = 5
+    assert any("report offset" in x for x in upgrade_defaults(s)) and st.report_offset_min == 1
+    st.report_offset_min = 3  # a customised value is left alone
+    upgrade_defaults(s)
+    assert st.report_offset_min == 3

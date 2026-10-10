@@ -169,7 +169,7 @@ Import merges: rows are matched by name, and anything missing from the file is l
 ## Behaviour notes
 
 - **Restarts:** alerts whose send time passed while Nyerk was down are skipped and logged to #logs. They are not sent late. The `sent_messages` ledger prevents double posts after a restart.
-- **Kill reports:** a report with no time assumes the kill happened 5 minutes ago (the offset is editable). A `respawns_in` report uses the remaining time exactly as given. Warnings that are already in the past when a timer is reported are skipped silently.
+- **Kill reports:** a report with no time assumes the kill happened 1 minute ago (the report offset, editable in Settings). A `respawns_in` report uses the remaining time exactly as given. Warnings that are already in the past when a timer is reported are skipped silently.
 - **Time zones:** each event stores its own time zone. Game events keep their New York hour, while resets and maintenance stay pinned to UTC, so their New York time moves an hour earlier on November 1. Tests cover both cases.
 - **Maintenance overrides:** an override replaces one week's regular window. Emergency windows are added on top of the regular schedule.
 - **Message templates:** a line containing only `{role}` is dropped when that slot's ping is off. Reporters are shown by display name, and user mentions are always disabled.

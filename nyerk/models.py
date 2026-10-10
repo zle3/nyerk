@@ -27,7 +27,7 @@ class Settings(Base):
     log_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
     default_tz: Mapped[str] = mapped_column(String(64), default="America/New_York")
     user_timer_limit: Mapped[int] = mapped_column(Integer, default=10)
-    report_offset_min: Mapped[int] = mapped_column(Integer, default=5)
+    report_offset_min: Mapped[int] = mapped_column(Integer, default=1)
     keep_occurrences: Mapped[int] = mapped_column(Integer, default=2)
     # Max one-off lines on the dashboard before "+N more".
     dashboard_max_oneoffs: Mapped[int] = mapped_column(Integer, default=20)
