@@ -20,8 +20,9 @@ LETTERS = [chr(0x1F1E6 + i) for i in range(26)]  # 🇦 … 🇿
 AUTO_EMOJI = NUMBERS + LETTERS
 PER_MESSAGE = 20  # Discord's limit of distinct reactions on one message
 
-CLEAR_TEXT = ("## Remove all pings\n"
-              "Press the button to remove every event and dungeon ping role you have. Your class role stays.")
+CLEAR_TEXT = ("## Ping settings\n"
+              "**Quiet hours** pause your dungeon pings every day during hours you choose, then turn them back on.\n"
+              "**Remove all my ping roles** removes every event and dungeon ping role you have. Your class role stays.")
 
 
 @dataclass

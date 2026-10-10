@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from sqlalchemy import select
 
-from . import db, engine, party, party_bot, reaction_roles, timers, tracking
+from . import db, engine, party, party_bot, quiet, reaction_roles, timers, tracking
 from .db import get_settings, get_state
 from .logbus import bus
 from .models import PfContent, SentMessage, UserTimer
@@ -71,17 +71,48 @@ class CustomTimeButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nye
         await interaction.response.send_modal(CustomTimeModal(bosses))
 
 
-class ClearPingsButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:roles:clear"):
-    def __init__(self) -> None:
-        super().__init__(discord.ui.Button(label="Remove all my ping roles", style=discord.ButtonStyle.danger,
-                                           custom_id="nyerk:roles:clear"))
+class PingSettingsButton(discord.ui.DynamicItem[discord.ui.Button],
+                         template=r"nyerk:roles:(?P<what>clear|quiet|quietoff)"):
+    LABELS = {
+        "quiet": ("Quiet hours", discord.ButtonStyle.primary, "🌙"),
+        "quietoff": ("Turn off quiet hours", discord.ButtonStyle.secondary, None),
+        "clear": ("Remove all my ping roles", discord.ButtonStyle.danger, None),
+    }
+
+    def __init__(self, what: str) -> None:
+        label, style, emoji = self.LABELS[what]
+        super().__init__(discord.ui.Button(label=label, style=style, emoji=emoji, custom_id=f"nyerk:roles:{what}"))
+        self.what = what
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match):
-        return cls()
+        return cls(match["what"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await interaction.client.clear_pings(interaction)
+        client = interaction.client
+        await {"clear": client.clear_pings, "quiet": client.open_quiet_hours,
+               "quietoff": client.quiet_hours_off}[self.what](interaction)
+
+
+class QuietHoursModal(discord.ui.Modal, title="Quiet hours"):
+    def __init__(self, start_h: int, end_h: int, tz: str) -> None:
+        super().__init__(timeout=600)
+        hours = [(quiet.hour_label(h), str(h)) for h in range(24)]
+        self.start = discord.ui.Select(options=[discord.SelectOption(label=l, value=v, default=v == str(start_h))
+                                                for l, v in hours])
+        self.end = discord.ui.Select(options=[discord.SelectOption(label=l, value=v, default=v == str(end_h))
+                                              for l, v in hours])
+        self.tz = discord.ui.Select(options=[discord.SelectOption(label=l, value=v, default=v == tz)
+                                             for v, l in quiet.ZONES])
+        self.add_item(discord.ui.Label(text="Quiet from", component=self.start,
+                                       description="Your dungeon ping roles are removed at this hour."))
+        self.add_item(discord.ui.Label(text="Until", component=self.end,
+                                       description="And given back at this hour, every day."))
+        self.add_item(discord.ui.Label(text="Your time zone", component=self.tz))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.client.save_quiet_hours(interaction, int(self.start.values[0]), int(self.end.values[0]),
+                                                  self.tz.values[0])
 
 
 class CustomTimeModal(discord.ui.Modal, title="Report a world boss"):
@@ -232,7 +263,7 @@ class NyerkBot(discord.Client):
     # -- lifecycle ---------------------------------------------------------
 
     async def setup_hook(self) -> None:
-        self.add_dynamic_items(BossButton, CustomTimeButton, ClearPingsButton, *party_bot.ITEMS)
+        self.add_dynamic_items(BossButton, CustomTimeButton, PingSettingsButton, *party_bot.ITEMS)
         if self.guild_id:
             guild = discord.Object(self.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -423,6 +454,11 @@ class NyerkBot(discord.Client):
         self._force_repost = False
         await self.update_dashboard(repost=repost)
         try:
+            await self.apply_quiet_hours()
+        except Exception as exc:
+            log.exception("quiet hours failed")
+            bus.error("roles", f"Quiet hours update failed: {exc!r}")
+        try:
             await self.pf.tick()
         except Exception as exc:  # the party finder must never stop timer alerts
             log.exception("party finder tick failed")
@@ -551,7 +587,8 @@ class NyerkBot(discord.Client):
             posted[str(msg.id)] = {e.emoji: e.role_id for e in chunk}
             messages.append((msg, chunk))
         clear_view = discord.ui.View(timeout=None)
-        clear_view.add_item(ClearPingsButton())
+        for what in ("quiet", "quietoff", "clear"):
+            clear_view.add_item(PingSettingsButton(what))
         try:
             clear_msg = await channel.send(reaction_roles.CLEAR_TEXT, view=clear_view, allowed_mentions=NO_MENTIONS)
         finally:
@@ -634,6 +671,73 @@ class NyerkBot(discord.Client):
             bus.info("roles", f"Created dungeon role {name} ({role.id}).")
         return made
 
+    # -- quiet hours -------------------------------------------------------------
+
+    async def open_quiet_hours(self, interaction: discord.Interaction) -> None:
+        with db.session() as s:
+            q = quiet.get(s, interaction.user.id)
+            default_tz = get_settings(s).default_tz
+            if not quiet.content_role_ids(s):
+                await interaction.response.send_message("There are no dungeon ping roles yet.", ephemeral=True)
+                return
+            start, end = (q.start_min // 60, q.end_min // 60) if q else (23, 8)
+            tz = q.tz if q else default_tz
+        if tz not in dict(quiet.ZONES):
+            tz = "America/New_York"
+        await interaction.response.send_modal(QuietHoursModal(start, end, tz))
+
+    async def save_quiet_hours(self, interaction: discord.Interaction, start_h: int, end_h: int, tz: str) -> None:
+        member = interaction.user
+        held = {r.id for r in getattr(member, "roles", [])}
+        try:
+            with db.session() as s:
+                q = quiet.set_hours(s, member.id, member.display_name, start_h, end_h, tz, held)
+                text = quiet.window_text(q)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"Quiet hours set: {text}. Your dungeon ping roles are paused during that time and come back after. "
+            "Event pings are not affected.", ephemeral=True)
+        bus.info("roles", f"{member.display_name} set quiet hours: {text}.")
+        await self.apply_quiet_hours(only=member.id)
+
+    async def quiet_hours_off(self, interaction: discord.Interaction) -> None:
+        with db.session() as s:
+            q = quiet.turn_off(s, interaction.user.id)
+        if not q:
+            await interaction.response.send_message("You don't have quiet hours set.", ephemeral=True)
+            return
+        await interaction.response.send_message("Quiet hours turned off. Any paused dungeon roles are back.",
+                                                ephemeral=True)
+        bus.info("roles", f"{interaction.user.display_name} turned off quiet hours.")
+        await self.apply_quiet_hours(only=interaction.user.id)
+
+    async def apply_quiet_hours(self, only: int | None = None) -> None:
+        guild = self._guild()
+        if guild is None:
+            return
+        with db.session() as s:
+            changes = [c for c in quiet.transitions(s, now()) if only is None or c.user_id == only]
+        for c in changes:
+            done: set[int] = set()
+            for role_id in c.role_ids:
+                try:
+                    if c.to_state == "quiet":
+                        await self.http.remove_role(guild.id, c.user_id, role_id, reason="Nyerk quiet hours")
+                    else:
+                        await self.http.add_role(guild.id, c.user_id, role_id, reason="Nyerk quiet hours ended")
+                    done.add(role_id)
+                except discord.NotFound:
+                    done.add(role_id)  # member or role gone; nothing to retry
+                except discord.HTTPException as exc:
+                    bus.error("roles", f"Quiet hours for {c.user_name}: role {role_id} failed: {exc!r}")
+            with db.session() as s:
+                quiet.confirm(s, c.user_id, c.to_state, done)
+            if done or c.role_ids == set():
+                verb = "paused" if c.to_state == "quiet" else "restored"
+                bus.info("roles", f"Quiet hours: {verb} {len(done)} dungeon role(s) for {c.user_name}.", discord=False)
+
     async def _reaction(self, payload: discord.RawReactionActionEvent, add: bool) -> None:
         if self.user and payload.user_id == self.user.id or payload.guild_id is None:
             return
@@ -651,6 +755,16 @@ class NyerkBot(discord.Client):
             return
         guild = self.get_guild(payload.guild_id)
         role = guild.get_role(int(role_id)) if guild else None
+        if add:
+            with db.session() as s:
+                hold = quiet.is_quiet(s, payload.user_id) and int(role_id) in quiet.content_role_ids(s)
+            if hold:  # granted when the member's quiet hours end
+                tracking.add_ping(payload.user_id, payload.member.display_name if payload.member else "",
+                                  int(role_id), suspended=True)
+                bus.info("roles", f"Held {role.name if role else role_id} for "
+                                  f"{payload.member.display_name if payload.member else payload.user_id} "
+                                  f"until their quiet hours end.", discord=False)
+                return
         try:
             if add:
                 await self.http.add_role(payload.guild_id, payload.user_id, int(role_id), reason="Nyerk reaction role")

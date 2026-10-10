@@ -356,3 +356,21 @@ class RoleHolder(Base):
     role_id: Mapped[int] = mapped_column(BigInteger)
     kind: Mapped[str] = mapped_column(String(8))  # class | ping
     since: Mapped[int] = mapped_column(BigInteger)
+    # Removed in Discord for the member's quiet hours; given back after.
+    suspended: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class QuietHours(Base):
+    """A member's daily window without dungeon ping roles."""
+
+    __tablename__ = "quiet_hours"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    user_name: Mapped[str] = mapped_column(String(100), default="")
+    start_min: Mapped[int] = mapped_column(Integer)   # minutes after midnight, member's time zone
+    end_min: Mapped[int] = mapped_column(Integer)
+    tz: Mapped[str] = mapped_column(String(64), default="America/New_York")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    state: Mapped[str] = mapped_column(String(8), default="active")  # active | quiet
+    updated_at: Mapped[int] = mapped_column(BigInteger, default=0)

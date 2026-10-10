@@ -21,13 +21,16 @@ def set_class(user_id: int, user_name: str, role_id: int | None) -> None:
             s.add(RoleHolder(user_id=user_id, user_name=user_name, role_id=role_id, kind="class", since=_now()))
 
 
-def add_ping(user_id: int, user_name: str, role_id: int) -> None:
+def add_ping(user_id: int, user_name: str, role_id: int, suspended: bool = False) -> None:
     with db.session() as s:
         row = s.scalar(select(RoleHolder).where(RoleHolder.user_id == user_id, RoleHolder.role_id == role_id))
         if row is None:
-            s.add(RoleHolder(user_id=user_id, user_name=user_name, role_id=role_id, kind="ping", since=_now()))
-        elif user_name:
-            row.user_name = user_name
+            s.add(RoleHolder(user_id=user_id, user_name=user_name, role_id=role_id, kind="ping", since=_now(),
+                             suspended=suspended))
+        else:
+            row.suspended = suspended
+            if user_name:
+                row.user_name = user_name
 
 
 def remove_pings(user_id: int, role_ids: set[int]) -> None:

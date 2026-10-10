@@ -11,6 +11,7 @@
 - A class selector that hands out class and Tank/Support/DPS roles.
 - An interest list that pings registered members when a matching party opens.
 - 5 or 20 person party listings with join, leave, kick, extend, and a shared party status message.
+- **Quiet hours**: members pick a daily window (in their own time zone) when their dungeon ping roles are paused, then given back.
 - A **Stats** page: class distribution, content demand, party activity by day and hour, and the most active members.
 
 No channel or role IDs are in this repository. Set them in the admin page, or import them (see **Settings export and import** below).

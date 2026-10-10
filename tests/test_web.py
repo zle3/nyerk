@@ -7,7 +7,7 @@ from sqlalchemy import select
 from nyerk import db
 from nyerk.config import Config
 from nyerk.db import get_settings
-from nyerk.models import Category, Event, PfClass, PfContent, ReactionGroup, UserTimer
+from nyerk.models import Category, Event, PfClass, PfContent, QuietHours, ReactionGroup, UserTimer
 from nyerk.seed import seed, seed_party_finder, seed_reaction_groups
 from nyerk.web.app import create_app, hash_password
 
@@ -243,3 +243,15 @@ def test_roles_header(client):
 def test_stats_page(client, rng):
     r = client.get(f"/stats?range={rng}")
     assert r.status_code == 200 and "Class distribution" in r.text and "Parties led" in r.text
+
+
+def test_quiet_hours_admin(client):
+    from nyerk import quiet
+    with db.session() as s:
+        q = quiet.set_hours(s, 9, "Rae", 23, 7, "America/New_York", set())
+        qid = q.id
+    page = client.get("/party").text
+    assert "Rae" in page and "11 PM (23:00) to 7 AM (07:00), Eastern (New York)" in page
+    client.post(f"/party-quiet/{qid}/off", data={"csrf": _csrf(client)})
+    with db.session() as s:
+        assert not s.get(QuietHours, qid).enabled

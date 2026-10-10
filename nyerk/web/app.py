@@ -20,13 +20,13 @@ from markupsafe import Markup, escape
 from sqlalchemy import func, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import db, engine, party, reaction_roles, schedules, shugo, stats, timers, transfer
+from .. import db, engine, party, quiet, reaction_roles, schedules, shugo, stats, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus
 from ..models import (
     AlertSlot, Category, Event, LogEntry, PfBracket, PfClass, PfContent, PfInterest, PfParty, PfWindow,
-    ReactionGroup, UserTimer,
+    QuietHours, ReactionGroup, RoleHolder, UserTimer,
 )
 from ..seed import make_slots, NONE
 
@@ -828,7 +828,13 @@ def create_app(cfg, bot=None) -> FastAPI:
                                        .order_by(PfInterest.expires_at)))
             for r in interests:
                 _ = r.pf_class, r.bracket
+            quiet_rows = []
+            for q in s.scalars(select(QuietHours).where(QuietHours.enabled.is_(True)).order_by(QuietHours.user_name)):
+                paused = s.scalar(select(func.count()).select_from(RoleHolder).where(
+                    RoleHolder.user_id == q.user_id, RoleHolder.suspended.is_(True))) or 0
+                quiet_rows.append((q, quiet.window_text(q), paused))
             ctx = dict(st=settings, state=state, classes=party.classes(s), brackets=party.brackets(s),
+                       quiet_rows=quiet_rows,
                        windows=party.windows(s), contents=party.contents(s, False), parties=parties,
                        interests=interests, content_names={c.id: c.name for c in party.contents(s, False)},
                        TYPE_LABEL=party.TYPE_LABEL)
@@ -1029,6 +1035,18 @@ def create_app(cfg, bot=None) -> FastAPI:
             bus.info("party", f"Party #{pid} ({title}) closed by admin.")
             refresh()
         return back("/party")
+
+    @app.post("/party-quiet/{qid}/off")
+    async def party_quiet_off(request: Request, qid: int):
+        await form(request)
+        with db.session() as s:
+            q = s.get(QuietHours, qid) or _404()
+            q.enabled = False
+            name = q.user_name
+        bus.info("roles", f"Quiet hours for {name} turned off by admin.")
+        refresh()  # the next tick gives paused roles back
+        flash(request, f"Turned off quiet hours for {name}. Paused roles come back within 30 seconds.")
+        return back("/party#quiet")
 
     @app.post("/party-interest/{rid}/cancel")
     async def party_interest_cancel(request: Request, rid: int):
