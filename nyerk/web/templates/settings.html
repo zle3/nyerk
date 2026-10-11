@@ -49,6 +49,12 @@
     <div class="field"><label for="party_ping_gap_min">Ping limit per member</label><input id="party_ping_gap_min" name="party_ping_gap_min" type="number" min="0" value="{{ st.party_ping_gap_min }}"><div class="help">At most one interest ping per this many minutes.</div></div>
   </div>
 
+  <p class="section-label">Link preview</p>
+  <div class="card fields">
+    <div class="field"><label for="link_preview_title">Title</label><input id="link_preview_title" name="link_preview_title" type="text" maxlength="100" value="{{ st.link_preview_title }}"><div class="help">Shown when someone pastes Nyerk's address in Discord.</div></div>
+    <div class="field"><label for="link_preview_description">Description</label><input id="link_preview_description" name="link_preview_description" type="text" maxlength="300" value="{{ st.link_preview_description }}"></div>
+  </div>
+
   <p class="section-label">Defaults source</p>
   <div class="card fields">
     <div class="field"><label for="shugo_url">Timer page</label><input id="shugo_url" name="shugo_url" type="url" value="{{ st.shugo_url }}"></div>

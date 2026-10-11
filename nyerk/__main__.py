@@ -70,7 +70,19 @@ async def amain(cfg: Config) -> None:
         servers.append(tunnel_server)
         bus.info("startup", f"Tunnel listener on http://nyerk:{cfg.tunnel_port} (stack network only)", discord=False)
 
-    tasks = [asyncio.create_task(s.serve(), name=f"web{i}") for i, s in enumerate(servers)]
+    async def optional(srv) -> None:
+        """The tunnel listener must never take the bot down (e.g. port in use)."""
+        try:
+            await srv.serve()
+        except BaseException as exc:  # uvicorn exits with SystemExit when it can't bind
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            bus.error("startup", f"Tunnel listener on port {cfg.tunnel_port} failed to start ({exc!r}); "
+                                 "the rest of Nyerk keeps running.")
+            await asyncio.Event().wait()
+
+    tasks = [asyncio.create_task(servers[0].serve(), name="web")]
+    tasks += [asyncio.create_task(optional(s), name="tunnel-web") for s in servers[1:]]
     tasks.append(asyncio.create_task(housekeeping.loop(cfg), name="housekeeping"))
     if bot is not None:
         tasks.append(asyncio.create_task(bot.start(cfg.discord_token), name="discord"))

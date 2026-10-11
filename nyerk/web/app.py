@@ -232,7 +232,13 @@ def create_app(cfg, bot=None) -> FastAPI:
         with db.session() as s:
             pending = get_state(s).pending_import
         user = current(request) or {}
+        with db.session() as s:
+            st = get_settings(s)
+            preview = dict(title=st.link_preview_title or "Nyerk", description=st.link_preview_description or "")
+        base = cfg.public_url or str(request.base_url).rstrip("/")
+        preview.update(url=base + "/", image=base + "/static/og.png")
         ctx.update(
+            preview=preview,
             user=user, level=user.get("level", ""), is_owner=auth.allows(user.get("level"), "owner"),
             is_admin=auth.allows(user.get("level"), "admin"),
             request=request, csrf=request.session["csrf"], flashes=request.session.pop("flash", []),
@@ -1218,6 +1224,8 @@ def create_app(cfg, bot=None) -> FastAPI:
                 st.dashboard_main_label = str(data.get("dashboard_main_label", "")).strip()[:64]
                 st.oneoff_label = str(data.get("oneoff_label", "")).strip()[:64]
                 st.dashboard_footer = str(data.get("dashboard_footer", "")).strip()[:200]
+                st.link_preview_title = str(data.get("link_preview_title", "")).strip()[:100] or "Nyerk"
+                st.link_preview_description = str(data.get("link_preview_description", "")).strip()[:300]
                 st.dashboard_commands_label = str(data.get("dashboard_commands_label", "")).strip()[:200]
                 url = str(data.get("shugo_url", "")).strip() or st.shugo_url
                 if not shugo.allowed_url(url):

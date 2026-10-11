@@ -282,3 +282,17 @@ def test_dashboard_buttons_editor(client):
     overview = client.get("/").text
     assert "<span class=\"\">Silent Dartan is dead</span>" in overview and "Pick a time" in overview
     assert "Soul Ruler Kashapa is dead" not in overview
+
+
+def test_link_preview_tags(tmp_path, monkeypatch):
+    monkeypatch.setenv("NYERK_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PUBLIC_URL", "https://nyerk.example.com")
+    db.init_engine(":memory:")
+    with db.session() as s:
+        seed(s)
+    c = TestClient(create_app(Config()))
+    page = c.get("/login").text  # what Discord's crawler sees (signed out)
+    assert '<meta property="og:title" content="Nyerk">' in page
+    assert '<meta property="og:image" content="https://nyerk.example.com/static/og.png">' in page
+    assert 'og:description" content="AION 2 boss timers' in page and 'name="theme-color"' in page
+    assert c.get("/static/og.png").headers["content-type"] == "image/png"

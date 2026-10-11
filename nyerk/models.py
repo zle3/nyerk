@@ -47,6 +47,11 @@ class Settings(Base):
     # Dashboard buttons: "{name}" is the boss name.
     boss_button_label: Mapped[str] = mapped_column(String(80), default="{name} died")
     custom_button_label: Mapped[str] = mapped_column(String(80), default="Custom time")
+    # Link preview (Discord, Slack, iMessage…) for the public web page.
+    link_preview_title: Mapped[str] = mapped_column(String(100), default="Nyerk")
+    link_preview_description: Mapped[str] = mapped_column(
+        String(300), default="AION 2 boss timers, event alerts, roles and party finder. "
+                             "Sign in with Discord to manage your timers, classes, pings and quiet hours.")
     # One-line reminder about /nyerk on the dashboard; blank hides it.
     dashboard_commands_label: Mapped[str] = mapped_column(
         String(200), default="💡 Type `/nyerk` for more: report a kill with a custom time, and see, edit or cancel your timers.")

@@ -3,7 +3,7 @@
 {% block body %}
 <div class="login">
   <div class="card">
-    <h1>Nyerk</h1>
+    <h1 class="logo-tile"><img src="/static/logo.png" alt="Nyerk" width="191" height="109"></h1>
     <p class="muted small">AION 2 timers, roles and party finder</p>
     {% for kind, text in flashes %}<div class="flash {{ kind }}" role="alert">{{ text }}</div>{% endfor %}
     {% if discord_login %}
