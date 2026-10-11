@@ -58,7 +58,7 @@ class Settings(Base):
 
     # First message in the roles channel. Blank posts no header.
     roles_header: Mapped[str] = mapped_column(
-        String(500), default="# 🎭 Roles\nPick your class, then the pings you want. Change them any time.")
+        String(500), default="# 🎭 Roles\nPick your classes and gear score, then the pings you want. Change them any time.")
 
     # Party finder
     party_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)

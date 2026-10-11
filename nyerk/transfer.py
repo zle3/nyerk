@@ -298,7 +298,7 @@ def summary(s: Session) -> list[tuple[str, str, str]]:
          f"{events} events, {slots} alert slots"),
         ("Roles", "Ping categories with role IDs, role messages, and each role's message and emoji",
          f"{n(Category)} categories, {n(ReactionGroup)} role messages"),
-        ("Party finder", "Classes and role IDs, type roles, default makeup, content with dungeon roles, gear brackets, time windows",
+        ("Party finder", "Classes and role IDs, type roles, standard makeup, content with dungeon roles, gear score options, time windows",
          f"{n(PfClass)} classes, {n(PfContent)} content"),
     ]
 

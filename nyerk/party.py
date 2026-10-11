@@ -77,7 +77,7 @@ def member_class(s: Session, role_ids: set[int]) -> PfClass | None:
 def require_classes(s: Session, who: Who) -> list[PfClass]:
     held = member_classes(s, who.role_ids)
     if not held:
-        raise PartyError("Pick your class on the class panel first.")
+        raise PartyError("Pick at least one class on the class panel first.")
     return held
 
 

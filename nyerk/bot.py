@@ -173,7 +173,7 @@ def dashboard_view(bosses: list[tuple[int, str]]) -> discord.ui.View | None:
 # Slash commands
 
 
-nyerk_group = app_commands.Group(name="nyerk", description="AION2 timers", guild_only=True)
+nyerk_group = app_commands.Group(name="nyerk", description="AION 2 boss timers", guild_only=True)
 
 
 async def boss_autocomplete(interaction: discord.Interaction, current: str):
@@ -192,7 +192,7 @@ async def my_timer_autocomplete(interaction: discord.Interaction, current: str):
     return [app_commands.Choice(name=n[:100], value=v) for n, v in choices if cur in n.lower()][:25]
 
 
-@nyerk_group.command(name="worldboss", description="Report a world boss kill and start its respawn timer")
+@nyerk_group.command(name="worldboss", description="Report a world boss kill and start its respawn timer (replaces your own)")
 @app_commands.describe(
     boss="The boss that was killed",
     killed_at="When it died, e.g. '10 min ago' or '14:30'. Blank = it just died.",

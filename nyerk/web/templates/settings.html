@@ -9,7 +9,7 @@
   <p class="section-label">Channels</p>
   <div class="card fields">
     <div class="field"><label for="timer_channel_id">Timer channel</label><input id="timer_channel_id" name="timer_channel_id" class="mono" type="text" value="{{ st.timer_channel_id or '' }}"><div class="help">#aion-2-timer. Alerts and the dashboard.</div></div>
-    <div class="field"><label for="roles_channel_id">Roles channel</label><input id="roles_channel_id" name="roles_channel_id" class="mono" type="text" value="{{ st.roles_channel_id or '' }}"><div class="help">#aion-2-roles. Reaction roles message.</div></div>
+    <div class="field"><label for="roles_channel_id">Roles channel</label><input id="roles_channel_id" name="roles_channel_id" class="mono" type="text" value="{{ st.roles_channel_id or '' }}"><div class="help">#aion-2-roles. Header, classes, gear score, ping roles and ping settings.</div></div>
     <div class="field"><label for="log_channel_id">Log channel</label><input id="log_channel_id" name="log_channel_id" class="mono" type="text" value="{{ st.log_channel_id or '' }}"><div class="help">#logs.</div></div>
     <div class="field"><label for="party_channel_id">Party channel</label><input id="party_channel_id" name="party_channel_id" class="mono" type="text" value="{{ st.party_channel_id or '' }}"><div class="help">#aion-2-party-finder. Panels, listings and pings.</div></div>
   </div>
@@ -24,12 +24,12 @@
   <p class="section-label">Dashboard and cleanup</p>
   <div class="card fields">
     <div class="field"><label for="alert_retention_min">Delete alerts after (minutes)</label><input id="alert_retention_min" name="alert_retention_min" type="number" min="30" max="10080" value="{{ st.alert_retention_min }}"><div class="help">Counted from the event's start time, or a boss's spawn time. 120 = 2 hours. Alerts under an hour old are always kept.</div></div>
-    <div class="field"><label for="dashboard_max_oneoffs">Max one-off lines</label><input id="dashboard_max_oneoffs" name="dashboard_max_oneoffs" type="number" min="1" max="60" value="{{ st.dashboard_max_oneoffs }}"></div>
+    <div class="field"><label for="dashboard_max_oneoffs">Max World Bosses lines</label><input id="dashboard_max_oneoffs" name="dashboard_max_oneoffs" type="number" min="1" max="60" value="{{ st.dashboard_max_oneoffs }}"></div>
     <div class="field"><label for="dashboard_divider">Divider line</label><input id="dashboard_divider" name="dashboard_divider" type="text" maxlength="100" value="{{ st.dashboard_divider }}"><div class="help">Sits above the title to separate the dashboard from alerts. Blank hides it.</div></div>
     <div class="field"><label for="dashboard_title">Title</label><input id="dashboard_title" name="dashboard_title" type="text" maxlength="100" value="{{ st.dashboard_title }}"><div class="help">Large heading. Blank hides it.</div></div>
     <div class="field"><label for="dashboard_top_label">Resets and maintenance heading</label><input id="dashboard_top_label" name="dashboard_top_label" type="text" maxlength="64" value="{{ st.dashboard_top_label }}"></div>
     <div class="field"><label for="dashboard_main_label">Scheduled events heading</label><input id="dashboard_main_label" name="dashboard_main_label" type="text" maxlength="64" value="{{ st.dashboard_main_label }}"></div>
-    <div class="field"><label for="oneoff_label">Boss and one-off heading</label><input id="oneoff_label" name="oneoff_label" type="text" maxlength="64" value="{{ st.oneoff_label }}"></div>
+    <div class="field"><label for="oneoff_label">World Bosses heading</label><input id="oneoff_label" name="oneoff_label" type="text" maxlength="64" value="{{ st.oneoff_label }}"><div class="help">Boss timers, plus any one-off events you add (like a season ending).</div></div>
     <div class="field"><label for="dashboard_commands_label">/nyerk reminder</label><input id="dashboard_commands_label" name="dashboard_commands_label" type="text" maxlength="200" value="{{ st.dashboard_commands_label }}"><div class="help">One line telling members about the /nyerk commands. Blank hides it.</div></div>
     <div class="field"><label for="dashboard_footer">Footer</label><input id="dashboard_footer" name="dashboard_footer" type="text" maxlength="200" value="{{ st.dashboard_footer }}"><div class="help">Small grey line at the bottom. Blank hides it.</div></div>
     <div class="field"><label for="time_style_near">Time style within 24 h</label>

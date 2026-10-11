@@ -79,7 +79,7 @@ Using Dockge? Create a stack named `nyerk`, paste in the contents of `compose.ya
 2. Sign in with your `ADMIN_PASSWORD`.
 3. **Settings:** paste your channel IDs and click **Save settings**. The dashboard appears in your timer channel within a minute.
 4. **Roles:** create roles in Discord for the pings you want (World Boss, Shugo, and so on), paste their IDs here, then click **Post roles channel**.
-5. **Party finder** (optional): paste your class role IDs, add the dungeons people group for under **Content**, click **Create missing roles** so each dungeon gets a ping role, then **Post all panels** here and **Post roles channel** on the Roles page.
+5. **Party finder** (optional): paste your class role IDs and the Tank, Support and DPS role IDs, add the dungeons people group for under **Content**, click **Create missing roles** so each dungeon gets a ping role, then **Post all panels** here and **Post roles channel** on the Roles page.
 
 **5. Finish the Discord side**
 
@@ -100,11 +100,11 @@ Everything a new server needs, in order. Items marked *optional* can be skipped.
 
 **In Discord**
 - [ ] Channels for timers, reaction roles, logs and the party finder
-- [ ] Timer and party finder channels read-only for members (members keep Use Application Commands); Nyerk allowed to post, manage messages and read history there
+- [ ] Timer and party finder channels read-only for members (members keep Use Application Commands); Nyerk allowed to view, post and read history there
 - [ ] Ping roles for the event categories you want (World Boss, Shugo, Rift, …), each mentionable
 - [ ] Class roles (one per class) and Tank, Support and DPS roles
 - [ ] Nyerk's role dragged above every role it hands out
-- [ ] *Optional:* Manage Messages in the roles channel, so Remove all pings can also clear reactions
+- [ ] *Optional:* Manage Messages in the roles channel, so **Remove all my ping roles** can also clear members' reactions
 
 **Web admin → Settings**
 - [ ] Timer, roles, log and party channel IDs
@@ -121,7 +121,7 @@ Everything a new server needs, in order. Items marked *optional* can be skipped.
 - [ ] Class role IDs (one Save for all), then Tank, Support and DPS role IDs
 - [ ] Content: the dungeons and activities people group for, with minimum gear score
 - [ ] Dungeon ping roles: paste IDs or click **Create missing roles**
-- [ ] *Optional:* gear score brackets, availability windows, default makeup
+- [ ] *Optional:* gear score options, availability windows, standard makeup
 - [ ] **Post all panels**, then delete any old class message by hand
 
 **Web admin → Events, Maintenance, Defaults**
@@ -144,7 +144,7 @@ Every push to `main` runs the tests in GitHub Actions, builds the image and publ
 2. In the env editor set `DISCORD_TOKEN`, `GUILD_ID` and `ADMIN_PASSWORD`, then **Deploy**. Dockge pulls the image.
 3. Open `https://<homelab-ip>:8443` (type the `https://`). The certificate is self-signed, so the browser asks you to accept it once. Behind an HTTPS reverse proxy, set `WEB_TLS=off` and point the proxy at port 8443.
 
-**Private repo:** the image is private too, so the server must log in once: create a GitHub token (classic) with only `read:packages`, then on the server run `docker login ghcr.io -u zle3` and paste the token as the password. A public repo needs no login.
+**If you make the repo private:** the image becomes private too, so the server must log in once: create a GitHub token (classic) with only `read:packages`, then on the server run `docker login ghcr.io -u zle3` and paste the token as the password. A public repo needs no login.
 
 **Updating:** push to `main`, wait for the Actions run to go green (about 2 minutes), then click **Update** in Dockge. To update automatically, add a cron job on the server (`crontab -e`); it only restarts Nyerk when a new image was pulled:
 
@@ -154,11 +154,7 @@ Every push to `main` runs the tests in GitHub Actions, builds the image and publ
 
 **Rolling back / pinning:** set `NYERK_IMAGE=ghcr.io/zle3/nyerk:sha-abc1234` (or `:1.2.0`) in the env editor and Deploy.
 
-On first start Nyerk seeds the ten launch events, the six categories and the three channel IDs from the scope doc. After that:
-
-1. Create the category roles in Discord and paste each role ID on the **Roles** page.
-2. Click **Post roles message**.
-3. Check **Settings** and the **Events** alert toggles.
+On first start Nyerk seeds the ten launch events, the six ping categories, the eight classes, the gear score options and the availability windows. No channel or role IDs are seeded; follow the **Setup checklist** above.
 
 #### Data folder permissions
 
@@ -195,15 +191,15 @@ Import merges: rows are matched by name, and anything missing from the file is l
 2. Party finder page: paste the Tank, Support and DPS role IDs and the class role IDs (or import them), and add the **content** (dungeons and activities) with their minimum gear score. Give each dungeon a ping role: paste an ID or click **Create role** (or **Create missing roles**). A new party pings that role and the members registered for it.
 3. Create the Tank, Support and DPS roles in Discord yourself, and move Nyerk's role above all class and type roles.
 4. Make #aion-2-party-finder read-only for members, then click **Post all panels**. Delete the old "AION 2 Classes" message by hand.
-5. Roles page: click **Post roles channel**. Each role message (Event pings, Dungeon pings, and any you add) posts as its own message, numbered 1️⃣ 2️⃣ 3️⃣ (then 🇦 🇧 after 🔟) unless you set an emoji, continuing in a second message past 20. After them come a copy of the class selector and a **Remove all my ping roles** button. Choose which message each role goes in under **Which message each role goes in**.
+5. Roles page: click **Post roles channel**. It posts, top to bottom: the header, a copy of the class selector, the gear score buttons, one message per role message (Event pings, Dungeon pings, and any you add; numbered 1️⃣ 2️⃣ 3️⃣, then 🇦 🇧 after 🔟, unless you set an emoji, continuing in a second message past 20), and **Ping settings** with **My roles**, **Quiet hours**, **Turn off quiet hours** and **Remove all my ping roles**. Choose which message each role goes in under **Which message each role goes in**.
 
 ### Discord setup
 
 - **Bot invite scopes:** `bot` and `applications.commands`.
-- **Permissions in the three channels:** View Channel, Send Messages, Read Message History, Add Reactions, Use Application Commands. Nyerk also needs Manage Roles, and its role must sit above every category role. It also needs Manage Messages in #aion-2-timer to delete old alerts and dashboards.
+- **Permissions in the four channels** (timer, roles, logs, party finder): View Channel, Send Messages, Read Message History, Add Reactions, Use Application Commands. Nyerk also needs Manage Roles, and its role must sit above every role it hands out (ping, class, Tank/Support/DPS). Nyerk deletes only its own messages, which needs no extra permission; Manage Messages in the roles channel lets **Remove all my ping roles** also clear members' reactions.
 - **Role pings:** make each category role mentionable, or give Nyerk Mention All Roles.
 - **Intents:** none of the privileged ones; Nyerk uses guilds and guild reactions only.
-- **Channel:** make #aion-2-timer read-only for members. Buttons and slash commands still work.
+- **Channels:** make #aion-2-timer and #aion-2-party-finder read-only for members. Buttons and slash commands still work.
 
 ## What's where
 
@@ -212,7 +208,13 @@ Import merges: rows are matched by name, and anything missing from the file is l
 | `nyerk/schedules.py` | Schedule types (hourly, daily, every N hours, weekly, monthly, one-off, kill-reported). Each type answers "next occurrence after T". To add a type, subclass `ScheduleType` and decorate it with `@register`; the admin form builds itself from `fields`. |
 | `nyerk/engine.py` | Due alerts, skip-after-downtime, message templates, dashboard text, cleanup. Has no Discord code. |
 | `nyerk/timers.py` | World boss reports, edits, cancels, overrides and limit rules. |
-| `nyerk/bot.py` | The only module that talks to Discord: 30 s scheduler, dashboard repost and buttons, the `/nyerk` commands, reaction roles, #logs. |
+| `nyerk/bot.py` | Discord side of timers and roles: 30 s scheduler, dashboard and its buttons, the `/nyerk` commands, the roles channel, quiet hours, #logs. |
+| `nyerk/party.py` / `nyerk/party_bot.py` | Party finder rules (classes, gear score, slots, registrations, pings) and its Discord panels, buttons and forms. |
+| `nyerk/reaction_roles.py` | Builds the roles channel's role messages and emoji numbering. |
+| `nyerk/quiet.py` | Quiet hours: when to pause and restore dungeon ping roles. |
+| `nyerk/members.py` / `nyerk/tracking.py` | The admin Members page, and the record of class and ping roles Nyerk has handed out. |
+| `nyerk/stats.py` | Numbers for the Stats page. |
+| `nyerk/transfer.py` | Settings export and import. |
 | `nyerk/shugo.py` | shugo.gg table parser and the review diff. Hand-edited fields are never overwritten. |
 | `nyerk/housekeeping.py` | Nightly SQLite backup (04:00 server time), daily shugo.gg check, self-signed cert. |
 | `nyerk/web/` | FastAPI admin with server-rendered pages. |
@@ -220,13 +222,15 @@ Import merges: rows are matched by name, and anything missing from the file is l
 
 ## Behaviour notes
 
-- **Restarts:** alerts whose send time passed while Nyerk was down are skipped and logged to #logs. They are not sent late. The `sent_messages` ledger prevents double posts after a restart.
+- **Restarts:** alerts whose send time passed while Nyerk was down are skipped and listed in #logs. They are not sent late. The `sent_messages` ledger prevents double posts after a restart.
 - **Kill reports:** a report with no time assumes the kill happened 1 minute ago (the report offset, editable in Settings). A `respawns_in` report uses the remaining time exactly as given. Warnings that are already in the past when a timer is reported are skipped silently.
 - **Alert cleanup:** alert messages are deleted 2 hours after their event starts (or the boss spawns), so the timer channel only shows what's current. Change it in Settings → **Delete alerts after**; alerts under an hour old are always kept.
 - **Re-reporting a boss:** one active timer per boss. Reporting a boss you already reported replaces your timer. If someone else reported it, you get a private warning with **Override their timer** or **Keep theirs**; overrides replace their timer and are logged to #logs with both names.
 - **Time zones:** each event stores its own time zone. Game events keep their New York hour, while resets and maintenance stay pinned to UTC, so their New York time moves an hour earlier on November 1. Tests cover both cases.
 - **Maintenance overrides:** an override replaces one week's regular window. Emergency windows are added on top of the regular schedule.
-- **Message templates:** a line containing only `{role}` is dropped when that slot's ping is off. Reporters are shown by display name, and user mentions are always disabled.
+- **Message templates:** a line containing only `{role}` is dropped when that slot's ping is off. Reporters are shown by display name; timer alerts never mention users.
+- **Who gets mentioned:** timer alerts ping only their category role. Party finder pings mention only the people they're for: matching registrants and the dungeon role for a new party, the leader for the closing warning, and the members when a party is full.
+- **#logs vs the Logs page:** routine lines (scheduled alerts, cleanup, registrations expiring) stay on the web Logs page; reports, overrides, role changes, config changes and problems also go to #logs.
 
 ## Develop
 

@@ -19,7 +19,7 @@ from . import schedules
 from .models import Category, Event
 from .seed import NONE, make_slots
 
-USER_AGENT = "Nyerk/1.0 (AION2 Discord timer bot; home lab)"
+USER_AGENT = "Nyerk/1.0 (AION 2 Discord timer bot; home lab)"
 TZ_SUFFIX = {"KST": "Asia/Seoul", "UTC": "UTC"}
 DAY_NAMES = {d: d for d in schedules.DAYS}
 # Schedule fields an admin edit protects from import.

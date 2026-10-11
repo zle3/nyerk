@@ -279,7 +279,7 @@ class PartyFinder:
             w = [(x.label or f"{x.minutes} min", str(x.id)) for x in party.windows(s)]
             c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s)]
         if not has_class:
-            await reply(interaction, "Pick your class on the class panel first.")
+            await reply(interaction, "Pick at least one class on the class panel first.")
         elif not has_gear:
             await reply(interaction, "Set your gear score in the roles channel first, then register.")
         elif not (w and c):
@@ -317,7 +317,7 @@ class PartyFinder:
             busy = party.live_party_for(s, who.user_id) is not None
             c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s)]
         if not has_class:
-            await reply(interaction, "Pick your class on the class panel first.")
+            await reply(interaction, "Pick at least one class on the class panel first.")
         elif busy:
             await reply(interaction, "You are already in a party. Leave it before starting another.")
         elif not c:

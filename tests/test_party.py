@@ -145,7 +145,7 @@ def test_registration_ping_targets_and_cooldown(pf):
 
 
 def test_register_needs_class(pf):
-    with pytest.raises(PartyError, match="Pick your class"):
+    with pytest.raises(PartyError, match="Pick at least one class"):
         party.register(pf, Who(9, "x", set()), 1, [1], T)
 
 

@@ -106,6 +106,9 @@ def upgrade_defaults(s: Session) -> list[str]:
             done.append("gear score bracket 2100+")
         applied.append("bracket_2100_plus")
         state.upgrades_done = applied
+    if st.roles_header == "# 🎭 Roles\nPick your class, then the pings you want. Change them any time.":
+        st.roles_header = "# 🎭 Roles\nPick your classes and gear score, then the pings you want. Change them any time."
+        done.append("roles channel header")
     if st.oneoff_label in ("One-offs", "World bosses and one-offs"):
         st.oneoff_label = "World Bosses"
         done.append("dashboard boss section name")

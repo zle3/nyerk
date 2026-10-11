@@ -5,7 +5,7 @@
 <div class="page-head">
   <div>
     <h1>Party finder</h1>
-    <p class="lede">Class selector, interest list and party listings in the party channel{% if not st.party_channel_id %} (set the channel on the <a href="/settings">Settings</a> page first){% endif %}. Paste IDs of existing roles; Nyerk only creates dungeon ping roles, and only when you click Create role.</p>
+    <p class="lede">Class selector, gear score, interest list and party listings in the party channel{% if not st.party_channel_id %} (set the channel on the <a href="/settings">Settings</a> page first){% endif %}. Paste IDs of existing roles; Nyerk only creates dungeon ping roles, and only when you click Create role.</p>
   </div>
 </div>
 
@@ -23,7 +23,7 @@
   <p class="small muted">Posted: class {{ '✓' if state.class_panel_message_id else '–' }} · gear {{ '✓' if state.gear_panel_message_id else '–' }} · interest {{ '✓' if state.interest_panel_message_id else '–' }} · create {{ '✓' if state.party_panel_message_id else '–' }} · status {{ '✓' if state.party_status_message_id else '–' }}</p>
 </div>
 
-<p class="section-label" id="types">Class type roles and default makeup</p>
+<p class="section-label" id="types">Class type roles and standard makeup</p>
 <form method="post" action="/party/types" class="card">
   {{ csrf_field() }}
   <div class="fields">
@@ -32,9 +32,9 @@
     <div class="field"><label for="dps_role_id">DPS role ID</label><input id="dps_role_id" name="dps_role_id" class="mono" type="text" value="{{ st.dps_role_id or '' }}"></div>
   </div>
   <div class="fields">
-    <div class="field"><label for="party_default_tank">Default: tanks</label><input id="party_default_tank" name="party_default_tank" type="number" min="0" max="5" value="{{ st.party_default_tank }}"></div>
-    <div class="field"><label for="party_default_support">Default: supports</label><input id="party_default_support" name="party_default_support" type="number" min="0" max="5" value="{{ st.party_default_support }}"></div>
-    <div class="field"><label for="party_default_dps">Default: DPS</label><input id="party_default_dps" name="party_default_dps" type="number" min="0" max="5" value="{{ st.party_default_dps }}"><div class="help">The 5 person "Default" requirement. Unused slots are open to any type.</div></div>
+    <div class="field"><label for="party_default_tank">Standard: tanks</label><input id="party_default_tank" name="party_default_tank" type="number" min="0" max="5" value="{{ st.party_default_tank }}"></div>
+    <div class="field"><label for="party_default_support">Standard: supports</label><input id="party_default_support" name="party_default_support" type="number" min="0" max="5" value="{{ st.party_default_support }}"></div>
+    <div class="field"><label for="party_default_dps">Standard: DPS</label><input id="party_default_dps" name="party_default_dps" type="number" min="0" max="5" value="{{ st.party_default_dps }}"><div class="help">The 5 person "Standard" makeup in the Create party form. Unused slots are open to any type. Parties default to Open (any class).</div></div>
   </div>
   <button class="btn" type="submit">Save</button>
 </form>
@@ -145,7 +145,7 @@
         </form>
       </div>
     </div>
-    <p class="small muted">Pings go to members whose bracket maximum reaches the content's minimum.</p>
+    <p class="small muted">Members pick their gear score with the buttons under the class selector. Dungeon pings only reach members whose gear score reaches the dungeon's minimum.</p>
   </div>
   <div>
     <p class="section-label" id="windows">Availability windows</p>

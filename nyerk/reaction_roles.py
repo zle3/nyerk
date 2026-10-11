@@ -21,6 +21,7 @@ AUTO_EMOJI = NUMBERS + LETTERS
 PER_MESSAGE = 20  # Discord's limit of distinct reactions on one message
 
 CLEAR_TEXT = ("## Ping settings\n"
+              "**My roles** shows your classes, gear score and pings.\n"
               "**Quiet hours** pause your dungeon pings every day during hours you choose, then turn them back on.\n"
               "**Remove all my ping roles** removes every event and dungeon ping role you have. Your class role stays.")
 
