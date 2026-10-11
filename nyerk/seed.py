@@ -105,6 +105,9 @@ def upgrade_defaults(s: Session) -> list[str]:
             done.append("gear score bracket 2100+")
         applied.append("bracket_2100_plus")
         state.upgrades_done = applied
+    if st.dashboard_commands_label == "Commands":  # was a heading over a command list
+        st.dashboard_commands_label = "💡 Type `/nyerk` for more: report a kill with a custom time, and see, edit or cancel your timers."
+        done.append("dashboard /nyerk reminder")
     if st.report_offset_min == 5:  # old default; 1 minute since 2026-10-10
         st.report_offset_min = 1
         done.append("report offset (5 → 1 minute)")

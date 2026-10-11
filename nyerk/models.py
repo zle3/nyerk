@@ -42,8 +42,9 @@ class Settings(Base):
     dashboard_top_label: Mapped[str] = mapped_column(String(64), default="Server")
     dashboard_main_label: Mapped[str] = mapped_column(String(64), default="Upcoming events")
     oneoff_label: Mapped[str] = mapped_column(String(64), default="World bosses and one-offs")
-    # "Commands" section on the dashboard; blank heading hides the section.
-    dashboard_commands_label: Mapped[str] = mapped_column(String(64), default="Commands")
+    # One-line reminder about /nyerk on the dashboard; blank hides it.
+    dashboard_commands_label: Mapped[str] = mapped_column(
+        String(200), default="💡 Type `/nyerk` for more: report a kill with a custom time, and see, edit or cancel your timers.")
     dashboard_footer: Mapped[str] = mapped_column(
         String(200), default="Times are in your own time zone. Killed a boss? Tap its button below.")
     shugo_url: Mapped[str] = mapped_column(String(255), default="https://shugo.gg/timers")
@@ -196,8 +197,6 @@ class BotState(Base):
     # Extra messages in the roles channel: class selector copy, remove-all.
     roles_header_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     roles_gear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    # ID of the /nyerk command, for clickable command mentions.
-    nyerk_command_id: Mapped[int] = mapped_column(BigInteger, default=0)
     # One-time data upgrades already applied, so deleting a seeded row sticks.
     upgrades_done: Mapped[list] = mapped_column(JSON, default=list)
     roles_class_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
