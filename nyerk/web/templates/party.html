@@ -1,24 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Party finder<p class="section-label" id="quiet">Quiet hours</p>
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Member</th><th>Quiet</th><th>Now</th><th></th></tr></thead>
-  <tbody>
-  {% for q, text, paused in quiet_rows %}
-    <tr>
-      <td>{{ q.user_name }}</td>
-      <td class="small">{{ text }}</td>
-      <td>{% if q.state == 'quiet' %}<span class="pill accent">quiet · {{ paused }} role{{ 's' if paused != 1 }} paused</span>{% else %}<span class="pill">pings on</span>{% endif %}</td>
-      <td><form method="post" action="/party-quiet/{{ q.id }}/off" class="inline-form">{{ csrf_field() }}<button class="btn small secondary" type="submit">Turn off</button></form></td>
-    </tr>
-  {% else %}
-    <tr><td colspan="4" class="muted">Nobody has quiet hours set. Members set them with the Quiet hours button in the roles channel.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-<p class="small muted">Quiet hours pause dungeon ping roles only. Event pings, and direct pings from interest registrations, still come through.</p>
-{% endblock %}
+{% block title %}Party finder{% endblock %}
 {% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
 {% block content %}
 <div class="page-head">

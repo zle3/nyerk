@@ -255,3 +255,15 @@ def test_quiet_hours_admin(client):
     client.post(f"/party-quiet/{qid}/off", data={"csrf": _csrf(client)})
     with db.session() as s:
         assert not s.get(QuietHours, qid).enabled
+
+
+@pytest.mark.parametrize("path", ["/", "/events", "/timers", "/maintenance", "/categories", "/party", "/members",
+                                  "/stats", "/defaults", "/settings", "/logs"])
+def test_tab_titles_are_plain_text(client, path):
+    title = re.search(r"<title>(.*?)</title>", client.get(path).text, re.S)[1]
+    assert "<" not in title and len(title) < 60, title
+
+
+def test_party_page_sections_appear_once(client):
+    page = client.get("/party").text
+    assert page.count('id="quiet"') == 1 and page.count("Quiet hours pause dungeon ping roles only") == 1
