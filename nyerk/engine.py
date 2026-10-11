@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from . import schedules
+from .db import get_state
 from .models import AlertSlot, Event, SentMessage, Settings, UserTimer
 
 GRACE_SECONDS = 120          # a slot later than this is "missed" and skipped
@@ -260,6 +261,21 @@ def _line(label: str, at: int, now: int, settings: Settings) -> str:
     return f"{label} {ts(at, 'R')} at {ts(at, style)}"
 
 
+COMMANDS = [
+    ("worldboss", "report a boss kill, with a time or the time left"),
+    ("mytimers", "see your boss timers"),
+    ("edit", "fix the time on your timer"),
+    ("cancel", "remove your timer"),
+]
+
+
+def commands_lines(command_id: int) -> list[str]:
+    """Clickable command mentions once the command ID is known."""
+    def mention(sub: str) -> str:
+        return f"</nyerk {sub}:{command_id}>" if command_id else f"`/nyerk {sub}`"
+    return [f"{mention(sub)} {what}" for sub, what in COMMANDS]
+
+
 def build_dashboard(s: Session, settings: Settings, now: int) -> Dashboard:
     events = load_events(s)
     overrides = _overrides(events)
@@ -321,6 +337,10 @@ def build_dashboard(s: Session, settings: Settings, now: int) -> Dashboard:
         parts.extend(lines)
     if not sections:
         parts.append("No upcoming events.")
+    label = (settings.dashboard_commands_label or "").strip()
+    if label:
+        parts.append(f"### {label}")
+        parts.extend(commands_lines(get_state(s).nyerk_command_id))
     if settings.dashboard_footer.strip():
         parts.append(f"-# {settings.dashboard_footer.strip()}")
     text = "\n".join(parts)

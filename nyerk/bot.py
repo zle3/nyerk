@@ -268,9 +268,12 @@ class NyerkBot(discord.Client):
         if self.guild_id:
             guild = discord.Object(self.guild_id)
             self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
+            synced = await self.tree.sync(guild=guild)
         else:
-            await self.tree.sync()
+            synced = await self.tree.sync()
+        cmd = next((c for c in synced if c.name == "nyerk"), None)
+        with db.session() as s:
+            get_state(s).nyerk_command_id = cmd.id if cmd else 0
         if bus.queue is None:
             bus.attach_queue()
         self._tasks.append(asyncio.create_task(self._log_drain(), name="nyerk-logs"))

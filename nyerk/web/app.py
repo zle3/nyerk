@@ -49,6 +49,8 @@ def discord_preview(text: str) -> Markup:
     html = re.sub(r"&lt;@&amp;(\d+)&gt;", r'<span class="mention">@role \1</span>', html)
     html = re.sub(r"^### (.*)$", r'<span class="h3">\1</span>', html, flags=re.M)
     html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
+    html = re.sub(r"&lt;/(nyerk [a-z]+):\d+&gt;", r'<span class="command">/\1</span>', html)
+    html = re.sub(r"`(/nyerk [a-z]+)`", r'<span class="command">\1</span>', html)
     html = re.sub(r"^## (.*)$", r'<span class="h2">\1</span>', html, flags=re.M)
     html = re.sub(r"^# (.*)$", r'<span class="h1">\1</span>', html, flags=re.M)
     html = re.sub(r"^-# (.*)$", r'<span class="subtext">\1</span>', html, flags=re.M)
@@ -810,6 +812,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                 st.dashboard_main_label = str(data.get("dashboard_main_label", "")).strip()[:64]
                 st.oneoff_label = str(data.get("oneoff_label", "")).strip()[:64]
                 st.dashboard_footer = str(data.get("dashboard_footer", "")).strip()[:200]
+                st.dashboard_commands_label = str(data.get("dashboard_commands_label", "")).strip()[:64]
                 st.shugo_url = str(data.get("shugo_url", "")).strip() or st.shugo_url
                 st.shugo_region = str(data.get("shugo_region", "")).strip() or st.shugo_region
         except ValueError as exc:

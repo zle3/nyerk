@@ -105,6 +105,7 @@ def test_dashboard_layout(s):
     assert [l.split(" starts")[0] for l in lines[6:9]] == ["Dimensional Invasion", "Shugo Festival", "Spacetime Rift"]
     assert lines[9] == "### World bosses and one-offs"
     assert lines[10].startswith("Silent Dartan respawning")
+    assert lines[-6] == "### Commands" and lines[-5].startswith("`/nyerk worldboss` report a boss kill")
     assert lines[-1].startswith("-# Times are in your own time zone")
     assert len(dash.bosses) == 4
 
@@ -113,6 +114,7 @@ def test_dashboard_blank_headings_fall_back_to_spacing(s):
     st = _settings(s)
     st.dashboard_title = st.dashboard_top_label = st.dashboard_main_label = st.oneoff_label = st.dashboard_footer = ""
     st.dashboard_divider = ""
+    st.dashboard_commands_label = ""
     dash = engine.build_dashboard(s, st, ny(2026, 10, 9, 12, 10))
     assert "#" not in dash.text
     assert dash.text.split("\n\n")[1].startswith("Dimensional Invasion")
@@ -204,3 +206,10 @@ def test_2100_plus_bracket_added_once(s):
     s.flush()
     upgrade_defaults(s)  # deleted by the admin afterwards: stays deleted
     assert s.scalar(select(PfBracket).where(PfBracket.label == "2100+")) is None
+
+
+def test_command_mentions_become_clickable(s):
+    from nyerk.db import get_state
+    get_state(s).nyerk_command_id = 4242
+    text = engine.build_dashboard(s, _settings(s), ny(2026, 10, 9, 12, 10)).text
+    assert "</nyerk worldboss:4242> report a boss kill" in text and "</nyerk cancel:4242> remove your timer" in text
