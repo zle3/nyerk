@@ -132,7 +132,33 @@ class KickSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"nyerk:pf:
         await pf(interaction).on_kick(interaction, self.pid, int(values[0]) if values else 0)
 
 
-ITEMS = (ClassButton, PanelButton, PartyButton, KickSelect)
+class GearButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:roles:gear:(?P<id>\d+|clear)"):
+    def __init__(self, key: str, label: str = "") -> None:
+        style = discord.ButtonStyle.danger if key == "clear" else discord.ButtonStyle.secondary
+        super().__init__(discord.ui.Button(label=(label or "Gear")[:80], style=style,
+                                           custom_id=f"nyerk:roles:gear:{key}"))
+        self.key = key
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["id"])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.client.set_gear(interaction, None if self.key == "clear" else int(self.key))
+
+
+
+
+ITEMS = (ClassButton, PanelButton, PartyButton, KickSelect, GearButton)
+
+
+def gear_view(s) -> discord.ui.View:
+    """Gear score buttons; used in the party finder and roles channels."""
+    view = discord.ui.View(timeout=None)
+    for b in party.brackets(s)[:24]:
+        view.add_item(GearButton(str(b.id), b.label))
+    view.add_item(GearButton("clear", "Clear"))
+    return view
 
 
 def _view(*items: discord.ui.Item) -> discord.ui.View:
@@ -153,25 +179,22 @@ def _select(placeholder: str, options: list[tuple[str, str]], many: bool = False
 
 
 class RegisterModal(discord.ui.Modal, title="Register for a group"):
-    def __init__(self, bracket_opts, window_opts, content_opts, class_opts=None) -> None:
+    def __init__(self, window_opts, content_opts, class_opts=None) -> None:
         super().__init__(timeout=600)
         self.cls = _select("Class you'll play", class_opts, default=class_opts[0][1]) if class_opts else None
         if self.cls is not None:
             self.add_item(discord.ui.Label(text="Playing as", component=self.cls,
                                            description="You hold several classes; pick one for this run."))
-        self.bracket = _select("Your gear score", bracket_opts)
         self.window = _select("How long you are free", window_opts)
         self.content = _select("Content you want", content_opts, many=True)
-        self.add_item(discord.ui.Label(
-            text="Gear score", component=self.bracket,
-            description="You will be pinged when a party opens for this content."))
-        self.add_item(discord.ui.Label(text="Available for", component=self.window))
+        self.add_item(discord.ui.Label(text="Available for", component=self.window,
+                                       description="You will be pinged when a party opens for this content."))
         self.add_item(discord.ui.Label(text="Content", component=self.content,
                                        description="Pick one or more."))
 
     async def on_submit(self, interaction):
         await pf(interaction).submit_register(
-            interaction, int(self.bracket.values[0]), int(self.window.values[0]), [int(v) for v in self.content.values],
+            interaction, int(self.window.values[0]), [int(v) for v in self.content.values],
             int(self.cls.values[0]) if self.cls is not None else None)
 
 
@@ -252,21 +275,23 @@ class PartyFinder:
             held = party.member_classes(s, who_of(interaction).role_ids)
             has_class = bool(held)
             cls = [(f"{x.name} ({party.TYPE_LABEL[x.class_type]})", str(x.id)) for x in held] if len(held) > 1 else None
-            b = [(x.label, str(x.id)) for x in party.brackets(s)]
+            has_gear = party.gear_of(s, interaction.user.id) is not None
             w = [(x.label or f"{x.minutes} min", str(x.id)) for x in party.windows(s)]
             c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s)]
         if not has_class:
             await reply(interaction, "Pick your class on the class panel first.")
-        elif not (b and w and c):
-            await reply(interaction, "Registration isn't set up yet (no content, gear scores or time windows).")
+        elif not has_gear:
+            await reply(interaction, "Set your gear score in the roles channel first, then register.")
+        elif not (w and c):
+            await reply(interaction, "Registration isn't set up yet (no content or time windows).")
         else:
-            await interaction.response.send_modal(RegisterModal(b, w, c, cls))
+            await interaction.response.send_modal(RegisterModal(w, c, cls))
 
-    async def submit_register(self, interaction, bracket_id, window_id, content_ids, class_id=None) -> None:
+    async def submit_register(self, interaction, window_id, content_ids, class_id=None) -> None:
         who = who_of(interaction)
         try:
             with db.session() as s:
-                row = party.register(s, who, bracket_id, window_id, content_ids, now(), class_id)
+                row = party.register(s, who, window_id, content_ids, now(), class_id)
                 names = ", ".join(party.party_title_for(x) for x in party.contents(s, False) if x.id in row.content_ids)
                 until = row.expires_at
         except PartyError as exc:
@@ -390,16 +415,19 @@ class PartyFinder:
         channel = await self._channel()
         if channel is None:
             return "Party channel not set or not reachable."
-        kinds = ["class", "interest", "create", "status"] if which == "all" else [which]
+        kinds = ["class", "gear", "interest", "create", "status"] if which == "all" else [which]
         async with self._sync_lock:
             for kind in kinds:
                 with db.session() as s:
                     state, settings = get_state(s), get_settings(s)
-                    attr = {"class": "class_panel_message_id", "interest": "interest_panel_message_id",
+                    attr = {"class": "class_panel_message_id", "gear": "gear_panel_message_id",
+                            "interest": "interest_panel_message_id",
                             "create": "party_panel_message_id", "status": "party_status_message_id"}[kind]
                     old = getattr(state, attr)
                     if kind == "class":
                         text, view = party.CLASS_PANEL, self._class_view(s)
+                    elif kind == "gear":
+                        text, view = party.GEAR_PANEL, gear_view(s)
                     elif kind == "interest":
                         text = party.interest_panel_text(s, now())
                         view = _view(PanelButton("reg"), PanelButton("unreg"))

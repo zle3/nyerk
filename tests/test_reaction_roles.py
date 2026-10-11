@@ -91,8 +91,10 @@ def test_post_roles_channel_order_and_mapping(s, monkeypatch):
     monkeypatch.setattr(botmod, "REACTION_PAUSE", 0)
     asyncio.run(b.post_roles_message())
     firsts = [m.content.splitlines()[0] for m, _ in ch.sent]
-    assert firsts == ["# 🎭 Roles", "## AION 2 Classes", "## Event pings", "## Dungeon pings", "## Ping settings"]
-    header, classes, events, dungeons, clear = (m for m, _ in ch.sent)
+    assert firsts == ["# 🎭 Roles", "## AION 2 Classes", "## Gear score", "## Event pings", "## Dungeon pings",
+                      "## Ping settings"]
+    header, classes, gear, events, dungeons, clear = (m for m, _ in ch.sent)
+    assert [c.item.label for c in gear.view.children] == ["1400-1599", "1600-1899", "1900-2100", "2100+", "Clear"]
     assert events.reactions == ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"] and dungeons.reactions == ["1️⃣", "2️⃣", "3️⃣"]
     assert [c.custom_id for c in clear.view.children] == ["nyerk:roles:mine", "nyerk:roles:quiet", "nyerk:roles:quietoff", "nyerk:roles:clear"]
     state = get_state(s)

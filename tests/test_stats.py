@@ -3,7 +3,7 @@ from sqlalchemy import select
 from nyerk import party, stats, tracking
 from nyerk.models import PfClass, PfContent
 
-from .test_party import T, who
+from .test_party import T, reg, who
 
 
 def setup(s):
@@ -18,8 +18,8 @@ def test_activity_demand_and_top_members(s):
     ids = setup(s)
     b = {x.label: x.id for x in party.brackets(s)}
     w = party.windows(s)
-    party.register(s, who(s, 11, "Cleric"), b["1600-1899"], w[2].id, [ids["Fire Temple"], ids["Raid"]], T)
-    party.register(s, who(s, 12, "Ranger"), b["1900-2100"], w[0].id, [ids["Fire Temple"]], T)
+    reg(s, who(s, 11, "Cleric"), b["1600-1899"], w[2].id, [ids["Fire Temple"], ids["Raid"]], T)
+    reg(s, who(s, 12, "Ranger"), b["1900-2100"], w[0].id, [ids["Fire Temple"]], T)
     p = party.create(s, who(s, 1, "Templar"), ids["Fire Temple"], 5, "none", "", "", T)
     for uid, cls in ((11, "Cleric"), (12, "Ranger"), (13, "Ranger"), (14, "Sorcerer")):
         party.join(s, p, who(s, uid, cls), T + 600)

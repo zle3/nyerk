@@ -5,7 +5,7 @@
 <div class="page-head">
   <div>
     <h1>Roles</h1>
-    <p class="lede">What Nyerk posts in the roles channel, top to bottom: a header, the class selector, one message per role message below (numbered 1️⃣ 2️⃣ 3️⃣ unless you set an emoji), and a Remove all pings button.</p>
+    <p class="lede">What Nyerk posts in the roles channel, top to bottom: a header, the class selector, gear score buttons (edit the options on the Party finder page), one message per role message below (numbered 1️⃣ 2️⃣ 3️⃣ unless you set an emoji), and a Remove all pings button.</p>
   </div>
   <form method="post" action="/categories/repost-roles" class="inline-form" data-confirm="Delete the roles channel messages Nyerk posted and post them again? Members keep their roles but will see fresh reactions.">
     {{ csrf_field() }}
@@ -106,7 +106,9 @@
 <p class="section-label">Roles channel preview</p>
 {% if roles_header %}<div class="discord mt">{{ roles_header | discord }}</div>{% endif %}
 <div class="discord mt">{{ class_preview | discord }}
-<div class="discord-buttons"><span>Class buttons</span><span>Clear class</span></div></div>
+<div class="discord-buttons"><span>Class buttons</span><span>📋 My roles</span><span class="danger">Clear classes</span></div></div>
+<div class="discord mt">{{ gear_preview | discord }}
+<div class="discord-buttons">{% for l in gear_labels %}<span>{{ l }}</span>{% endfor %}<span class="danger">Clear</span></div></div>
 {% for text in previews %}<div class="discord mt">{{ text | discord }}</div>{% else %}<div class="card mt"><p class="muted">No ping role has an ID yet.</p></div>{% endfor %}
 <div class="discord mt">{{ clear_preview | discord }}
 <div class="discord-buttons"><span class="danger">Remove all my ping roles</span></div></div>

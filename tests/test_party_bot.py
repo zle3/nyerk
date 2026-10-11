@@ -8,7 +8,7 @@ from nyerk.db import get_settings, get_state
 from nyerk.models import PfClass, PfContent, PfParty
 
 from .test_bot import FakeChannel
-from .test_party import T, who
+from .test_party import T, reg, who
 
 
 class StubBot:
@@ -36,7 +36,7 @@ def test_listing_ping_fill_ready_reopen(s, monkeypatch):
     cid = setup(s)
     monkeypatch.setattr(party_bot, "now", lambda: T + 5)
     b = {x.label: x.id for x in party.brackets(s)}
-    party.register(s, who(s, 11, "Cleric"), b["1600-1899"], party.windows(s)[0].id, [cid], T)
+    reg(s, who(s, 11, "Cleric"), b["1600-1899"], party.windows(s)[0].id, [cid], T)
     p = party.create(s, who(s, 1, "Templar"), cid, 5, "default", "", "", T)
     pid = p.id
     s.commit()
@@ -95,12 +95,12 @@ def test_post_panels_in_order(s, monkeypatch):
     asyncio.run(party_bot.PartyFinder(StubBot(ch)).post_panels("all"))
     texts = contents(ch)
     assert [t.splitlines()[0] for t in texts] == [
-        "## AION 2 Classes", "## Looking for a group?", "## Start a party", "## Party status"]
+        "## AION 2 Classes", "## Gear score", "## Looking for a group?", "## Start a party", "## Party status"]
     class_ids = [c.custom_id for c in ch.sent[0][0].view.children]
     assert len(class_ids) == 10 and class_ids[-2:] == ["nyerk:pf:class:mine", "nyerk:pf:class:clear"]
     st = get_state(s)
     s.refresh(st)
-    assert st.class_panel_message_id == ch.sent[0][0].id and st.party_status_message_id == ch.sent[3][0].id
+    assert st.class_panel_message_id == ch.sent[0][0].id and st.party_status_message_id == ch.sent[4][0].id
 
 
 def test_new_party_pings_dungeon_role(s, monkeypatch):

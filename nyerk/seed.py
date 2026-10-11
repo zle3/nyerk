@@ -82,7 +82,8 @@ PF_CLASSES = [
     ("Gladiator", "⚔️", "dps"), ("Templar", "🛡️", "tank"), ("Assassin", "🗡️", "dps"), ("Ranger", "🏹", "dps"),
     ("Sorcerer", "🪄", "dps"), ("Spiritmaster", "📖", "dps"), ("Cleric", "✝️", "support"), ("Chanter", "🎸", "support"),
 ]
-PF_BRACKETS = [("1400-1599", 1400, 1599), ("1600-1899", 1600, 1899), ("1900-2100", 1900, 2100)]
+PF_BRACKETS = [("1400-1599", 1400, 1599), ("1600-1899", 1600, 1899), ("1900-2100", 1900, 2100),
+               ("2100+", 2100, 9999)]
 PF_WINDOWS = [(15, "15 min"), (30, "30 min"), (60, "1 hr"), (120, "2 hr"), (240, "4 hr")]
 
 
@@ -94,6 +95,16 @@ def upgrade_defaults(s: Session) -> list[str]:
     if st.dashboard_title == "⏱️ AION2 Timers":
         st.dashboard_title = "⏱️ AION 2 Timers"
         done.append("dashboard title")
+    state = get_state(s)
+    applied = list(state.upgrades_done or [])
+    if "bracket_2100_plus" not in applied:
+        if s.scalar(select(PfBracket).limit(1)) is not None and \
+                s.scalar(select(PfBracket).where(PfBracket.label == "2100+")) is None:
+            top = max((b.sort_order for b in s.scalars(select(PfBracket))), default=0)
+            s.add(PfBracket(label="2100+", min_score=2100, max_score=9999, sort_order=top + 1))
+            done.append("gear score bracket 2100+")
+        applied.append("bracket_2100_plus")
+        state.upgrades_done = applied
     if st.report_offset_min == 5:  # old default; 1 minute since 2026-10-10
         st.report_offset_min = 1
         done.append("report offset (5 → 1 minute)")

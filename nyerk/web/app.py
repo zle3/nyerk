@@ -48,6 +48,7 @@ def discord_preview(text: str) -> Markup:
     html = _TS.sub(lambda m: f'<time data-ts="{m[1]}" data-style="{m[2]}">{m[0]}</time>', html)
     html = re.sub(r"&lt;@&amp;(\d+)&gt;", r'<span class="mention">@role \1</span>', html)
     html = re.sub(r"^### (.*)$", r'<span class="h3">\1</span>', html, flags=re.M)
+    html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
     html = re.sub(r"^## (.*)$", r'<span class="h2">\1</span>', html, flags=re.M)
     html = re.sub(r"^# (.*)$", r'<span class="h1">\1</span>', html, flags=re.M)
     html = re.sub(r"^-# (.*)$", r'<span class="subtext">\1</span>', html, flags=re.M)
@@ -214,6 +215,9 @@ def create_app(cfg, bot=None) -> FastAPI:
         held = live[1] if live else info["tracked"]
         info["member_name"] = live[0] if live else (info.pop("name") or f"User {uid}")
         info.pop("name", None)
+        with db.session() as s:
+            gear = party.gear_of(s, uid)
+            info["gear_id"], info["brackets"] = (gear.id if gear else 0), party.brackets(s)
         return render(request, "member.html", uid=uid, live=live is not None, held=held,
                       options=options, zones=quiet.ZONES, default_tz=default_tz,
                       hours=[(h, quiet.hour_label(h)) for h in range(24)], **info)
@@ -246,6 +250,23 @@ def create_app(cfg, bot=None) -> FastAPI:
         else:
             flash(request, f"Saved roles for {name}." if changed else "No changes.")
         return back(f"/members/{uid}")
+
+    @app.post("/members/{uid}/gear")
+    async def member_gear(request: Request, uid: int):
+        data = await form(request)
+        raw = str(data.get("bracket", ""))
+        with db.session() as s:
+            name = members.detail(s, uid)["name"] or f"User {uid}"
+            try:
+                b = party.set_gear(s, uid, name, int(raw) if raw.isdigit() else None, int(time.time()))
+            except party.PartyError as exc:
+                flash(request, str(exc), "err")
+                return back(f"/members/{uid}#gear")
+            label = b.label if b else ""
+        bus.info("admin", f"Gear score for {name} set to {label or 'none'} by admin.")
+        refresh()
+        flash(request, f"Gear score set to {label}." if label else "Gear score cleared.")
+        return back(f"/members/{uid}#gear")
 
     @app.post("/members/{uid}/quiet")
     async def member_quiet(request: Request, uid: int):
@@ -451,6 +472,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             ctx = dict(cats=cats, counts=counts, groups=groups, assign=assign, emoji_of=emoji_of,
                        roles_header=get_settings(s).roles_header,
                        previews=previews, class_preview=party.CLASS_PANEL, clear_preview=reaction_roles.CLEAR_TEXT,
+                       gear_preview=party.GEAR_PANEL, gear_labels=[b.label for b in party.brackets(s)],
                        posted=bool(state.reaction_messages or state.reaction_message_id))
         return render(request, "categories.html", **ctx)
 
@@ -1136,7 +1158,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         which = str(data.get("which", "all"))
         bot = app.state.bot
-        if which not in ("all", "class", "interest", "create", "status"):
+        if which not in ("all", "class", "gear", "interest", "create", "status"):
             raise HTTPException(400)
         if not bot or not bot.is_ready():
             flash(request, "Bot is not connected.", "err")

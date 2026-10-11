@@ -26,6 +26,17 @@
   </div>
 </form>
 
+<p class="section-label" id="gear">Gear score</p>
+<form method="post" action="/members/{{ uid }}/gear" class="card inline">
+  {{ csrf_field() }}
+  <select name="bracket" aria-label="Gear score" class="w-auto">
+    <option value="" {{ 'selected' if not gear_id }}>Not set</option>
+    {% for b in brackets %}<option value="{{ b.id }}" {{ 'selected' if b.id == gear_id }}>{{ b.label }}</option>{% endfor %}
+  </select>
+  <button class="btn secondary" type="submit">Save gear score</button>
+  <span class="small muted">Kept by Nyerk, not a Discord role. Used on listings and for dungeon pings.</span>
+</form>
+
 <p class="section-label" id="quiet">Quiet hours</p>
 <form method="post" action="/members/{{ uid }}/quiet" class="card">
   {{ csrf_field() }}

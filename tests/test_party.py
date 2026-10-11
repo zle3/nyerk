@@ -21,6 +21,12 @@ def pf(s):
     return s
 
 
+def reg(s, w, bracket_id, window_id, content_ids, now, class_id=None):
+    """Gear score is set first (roles channel), then the member registers."""
+    party.set_gear(s, w.user_id, w.user_name, bracket_id, now)
+    return party.register(s, w, window_id, content_ids, now, class_id)
+
+
 def who(s, uid, cls):
     c = s.scalar(select(PfClass).where(PfClass.name == cls))
     return Who(uid, f"user{uid}", {c.role_id})
@@ -73,7 +79,7 @@ def test_register_as_chosen_class(pf):
     by = {c.name: c for c in party.classes(s)}
     flex = Who(9, "Flex", {by["Ranger"].role_id, by["Cleric"].role_id})
     b, w = party.brackets(s)[0].id, party.windows(s)[0].id
-    row = party.register(s, flex, b, w, [content(s).id], T, class_id=by["Cleric"].id)
+    row = reg(s, flex, b, w, [content(s).id], T, class_id=by["Cleric"].id)
     assert (row.class_id, row.class_type) == (by["Cleric"].id, "support")
 
 
@@ -123,10 +129,10 @@ def test_registration_ping_targets_and_cooldown(pf):
     s = pf
     b = {x.label: x.id for x in party.brackets(s)}
     w = party.windows(s)[0].id
-    low = party.register(s, who(s, 10, "Ranger"), b["1400-1599"], w, [content(s).id], T)
-    ok = party.register(s, who(s, 11, "Cleric"), b["1600-1899"], w, [content(s).id], T)
-    other = party.register(s, who(s, 12, "Ranger"), b["1900-2100"], w, [content(s, "Raid").id], T)
-    again = party.register(s, who(s, 11, "Cleric"), b["1600-1899"], w, [content(s).id], T + 1)
+    low = reg(s, who(s, 10, "Ranger"), b["1400-1599"], w, [content(s).id], T)
+    ok = reg(s, who(s, 11, "Cleric"), b["1600-1899"], w, [content(s).id], T)
+    other = reg(s, who(s, 12, "Ranger"), b["1900-2100"], w, [content(s, "Raid").id], T)
+    again = reg(s, who(s, 11, "Cleric"), b["1600-1899"], w, [content(s).id], T + 1)
     assert ok.status == "cancelled" and again.status == "active"  # replaced, not stacked
     p = party.create(s, who(s, 1, "Templar"), content(s).id, 5, "default", "", "", T + 2)
     targets = party.ping_targets(s, p, T + 3)
@@ -140,7 +146,7 @@ def test_registration_ping_targets_and_cooldown(pf):
 
 def test_register_needs_class(pf):
     with pytest.raises(PartyError, match="Pick your class"):
-        party.register(pf, Who(9, "x", set()), 1, 1, [1], T)
+        party.register(pf, Who(9, "x", set()), 1, [1], T)
 
 
 def test_tick_warns_expires_and_holds(pf):
@@ -169,3 +175,31 @@ def test_listing_text(pf):
     assert lines[2] == "Tank 1/1: user1 (Templar)"
     assert lines[3] == "Support 0/1: open" and lines[4] == "DPS 0/3: open"
     assert lines[5].startswith("Closes <t:")
+
+
+def test_gear_score_is_single_choice_and_feeds_pings(pf):
+    s = pf
+    b = {x.label: x.id for x in party.brackets(s)}
+    w = party.windows(s)[0].id
+    member = who(s, 11, "Cleric")
+    assert party.set_gear(s, 11, "user11", b["1400-1599"], T).label == "1400-1599"
+    party.register(s, member, w, [content(s).id], T)
+    p = party.create(s, who(s, 1, "Templar"), content(s).id, 5, "none", "", "", T)  # min gear 1600
+    assert party.ping_targets(s, p, T + 1) == []
+    party.set_gear(s, 11, "user11", b["2100+"], T + 2)  # picking another replaces it
+    assert [t.user_id for t in party.ping_targets(s, p, T + 3)] == [11]
+    assert party.gear_of(s, 11).label == "2100+"
+    party.set_gear(s, 11, "user11", None, T + 4)
+    assert party.gear_of(s, 11) is None
+
+
+def test_register_needs_gear_score(pf):
+    with pytest.raises(PartyError, match="gear score"):
+        party.register(pf, who(pf, 11, "Cleric"), party.windows(pf)[0].id, [content(pf).id], T)
+
+
+def test_listing_shows_saved_gear(pf):
+    s = pf
+    party.set_gear(s, 1, "user1", party.brackets(s)[3].id, T)
+    p = party.create(s, who(s, 1, "Templar"), content(s).id, 5, "default", "", "", T)
+    assert "Tank 1/1: user1 (Templar, 2100+)" in party.listing_text(p)

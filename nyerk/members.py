@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from . import party, quiet
 from .db import get_settings
 from .models import (
-    Category, PfInterest, PfParty, PfPartyMember, QuietHours, RoleHolder, UserTimer,
+    Category, MemberProfile, PfInterest, PfParty, PfPartyMember, QuietHours, RoleHolder, UserTimer,
 )
 
 
@@ -29,6 +29,7 @@ class Summary:
     timers: int = 0
     registered: bool = False
     in_party: str = ""
+    gear: str = ""
 
 
 def known(s: Session, query: str = "") -> list[Summary]:
@@ -49,6 +50,8 @@ def known(s: Session, query: str = "") -> list[Summary]:
             m.classes.append(class_names[h.role_id])
         elif h.kind == "ping":
             m.pings += 1
+    for p in s.scalars(select(MemberProfile).where(MemberProfile.bracket_id.is_not(None))):
+        touch(p.user_id, p.user_name).gear = p.bracket.label if p.bracket else ""
     for q in s.scalars(select(QuietHours).where(QuietHours.enabled.is_(True))):
         touch(q.user_id, q.user_name).quiet = "quiet now" if q.state == "quiet" else "on"
     for t in s.scalars(select(UserTimer).where(UserTimer.status == "active")):

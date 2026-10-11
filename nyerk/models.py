@@ -193,6 +193,9 @@ class BotState(Base):
     reaction_messages: Mapped[dict] = mapped_column(JSON, default=dict)
     # Extra messages in the roles channel: class selector copy, remove-all.
     roles_header_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    roles_gear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    # One-time data upgrades already applied, so deleting a seeded row sticks.
+    upgrades_done: Mapped[list] = mapped_column(JSON, default=list)
     roles_class_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     roles_clear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     last_tick_at: Mapped[int] = mapped_column(BigInteger, default=0)
@@ -202,6 +205,7 @@ class BotState(Base):
     last_backup_day: Mapped[str] = mapped_column(String(10), default="")
     # Party finder panels
     class_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    gear_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     interest_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     interest_panel_hash: Mapped[str] = mapped_column(String(64), default="")
     party_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
@@ -374,3 +378,17 @@ class QuietHours(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     state: Mapped[str] = mapped_column(String(8), default="active")  # active | quiet
     updated_at: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
+class MemberProfile(Base):
+    """Per-member settings Nyerk keeps itself (not Discord roles)."""
+
+    __tablename__ = "member_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    user_name: Mapped[str] = mapped_column(String(100), default="")
+    bracket_id: Mapped[int | None] = mapped_column(ForeignKey("pf_brackets.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[int] = mapped_column(BigInteger, default=0)
+
+    bracket: Mapped["PfBracket | None"] = relationship()

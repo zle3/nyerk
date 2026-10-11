@@ -191,3 +191,16 @@ def test_old_default_report_offset_upgraded(s):
     st.report_offset_min = 3  # a customised value is left alone
     upgrade_defaults(s)
     assert st.report_offset_min == 3
+
+
+def test_2100_plus_bracket_added_once(s):
+    from nyerk.models import PfBracket
+    from nyerk.seed import upgrade_defaults
+    plus = s.scalar(select(PfBracket).where(PfBracket.label == "2100+"))
+    s.delete(plus)
+    s.flush()
+    assert "gear score bracket 2100+" in upgrade_defaults(s)  # existing installs get it
+    s.delete(s.scalar(select(PfBracket).where(PfBracket.label == "2100+")))
+    s.flush()
+    upgrade_defaults(s)  # deleted by the admin afterwards: stays deleted
+    assert s.scalar(select(PfBracket).where(PfBracket.label == "2100+")) is None

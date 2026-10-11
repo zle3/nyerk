@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 from .db import get_settings
 from .engine import escape_md, ts
 from .models import (
-    PfBracket, PfClass, PfContent, PfInterest, PfParty, PfPartyMember, PfWindow, Settings,
+    MemberProfile, PfBracket, PfClass, PfContent, PfInterest, PfParty, PfPartyMember, PfWindow, Settings,
 )
 
 TYPES = ("tank", "support", "dps")
@@ -160,17 +160,54 @@ def class_change(s: Session, who: Who, class_id: int | None) -> tuple[set[int], 
 
 
 # ----------------------------------------------------------------------------
+# Gear score (kept by Nyerk, not a Discord role)
+
+
+def gear_of(s: Session, user_id: int) -> PfBracket | None:
+    p = s.scalar(select(MemberProfile).where(MemberProfile.user_id == user_id))
+    return p.bracket if p else None
+
+
+def set_gear(s: Session, user_id: int, user_name: str, bracket_id: int | None, now: int) -> PfBracket | None:
+    """One gear score per member; picking another replaces it, None clears."""
+    bracket = s.get(PfBracket, bracket_id) if bracket_id else None
+    if bracket_id and bracket is None:
+        raise PartyError("That gear score option no longer exists.")
+    p = s.scalar(select(MemberProfile).where(MemberProfile.user_id == user_id))
+    if p is None:
+        p = MemberProfile(user_id=user_id)
+        s.add(p)
+    p.user_name, p.bracket_id, p.updated_at = user_name or p.user_name, bracket.id if bracket else None, now
+    # Keep an open registration in step, so pings use the new score.
+    reg = active_interest(s, user_id)
+    if reg:
+        reg.bracket_id = p.bracket_id
+    s.flush()
+    return bracket
+
+
+GEAR_PANEL = (
+    "## Gear score\n"
+    "Pick your gear score. It shows on party listings and decides which dungeon pings reach you. "
+    "Pick another any time to change it."
+)
+
+
+# ----------------------------------------------------------------------------
 # Interest list
 
 
-def register(s: Session, who: Who, bracket_id: int, window_id: int, content_ids: list[int], now: int,
+def register(s: Session, who: Who, window_id: int, content_ids: list[int], now: int,
              class_id: int | None = None) -> PfInterest:
     held = require_classes(s, who)
     c = next((x for x in held if x.id == class_id), held[0])
-    bracket, window = s.get(PfBracket, bracket_id), s.get(PfWindow, window_id)
+    bracket = gear_of(s, who.user_id)
+    if bracket is None:
+        raise PartyError("Set your gear score in the roles channel first.")
+    window = s.get(PfWindow, window_id)
     chosen = [x for x in (s.get(PfContent, i) for i in content_ids) if x is not None and x.active]
-    if bracket is None or window is None or not chosen:
-        raise PartyError("Pick a gear score, how long you are free, and at least one piece of content.")
+    if window is None or not chosen:
+        raise PartyError("Pick how long you are free and at least one piece of content.")
     old = active_interest(s, who.user_id)
     if old:
         old.status = "cancelled"  # registering again replaces, never stacks
@@ -242,7 +279,8 @@ def is_full(party: PfParty) -> bool:
 
 def _member(s: Session, party: PfParty, who: Who, c: PfClass, slot: str, now: int) -> PfPartyMember:
     reg = active_interest(s, who.user_id)
-    bracket = reg.bracket.label if reg and reg.bracket else ""
+    gear = gear_of(s, who.user_id) or (reg.bracket if reg else None)
+    bracket = gear.label if gear else ""
     if reg:
         reg.status = "joined"  # joining ends the registration
     m = PfPartyMember(user_id=who.user_id, user_name=who.user_name, class_id=c.id, class_name=c.name,
@@ -380,7 +418,8 @@ def ping_targets(s: Session, party: PfParty, now: int) -> list[PfInterest]:
     for r in rows:
         if party.content_id not in (r.content_ids or []) or r.user_id == party.leader_id:
             continue
-        if r.bracket and r.bracket.max_score < minimum:
+        gear = gear_of(s, r.user_id) or r.bracket
+        if gear and gear.max_score < minimum:
             continue
         if r.last_pinged_at and now - r.last_pinged_at < gap:
             continue
@@ -512,7 +551,8 @@ def interest_panel_text(s: Session, now: int) -> str:
         body.append(f"### {party_title_for(c)}")
         for r in who:
             cls = r.pf_class.name if r.pf_class else "?"
-            bracket = r.bracket.label if r.bracket else "?"
+            gear = gear_of(s, r.user_id) or r.bracket
+            bracket = gear.label if gear else "?"
             body.append(f"{escape_md(r.user_name)} · {cls} ({TYPE_LABEL.get(r.class_type, '?')}) · {bracket}"
                         f" · until {ts(r.expires_at, 'R')}")
     text = head + "\n" + "\n".join(body)

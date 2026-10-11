@@ -560,16 +560,18 @@ class NyerkBot(discord.Client):
             missing = {e.role_id: e.label for e in everything if guild is None or guild.get_role(e.role_id) is None}
             plan = reaction_roles.messages(s, skip=set(missing))
             class_text, class_view = party.CLASS_PANEL, self.pf._class_view(s)
+            gear_text, gear_v = party.GEAR_PANEL, party_bot.gear_view(s)
             header = (settings.roles_header or "").strip()
             channel_id = settings.roles_channel_id
             old_ids = {int(k) for k in (state.reaction_messages or {})} | {
                 x for x in (state.reaction_message_id, state.roles_header_message_id, state.roles_class_message_id,
-                            state.roles_clear_message_id) if x}
+                            state.roles_gear_message_id, state.roles_clear_message_id) if x}
         if missing:
             bus.warn("roles", f"Skipped entries whose role does not exist: {', '.join(sorted(missing.values()))}.")
         channel = await self._channel(channel_id)
         if channel is None:
             class_view.stop()
+            gear_v.stop()
             return "Roles channel not reachable."
         for old in old_ids:
             try:
@@ -581,6 +583,10 @@ class NyerkBot(discord.Client):
             class_msg = await channel.send(class_text, view=class_view, allowed_mentions=NO_MENTIONS)
         finally:
             class_view.stop()
+        try:
+            gear_msg = await channel.send(gear_text, view=gear_v, allowed_mentions=NO_MENTIONS)
+        finally:
+            gear_v.stop()
         posted: dict[str, dict[str, int]] = {}
         messages = []
         for text, chunk in plan:
@@ -599,6 +605,7 @@ class NyerkBot(discord.Client):
             state.reaction_messages = posted
             state.reaction_message_id, state.reaction_map = 0, {}
             state.roles_header_message_id = header_msg.id if header_msg else 0
+            state.roles_gear_message_id = gear_msg.id
             state.roles_class_message_id, state.roles_clear_message_id = class_msg.id, clear_msg.id
         for msg, chunk in messages:
             for e in chunk:
@@ -608,7 +615,7 @@ class NyerkBot(discord.Client):
                     bus.error("roles", f"Could not add reaction {e.emoji} for {e.label}: {exc!r}")
                 await asyncio.sleep(REACTION_PAUSE)  # keeps the reactions in order
         roles = sum(len(c) for _, c in messages)
-        bus.info("roles", f"Roles channel posted: {'header, ' if header else ''}class selector, "
+        bus.info("roles", f"Roles channel posted: {'header, ' if header else ''}class selector, gear score, "
                           f"{roles} ping roles in {len(messages)} message(s), remove-all.")
         return f"Posted {roles} ping roles in {len(messages)} message(s)."
 
@@ -700,6 +707,20 @@ class NyerkBot(discord.Client):
                 role = guild.get_role(rid)
                 errors.append(f"{'Add' if adding else 'Remove'} {role.name if role else rid}: {exc.text or exc}")
         return errors
+
+    async def set_gear(self, interaction: discord.Interaction, bracket_id: int | None) -> None:
+        member = interaction.user
+        try:
+            with db.session() as s:
+                bracket = party.set_gear(s, member.id, member.display_name, bracket_id, now())
+                label = bracket.label if bracket else ""
+        except party.PartyError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        text = f"Gear score set to **{label}**." if label else "Gear score cleared."
+        await interaction.response.send_message(text, ephemeral=True)
+        bus.info("party", f"{member.display_name}: gear score {label or 'cleared'}.", discord=False)
+        await self.pf.sync()  # listings and the interest panel show the new score
 
     async def show_my_roles(self, interaction: discord.Interaction) -> None:
         """Private overview: classes, ping roles, quiet hours, registration."""
@@ -840,6 +861,8 @@ def my_roles_text(s, user_id: int, held: set[int], t: int) -> str:
                                              for c in classes) or "none yet. Pick them on the class panel."))
     events = [c.name for c in s.scalars(select(Category).where(Category.role_id != 0)
                                         .order_by(Category.sort_order)) if c.role_id in held]
+    gear = party.gear_of(s, user_id)
+    lines.append("**Gear score:** " + (gear.label if gear else "not set. Pick it in the roles channel."))
     lines.append("**Event pings:** " + (", ".join(events) or "none"))
     paused = {r.role_id for r in s.scalars(select(RoleHolder).where(RoleHolder.user_id == user_id,
                                                                     RoleHolder.suspended.is_(True)))}
