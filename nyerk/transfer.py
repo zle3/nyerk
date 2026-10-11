@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import schedules
+from . import safety, schedules
 from .db import get_settings
 from .models import (
     AlertSlot, Category, Event, PfBracket, PfClass, PfContent, PfWindow, ReactionGroup, Settings,
@@ -105,7 +105,13 @@ def _id(value, where: str) -> int:
 
 def _coerce(col, value, where: str):
     if col.name in ID_FIELDS:
-        return _id(value, where)
+        rid = _id(value, where)
+        if col.name.endswith("role_id"):
+            try:
+                safety.check_role(rid)
+            except ValueError as exc:
+                raise ImportError_(f"{where}: {exc}")
+        return rid
     py = col.type.python_type
     if py is bool:
         if isinstance(value, bool):

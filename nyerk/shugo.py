@@ -89,11 +89,33 @@ def parse(html: str, region: str) -> list[dict]:
     return out
 
 
+ALLOWED_HOSTS = {"shugo.gg", "www.shugo.gg"}
+
+
+def allowed_url(url: str) -> bool:
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    return parts.scheme == "https" and (parts.hostname or "").lower() in ALLOWED_HOSTS and not parts.port
+
+
 async def fetch(url: str) -> str:
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers={"User-Agent": USER_AGENT}) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.text
+    """Only ever fetches https://shugo.gg, so the setting can't point Nyerk
+    at machines on your network. Redirects are checked the same way."""
+    if not allowed_url(url):
+        raise ParseError(f"Refusing to fetch {url!r}: only https://shugo.gg is allowed")
+    async with httpx.AsyncClient(timeout=20, follow_redirects=False, headers={"User-Agent": USER_AGENT}) as client:
+        for _ in range(3):
+            resp = await client.get(url)
+            if resp.is_redirect:
+                url = str(resp.next_request.url) if resp.next_request else ""
+                if not allowed_url(url):
+                    raise ParseError("shugo.gg redirected somewhere else; not following")
+                continue
+            resp.raise_for_status()
+            if len(resp.content) > 2_000_000:
+                raise ParseError("shugo.gg page is unexpectedly large")
+            return resp.text
+    raise ParseError("Too many redirects from shugo.gg")
 
 
 def _same_schedule(a_type: str, a_params: dict, b_type: str, b_params: dict, now: int) -> bool:

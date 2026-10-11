@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import discord
 from sqlalchemy import select
 
-from . import db, party, tracking
+from . import db, party, safety, tracking
 from .db import get_settings, get_state
 from .logbus import bus
 from .models import PfInterest, PfParty
@@ -529,7 +529,7 @@ class PartyFinder:
             listing_key = party.digest(listing_text + "|" + ",".join(str(m.user_id) for m in p.members))
             kick = [(m.user_id, m.user_name) for m in p.members if m.user_id != p.leader_id]
             targets = party.ping_targets(s, p, now()) if status == "open" and p.ping_pending else []
-            ping_role = p.content.role_id if p.content and status == "open" and p.ping_pending else 0
+            ping_role = safety.pingable(p.content.role_id) if p.content and status == "open" and p.ping_pending else 0
             ping_text = party.ping_text(p, targets, ping_role) if targets or ping_role else ""
             target_ids = [t.user_id for t in targets]
             warn = status == "open" and p.warned_at is not None

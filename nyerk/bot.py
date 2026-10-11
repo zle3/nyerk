@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from sqlalchemy import select
 
-from . import db, engine, party, party_bot, quiet, reaction_roles, timers, tracking
+from . import db, engine, party, party_bot, quiet, reaction_roles, safety, timers, tracking
 from .db import get_settings, get_state
 from .logbus import bus
 from .models import Event, PfContent, SentMessage, UserTimer
@@ -455,6 +455,8 @@ class NyerkBot(discord.Client):
                     skipped.append(f"{d.occ.event.name} ({_slot_name(d.slot.lead_minutes)}, due {engine.ts(d.send_at, 'f')})")
                 else:
                     content, role_id = engine.render_alert(d.occ, d.slot)
+                    if role_id and not safety.pingable(role_id):  # @everyone: never ping it
+                        content, role_id = content.replace(f"<@&{role_id}>", "").strip(), 0
                     to_send.append((d.occ.event.id, d.occ.event.name, d.occ.timer_id, d.occ.at,
                                     d.slot.lead_minutes, content, role_id))
             channel_id = settings.timer_channel_id

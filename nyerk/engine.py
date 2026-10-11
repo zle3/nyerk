@@ -191,7 +191,8 @@ def render_template(template: str, values: dict[str, str]) -> str:
     lines = []
     for line in template.splitlines():
         names = _PLACEHOLDER.findall(line)
-        rendered = line.format_map(_Blank(values)) if names else line
+        # Plain {name} substitution only: no attribute or index lookups.
+        rendered = _PLACEHOLDER.sub(lambda m: values.get(m[1], m[0]), line) if names else line
         if names and all(not values.get(n) for n in names):
             leftover = _PLACEHOLDER.sub("", line).strip(" |·-:,")
             if not leftover:

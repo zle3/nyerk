@@ -20,7 +20,9 @@ from markupsafe import Markup, escape
 from sqlalchemy import func, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import db, engine, members, party, quiet, reaction_roles, schedules, shugo, stats, timers, transfer
+from . import security as websecurity
+
+from .. import db, engine, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus
@@ -76,26 +78,21 @@ class Login(Exception):
 
 def create_app(cfg, bot=None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    safety.protect_guild(cfg.guild_id)
     app.state.bot = bot
     app.state.fails: dict[str, tuple[int, float]] = {}
     secret = cfg.session_secret or _persistent_secret(cfg)
+    # Lax (not Strict) so the cookie survives the redirect back from Discord
+    # login; every form also carries a CSRF token. 12 hour sessions.
     app.add_middleware(SessionMiddleware, secret_key=secret, session_cookie="nyerk_session",
-                       max_age=14 * 86400, same_site="strict", https_only=cfg.web_tls != "off")
+                       max_age=12 * 3600, same_site="lax", https_only=cfg.web_tls != "off" or cfg.is_public)
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
     @app.exception_handler(Login)
     async def _to_login(request: Request, exc: Login):
         return RedirectResponse("/login", status_code=303)
 
-    @app.middleware("http")
-    async def _headers(request: Request, call_next):
-        resp = await call_next(request)
-        resp.headers["X-Frame-Options"] = "DENY"
-        resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers["Referrer-Policy"] = "no-referrer"
-        resp.headers["Content-Security-Policy"] = (
-            "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; form-action 'self'")
-        return resp
+    app.state.limiter = websecurity.install(app, cfg)
 
     # -- helpers ----------------------------------------------------------------
 
@@ -140,7 +137,7 @@ def create_app(cfg, bot=None) -> FastAPI:
 
     @app.post("/login")
     async def login(request: Request):
-        ip = request.client.host if request.client else "?"
+        ip = websecurity.client_ip(request)
         fails, until = app.state.fails.get(ip, (0, 0.0))
         if until > time.time():
             flash(request, f"Too many attempts. Try again in {int(until - time.time())} s.", "err")
@@ -490,7 +487,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                 flash(request, f"{name} already exists.", "err")
                 return back("/categories")
             top = s.scalar(select(func.max(Category.sort_order))) or 0
-            s.add(Category(name=name, role_id=_snowflake(data.get("role_id")), sort_order=top + 1))
+            s.add(Category(name=name, role_id=_role_id(data.get("role_id")), sort_order=top + 1))
         bus.info("config", f"Category {name} added.")
         flash(request, f"Added {name}.")
         return back("/categories")
@@ -606,7 +603,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def category_save(request: Request, cat_id: int):
         data = await form(request)
         try:
-            role_id = _snowflake(data.get("role_id"))
+            role_id = _role_id(data.get("role_id"))
         except ValueError as exc:
             flash(request, str(exc), "err")
             return back("/categories")
@@ -834,7 +831,10 @@ def create_app(cfg, bot=None) -> FastAPI:
                 st.oneoff_label = str(data.get("oneoff_label", "")).strip()[:64]
                 st.dashboard_footer = str(data.get("dashboard_footer", "")).strip()[:200]
                 st.dashboard_commands_label = str(data.get("dashboard_commands_label", "")).strip()[:200]
-                st.shugo_url = str(data.get("shugo_url", "")).strip() or st.shugo_url
+                url = str(data.get("shugo_url", "")).strip() or st.shugo_url
+                if not shugo.allowed_url(url):
+                    raise ValueError("The timer page must be an https://shugo.gg address")
+                st.shugo_url = url
                 st.shugo_region = str(data.get("shugo_region", "")).strip() or st.shugo_region
         except ValueError as exc:
             flash(request, str(exc).replace("invalid literal for int() with base 10: 'x'", "Numbers are required"), "err")
@@ -979,7 +979,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             if typ == "bool":
                 out[key] = bool(data.get(key))
             elif typ == "id":
-                out[key] = _snowflake(raw)
+                out[key] = _role_id(raw)
             elif typ == "int":
                 out[key] = _int(data, key, 0, 0 if key != "sort_order" else -1000, 100000)
             elif typ == "type":
@@ -1024,7 +1024,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             with db.session() as s:
                 st = get_settings(s)
                 for key in ("tank_role_id", "support_role_id", "dps_role_id"):
-                    setattr(st, key, _snowflake(data.get(key)))
+                    setattr(st, key, _role_id(data.get(key)))
                 for key in ("party_default_tank", "party_default_support", "party_default_dps"):
                     setattr(st, key, _int(data, key, 0, 0, 5))
                 if st.party_default_tank + st.party_default_support + st.party_default_dps > 5:
@@ -1262,6 +1262,10 @@ def _snowflake(raw) -> int:
     if not m:
         raise ValueError(f"{raw!r} is not a Discord ID")
     return int(m[1])
+
+
+def _role_id(raw) -> int:
+    return safety.check_role(_snowflake(raw))
 
 
 def _int(data, key: str, default: int = 0, lo: int = 0, hi: int = 10**6) -> int:

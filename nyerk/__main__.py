@@ -103,6 +103,8 @@ def check_data_dir(cfg: Config) -> None:
 
 def main() -> None:
     cfg = Config()
+    from . import safety
+    safety.protect_guild(cfg.guild_id)
     check_data_dir(cfg)
     bus.setup(cfg.log_file)
     db.init_engine(cfg.db_path)
