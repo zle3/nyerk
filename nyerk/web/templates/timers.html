@@ -4,6 +4,34 @@
 <h1>Boss timers</h1>
 <p class="lede">Kill reports from /nyerk worldboss and the dashboard buttons. One active timer per boss; you can cancel any of them.</p>
 
+<p class="section-label" id="buttons">Dashboard buttons</p>
+<form method="post" action="/timers/buttons" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Order</th><th>Boss</th><th>Button</th><th>Shown</th></tr></thead>
+    <tbody>
+    {% for b in bosses %}
+      <tr class="{{ '' if b.enabled else 'off' }}">
+        <td><input type="number" name="order_{{ b.id }}" value="{{ loop.index }}" class="order-input" aria-label="Order for {{ b.name }}"></td>
+        <td>{{ b.name }}<br><span class="small muted">{{ b.respawn_minutes // 60 }} h {{ b.respawn_minutes % 60 }} m respawn · <a href="/events/{{ b.id }}">edit boss</a></span></td>
+        <td class="small">{{ button_label.replace('{name}', b.name) }}</td>
+        <td><label class="switch"><input type="checkbox" name="show_{{ b.id }}" value="1" {{ 'checked' if b.enabled }}><span class="track"></span></label></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">No world bosses. Add one on the Events page with the Kill-reported schedule type.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="fields">
+    <div class="field"><label for="boss_button_label">Boss button text</label><input id="boss_button_label" name="boss_button_label" type="text" maxlength="80" value="{{ button_label }}"><div class="help"><code>{name}</code> is the boss name.</div></div>
+    <div class="field"><label for="custom_button_label">Custom time button text</label><input id="custom_button_label" name="custom_button_label" type="text" maxlength="80" value="{{ custom_label }}"></div>
+  </div>
+  <div class="actions"><button class="btn" type="submit">Save buttons</button>
+    <span class="small muted">Buttons follow this order on the dashboard. A boss that isn't shown can't be reported with /nyerk worldboss either.</span></div>
+</form>
+
 <p class="section-label">Active</p>
 <div class="table-wrap">
 <table>

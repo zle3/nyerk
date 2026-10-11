@@ -121,11 +121,11 @@ def test_dashboard_layout(s):
     assert lines[2].startswith("Daily reset <t:") and lines[4].startswith("Maintenance starts")
     assert lines[5] == "### Upcoming events"
     assert [l.split(" starts")[0] for l in lines[6:9]] == ["Dimensional Invasion", "Shugo Festival", "Spacetime Rift"]
-    assert lines[9] == "### World bosses and one-offs"
+    assert lines[9] == "### World Bosses"
     assert lines[10].startswith("Silent Dartan respawning")
     assert lines[-2].startswith("💡 Type `/nyerk` for more") and lines[-3] == ""
     assert lines[-1].startswith("-# Times are in your own time zone")
-    assert len(dash.bosses) == 4
+    assert len(dash.bosses) == 5  # four bosses plus Custom time
 
 
 def test_dashboard_blank_headings_fall_back_to_spacing(s):
@@ -224,3 +224,31 @@ def test_2100_plus_bracket_added_once(s):
     s.flush()
     upgrade_defaults(s)  # deleted by the admin afterwards: stays deleted
     assert s.scalar(select(PfBracket).where(PfBracket.label == "2100+")) is None
+
+
+def test_boss_buttons_order_and_labels(s):
+    dash = engine.build_dashboard(s, _settings(s), ny(2026, 10, 9, 12, 0))
+    assert [label for _, label in dash.bosses] == [
+        "Eternal Gartua died", "High Commander Lagta died", "Silent Dartan died", "Soul Ruler Kashapa died",
+        "Custom time"]
+    st = _settings(s)
+    st.boss_button_label, st.custom_button_label = "💀 {name}", "Other time"
+    labels = [label for _, label in engine.build_dashboard(s, st, ny(2026, 10, 9, 12, 0)).bosses]
+    assert labels[0] == "💀 Eternal Gartua" and labels[-1] == "Other time"
+
+
+def test_upgrade_renames_section_and_reorders_bosses_once(s):
+    from nyerk.db import get_state
+    from nyerk.seed import upgrade_defaults
+    st, state = _settings(s), get_state(s)
+    st.oneoff_label = "One-offs"
+    state.upgrades_done = [x for x in (state.upgrades_done or []) if x != "boss_order_gartua_first"]
+    for i, name in enumerate(["Silent Dartan", "Soul Ruler Kashapa", "High Commander Lagta", "Eternal Gartua"]):
+        boss(s, name).sort_order = i  # the old order
+    s.flush()
+    done = upgrade_defaults(s)
+    assert "boss button order" in done and st.oneoff_label == "World Bosses"
+    assert boss(s, "Eternal Gartua").sort_order == 0 and boss(s, "High Commander Lagta").sort_order == 1
+    boss(s, "Silent Dartan").sort_order = -5  # admin reorders later
+    upgrade_defaults(s)
+    assert boss(s, "Silent Dartan").sort_order == -5

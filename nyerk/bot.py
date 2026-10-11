@@ -34,10 +34,10 @@ def now() -> int:
 
 
 class BossButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:boss:(?P<id>\d+)"):
-    def __init__(self, event_id: int, name: str = "") -> None:
+    def __init__(self, event_id: int, label: str = "") -> None:
         super().__init__(
             discord.ui.Button(
-                label=f"{name} died"[:80] if name else "Boss died",
+                label=(label or "Boss died")[:80],
                 style=discord.ButtonStyle.secondary,
                 custom_id=f"nyerk:boss:{event_id}",
             )
@@ -53,9 +53,9 @@ class BossButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:bos
 
 
 class CustomTimeButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:custom"):
-    def __init__(self) -> None:
+    def __init__(self, label: str = "Custom time") -> None:
         super().__init__(
-            discord.ui.Button(label="Custom time", style=discord.ButtonStyle.primary, custom_id="nyerk:custom")
+            discord.ui.Button(label=label[:80], style=discord.ButtonStyle.primary, custom_id="nyerk:custom")
         )
 
     @classmethod
@@ -164,9 +164,8 @@ def dashboard_view(bosses: list[tuple[int, str]]) -> discord.ui.View | None:
     if not bosses:
         return None
     view = discord.ui.View(timeout=None)
-    for event_id, name in bosses[:24]:
-        view.add_item(BossButton(event_id, name))
-    view.add_item(CustomTimeButton())
+    for event_id, label in bosses[:25]:
+        view.add_item(CustomTimeButton(label) if event_id == 0 else BossButton(event_id, label))
     return view
 
 

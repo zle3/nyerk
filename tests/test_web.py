@@ -267,3 +267,18 @@ def test_tab_titles_are_plain_text(client, path):
 def test_party_page_sections_appear_once(client):
     page = client.get("/party").text
     assert page.count('id="quiet"') == 1 and page.count("Quiet hours pause dungeon ping roles only") == 1
+
+
+def test_dashboard_buttons_editor(client):
+    with db.session() as s:
+        ids = {e.name: e.id for e in s.scalars(select(Event).where(Event.schedule_type == "kill_report"))}
+    page = client.get("/timers").text
+    assert "Dashboard buttons" in page and page.index("Eternal Gartua") < page.index("Silent Dartan")
+    data = {"csrf": _csrf(client), "boss_button_label": "{name} is dead", "custom_button_label": "Pick a time",
+            f"order_{ids['Silent Dartan']}": "1", f"order_{ids['Eternal Gartua']}": "2",
+            f"order_{ids['High Commander Lagta']}": "3", f"order_{ids['Soul Ruler Kashapa']}": "4"}
+    data.update({f"show_{i}": "1" for n, i in ids.items() if n != "Soul Ruler Kashapa"})
+    client.post("/timers/buttons", data=data)
+    overview = client.get("/").text
+    assert "<span class=\"\">Silent Dartan is dead</span>" in overview and "Pick a time" in overview
+    assert "Soul Ruler Kashapa is dead" not in overview

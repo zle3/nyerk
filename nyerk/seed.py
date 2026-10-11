@@ -18,12 +18,13 @@ ALL_PING = ((True, True), (True, True), (True, True))
 FIVE_ONLY = ((False, False), (True, False), (False, False))
 NONE = ((False, False), (False, False), (False, False))
 
-BOSSES = [
+BOSSES = [  # also the dashboard button order
+    ("Eternal Gartua", "Isle of Eternity", 12 * 60),
+    ("High Commander Lagta", "Red Forest", 12 * 60),
     ("Silent Dartan", "Artamia Plateau South", 6 * 60),
     ("Soul Ruler Kashapa", "Artamia Plateau East", 6 * 60),
-    ("High Commander Lagta", "Red Forest", 12 * 60),
-    ("Eternal Gartua", "Isle of Eternity", 12 * 60),
 ]
+BOSS_ORDER = [name for name, _, _ in BOSSES]
 
 SCHEDULED = [
     # name, category, type, params, duration, slots, dashboard, label, label_active, source_key
@@ -104,6 +105,19 @@ def upgrade_defaults(s: Session) -> list[str]:
             s.add(PfBracket(label="2100+", min_score=2100, max_score=9999, sort_order=top + 1))
             done.append("gear score bracket 2100+")
         applied.append("bracket_2100_plus")
+        state.upgrades_done = applied
+    if st.oneoff_label in ("One-offs", "World bosses and one-offs"):
+        st.oneoff_label = "World Bosses"
+        done.append("dashboard boss section name")
+    if "boss_order_gartua_first" not in applied:
+        bosses = {e.name: e for e in s.scalars(select(Event).where(Event.schedule_type == "kill_report"))}
+        if bosses:
+            ordered = [bosses[n] for n in BOSS_ORDER if n in bosses]
+            ordered += sorted((e for n, e in bosses.items() if n not in BOSS_ORDER), key=lambda e: e.sort_order)
+            for i, e in enumerate(ordered):
+                e.sort_order = i
+            done.append("boss button order")
+        applied.append("boss_order_gartua_first")
         state.upgrades_done = applied
     if st.dashboard_commands_label == "Commands":  # was a heading over a command list
         st.dashboard_commands_label = "💡 Type `/nyerk` for more: report a kill with a custom time, and see, edit or cancel your timers."

@@ -50,7 +50,7 @@ def discord_preview(text: str) -> Markup:
     html = re.sub(r"^### (.*)$", r'<span class="h3">\1</span>', html, flags=re.M)
     html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
     html = re.sub(r"&lt;/(nyerk [a-z]+):\d+&gt;", r'<span class="command">/\1</span>', html)
-    html = re.sub(r"`([^`\n]+)`", r'<code class="inline">\1</code>', html)
+    html = re.sub(r"`([^`\n]+)`", r'<code class="icode">\1</code>', html)
     html = re.sub(r"^## (.*)$", r'<span class="h2">\1</span>', html, flags=re.M)
     html = re.sub(r"^# (.*)$", r'<span class="h1">\1</span>', html, flags=re.M)
     html = re.sub(r"^-# (.*)$", r'<span class="subtext">\1</span>', html, flags=re.M)
@@ -658,9 +658,30 @@ def create_app(cfg, bot=None) -> FastAPI:
                                     .order_by(UserTimer.id.desc()).limit(30)))
             for t in active + recent:
                 _ = t.event
-            bosses = timers.boss_events(s)
-            tz = get_settings(s).default_tz
-        return render(request, "timers.html", active=active, recent=recent, bosses=bosses, tz=tz)
+            bosses = timers.boss_events(s, enabled_only=False)
+            st = get_settings(s)
+            tz = st.default_tz
+            ctx = dict(button_label=st.boss_button_label, custom_label=st.custom_button_label)
+        return render(request, "timers.html", active=active, recent=recent, bosses=bosses, tz=tz, **ctx)
+
+    @app.post("/timers/buttons")
+    async def timers_buttons(request: Request):
+        data = await form(request)
+        label = str(data.get("boss_button_label", "")).strip()[:80] or "{name} died"
+        custom = str(data.get("custom_button_label", "")).strip()[:80] or "Custom time"
+        with db.session() as s:
+            bosses = timers.boss_events(s, enabled_only=False)
+            order = sorted(bosses, key=lambda e: (_int(data, f"order_{e.id}", e.sort_order, -1000, 1000), e.name))
+            for i, e in enumerate(order):
+                e.sort_order = i
+                e.enabled = bool(data.get(f"show_{e.id}"))
+            st = get_settings(s)
+            st.boss_button_label, st.custom_button_label = label, custom
+            summary = ", ".join(e.name for e in order if e.enabled)
+        bus.info("config", f"Dashboard buttons saved: {summary or 'none'}.")
+        refresh()
+        flash(request, "Dashboard buttons saved. The dashboard updates within 30 seconds.")
+        return back("/timers#buttons")
 
     @app.post("/timers/{timer_id}/cancel")
     async def timer_cancel(request: Request, timer_id: int):

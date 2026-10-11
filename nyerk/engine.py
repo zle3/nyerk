@@ -331,7 +331,12 @@ def build_dashboard(s: Session, settings: Settings, now: int) -> Dashboard:
     while len(text) > DISCORD_LIMIT:  # last resort; normal configs stay far below
         text = text[: text.rfind("\n")]
 
-    bosses = [(e.id, e.name) for e in events if e.schedule_type == "kill_report" and e.enabled][:24]
+    template = settings.boss_button_label or "{name} died"
+    bosses = [(e.id, template.replace("{name}", e.name)[:80])
+              for e in sorted((e for e in events if e.schedule_type == "kill_report" and e.enabled),
+                              key=lambda e: (e.sort_order, e.name))][:24]
+    if bosses:
+        bosses.append((0, (settings.custom_button_label or "Custom time")[:80]))  # 0 = Custom time
     return Dashboard(text, bosses)
 
 

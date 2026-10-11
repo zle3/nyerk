@@ -41,7 +41,10 @@ class Settings(Base):
     dashboard_divider: Mapped[str] = mapped_column(String(100), default="━" * 22)
     dashboard_top_label: Mapped[str] = mapped_column(String(64), default="Server")
     dashboard_main_label: Mapped[str] = mapped_column(String(64), default="Upcoming events")
-    oneoff_label: Mapped[str] = mapped_column(String(64), default="World bosses and one-offs")
+    oneoff_label: Mapped[str] = mapped_column(String(64), default="World Bosses")
+    # Dashboard buttons: "{name}" is the boss name.
+    boss_button_label: Mapped[str] = mapped_column(String(80), default="{name} died")
+    custom_button_label: Mapped[str] = mapped_column(String(80), default="Custom time")
     # One-line reminder about /nyerk on the dashboard; blank hides it.
     dashboard_commands_label: Mapped[str] = mapped_column(
         String(200), default="💡 Type `/nyerk` for more: report a kill with a custom time, and see, edit or cancel your timers.")

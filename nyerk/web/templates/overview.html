@@ -45,7 +45,7 @@
 
 <p class="section-label">Dashboard preview</p>
 <div class="discord">{{ dash.text | discord }}{% if dash.bosses %}
-<div class="discord-buttons">{% for _, name in dash.bosses %}<span>{{ name }} died</span>{% endfor %}<span class="primary">Custom time</span></div>{% endif %}</div>
+<div class="discord-buttons">{% for bid, label in dash.bosses %}<span class="{{ 'primary' if bid == 0 }}">{{ label }}</span>{% endfor %}</div>{% endif %}</div>
 <p class="small muted">Times show in your browser's time zone, the same way Discord shows them to each member.</p>
 
 <p class="section-label">Recent activity</p>
