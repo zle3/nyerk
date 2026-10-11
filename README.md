@@ -19,6 +19,7 @@
 **Web admin**
 - A **Members** page to manage one person in one place: their class and ping roles, quiet hours, boss timers, registration and party.
 - A **Stats** page: class distribution, content demand, party activity by day and hour, and the most active members.
+- Optional **public access** at your own domain through a Cloudflare Tunnel, with Discord sign-in: owner, admin-role and member levels, and a **My page** where members manage their own timers, roles, gear score and quiet hours.
 
 ## Screenshots
 
@@ -201,6 +202,49 @@ Import merges: rows are matched by name, and anything missing from the file is l
 - **Intents:** none of the privileged ones; Nyerk uses guilds and guild reactions only.
 - **Channels:** make #aion-2-timer and #aion-2-party-finder read-only for members. Buttons and slash commands still work.
 
+## Public access (Cloudflare Tunnel + Discord sign-in)
+
+Optional. Lets people open Nyerk at your own domain without opening any port on your router or revealing your home IP. Everyone signs in with Discord; nobody gets an account or a password.
+
+| Who | How | Can |
+|---|---|---|
+| **Owner** | Your Discord user ID in `OWNER_IDS`, or the owner password on your LAN | Everything |
+| **Admin** | Holds a role in `ADMIN_ROLE_IDS` (checked again every 5 minutes) | Events and alert toggles, boss timers and button order, maintenance, party finder content and panels, members, defaults, stats, logs, posting the roles channel. Not message wording, role IDs, roles channel setup, classes, Settings or export/import. 30 changes an hour. |
+| **Member** | Anyone in your server | **My page**: their boss timers, classes and pings, gear score, quiet hours, registration and party |
+
+**1. Discord.** In the [Developer Portal](https://discord.com/developers/applications), open your bot's application → **OAuth2**. Add the redirect `https://nyerk.example.com/auth/callback` (your domain), copy the **Client ID** and **Client Secret**.
+
+**2. Cloudflare.** In Zero Trust → **Networks → Tunnels**, create a tunnel (type *Cloudflared*) and copy its token. Add a **public hostname**: `nyerk.example.com` → service **HTTPS**, URL `nyerk:8443`; under *Additional settings → TLS* turn on **No TLS Verify** (Nyerk uses its own self-signed certificate inside the stack).
+
+**3. Env.** Add to the stack's env, then Deploy:
+
+```
+PUBLIC_URL=https://nyerk.example.com
+DISCORD_CLIENT_ID=…
+DISCORD_CLIENT_SECRET=…
+OWNER_IDS=your-discord-user-id
+ADMIN_ROLE_IDS=role-id-of-your-admins
+COMPOSE_PROFILES=tunnel
+TUNNEL_TOKEN=…
+WEB_BIND=127.0.0.1:8443   # optional: stop publishing the port on your LAN
+```
+
+**4. Cloudflare protection** (free plan, in your domain's dashboard):
+- **Security → WAF → Rate limiting rules:** when *URI Path* starts with `/auth` or `/login`, 10 requests per 1 minute per IP → **Block** for 10 minutes.
+- **Security → Bots:** turn on **Bot Fight Mode**.
+- **Security → Settings:** keep *Security Level* at Medium; switch on **I'm Under Attack** if you're ever flooded.
+
+**5. Keep the containers off your LAN** (recommended, Linux host). Even if someone found a hole in Nyerk, this stops the container from reaching your router, NAS or other machines. Replace `192.168.0.0/16` with your LAN range:
+
+```bash
+sudo iptables -I DOCKER-USER -s 172.30.70.0/24 -d 192.168.0.0/16 -m conntrack --ctstate NEW -j DROP
+sudo apt install iptables-persistent && sudo netfilter-persistent save   # keep it after reboots
+```
+
+**What's already in place:** Discord sign-in reads only your name and ID (`identify` scope) and discards the token; sessions last 12 hours and are re-checked against your server roles; owner-only changes need a sign-in from the last hour; password sign-in is refused through Cloudflare; per-IP rate limits and a 2 MB request cap; strict security headers and HSTS; links, invites and @everyone/@here are refused in all text; every change is recorded in **Settings → Change history** with one-click restore and posted to #logs; the container runs read-only, as a normal user, with all privileges dropped.
+
+**If an admin account looks compromised:** **Settings → Access and security → Lock admin access** (instant), then **Change history** to restore anything they changed, then remove their role in Discord.
+
 ## What's where
 
 | Path | Purpose |
@@ -217,7 +261,8 @@ Import merges: rows are matched by name, and anything missing from the file is l
 | `nyerk/transfer.py` | Settings export and import. |
 | `nyerk/shugo.py` | shugo.gg table parser and the review diff. Hand-edited fields are never overwritten. |
 | `nyerk/housekeeping.py` | Nightly SQLite backup (04:00 server time), daily shugo.gg check, self-signed cert. |
-| `nyerk/web/` | FastAPI admin with server-rendered pages. |
+| `nyerk/web/` | FastAPI admin with server-rendered pages; `auth.py` (sign-in and who may do what), `security.py` (rate limits, headers, Cloudflare client IPs). |
+| `nyerk/history.py` / `nyerk/safety.py` | Change history with restore; the link/invite filter and the @everyone guard. |
 | `data/` | `nyerk.db`, `backups/`, `logs/nyerk.log`, `tls/`. Back up by copying this folder. |
 
 ## Behaviour notes

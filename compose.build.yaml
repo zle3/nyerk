@@ -70,3 +70,11 @@ services:
       - no-new-privileges:true
     depends_on:
       - nyerk
+
+# A fixed address range for this stack, so a firewall rule can stop the
+# containers from reaching other devices on your LAN (README "Public access").
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${NYERK_SUBNET:-172.30.70.0/24}
