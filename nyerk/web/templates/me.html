@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}My page{% endblock %}
+{% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
+{% block content %}
+<h1>Hi, {{ user.name }}</h1>
+<p class="lede">Your classes, pings, gear score, quiet hours and boss timers. Changes here are the same as using the buttons in Discord.{% if not live %} <span class="pill warn">Nyerk is offline: roles can't be changed right now</span>{% endif %}</p>
+
+<p class="section-label" id="timers">Boss timers</p>
+<div class="list">
+  {% for t in timers %}
+  <div class="row">
+    <div class="grow"><div class="title">{{ t.event.name }}</div>
+      <div class="sub">fires <time data-ts="{{ t.fire_at }}" data-style="f"></time> (<time data-ts="{{ t.fire_at }}" data-style="R"></time>)</div></div>
+    <form method="post" action="/me/timers/{{ t.id }}/cancel" class="inline-form" data-confirm="Cancel your {{ t.event.name }} timer?">{{ csrf_field() }}<button class="btn small danger" type="submit">Cancel</button></form>
+    <details>
+      <summary class="btn small secondary">Change time</summary>
+      <form method="post" action="/me/timers/{{ t.id }}/edit" class="card mt">
+        {{ csrf_field() }}
+        <div class="fields">
+          <div class="field"><label>Killed at</label><input name="killed_at" type="text" maxlength="40" placeholder="10 min ago, or 14:30"></div>
+          <div class="field"><label>Or respawns in</label><input name="respawns_in" type="text" maxlength="40" placeholder="1h 20m"></div>
+        </div>
+        <p class="help">Fill one, not both.</p>
+        <button class="btn small" type="submit">Save time</button>
+      </form>
+    </details>
+  </div>
+  {% else %}
+  <div class="row"><span class="muted">No active boss timers. Report a kill with the buttons in the timer channel or <code>/nyerk worldboss</code>.</span></div>
+  {% endfor %}
+</div>
+
+<p class="section-label" id="roles">Classes and pings</p>
+<form method="post" action="/me/roles" class="card">
+  {{ csrf_field() }}
+  {% for group, title in (('class', 'Classes'), ('event', 'Event pings'), ('dungeon', 'Dungeon pings')) %}
+    {% set opts = options | selectattr('group', 'equalto', group) | list %}
+    <h3 class="{{ 'mt' if not loop.first }}">{{ title }}</h3>
+    {% if opts %}
+    <div class="role-grid">
+      {% for o in opts %}
+        <label class="switch"><input type="checkbox" name="role" value="{{ o.role_id }}" {{ 'checked' if o.role_id in held or o.role_id in paused }} {{ 'disabled' if not live }}><span class="track"></span>{{ o.label }}{% if o.type_label %} <span class="small muted">{{ o.type_label }}</span>{% endif %}{% if o.role_id in paused %} <span class="pill accent">paused</span>{% endif %}</label>
+      {% endfor %}
+    </div>
+    {% else %}<p class="small muted">None set up yet.</p>{% endif %}
+  {% endfor %}
+  <div class="actions mt"><button class="btn" type="submit" {{ 'disabled' if not live }}>Save classes and pings</button>
+    <span class="small muted">Tank, Support and DPS roles follow your classes.</span></div>
+</form>
+
+<p class="section-label" id="gear">Gear score</p>
+<form method="post" action="/me/gear" class="card inline">
+  {{ csrf_field() }}
+  <select name="bracket" aria-label="Gear score" class="w-auto">
+    <option value="" {{ 'selected' if not gear_id }}>Not set</option>
+    {% for b in brackets %}<option value="{{ b.id }}" {{ 'selected' if b.id == gear_id }}>{{ b.label }}</option>{% endfor %}
+  </select>
+  <button class="btn secondary" type="submit">Save gear score</button>
+  <span class="small muted">Shown on party listings; decides which dungeon pings reach you.</span>
+</form>
+
+<p class="section-label" id="quiet">Quiet hours</p>
+<form method="post" action="/me/quiet" class="card">
+  {{ csrf_field() }}
+  <label class="switch"><input type="checkbox" name="enabled" value="1" {{ 'checked' if quiet and quiet.enabled }}><span class="track"></span>Pause my dungeon pings every day</label>
+  <div class="fields mt">
+    <div class="field"><label for="start">From</label><select id="start" name="start">{% for h, label in hours %}<option value="{{ h }}" {{ 'selected' if (quiet and quiet.start_min // 60 == h) or (not quiet and h == 23) }}>{{ label }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="end">Until</label><select id="end" name="end">{% for h, label in hours %}<option value="{{ h }}" {{ 'selected' if (quiet and quiet.end_min // 60 == h) or (not quiet and h == 7) }}>{{ label }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="tz">My time zone</label><select id="tz" name="tz">{% for z, label in zones %}<option value="{{ z }}" {{ 'selected' if (quiet and quiet.tz == z) or (not quiet and z == default_tz) }}>{{ label }}</option>{% endfor %}</select></div>
+  </div>
+  <div class="actions"><button class="btn secondary" type="submit">Save quiet hours</button>
+    {% if quiet and quiet.enabled %}<span class="small muted">Now: {{ quiet_text }}{{ ' · quiet now' if quiet.state == 'quiet' }}</span>{% endif %}</div>
+</form>
+
+<p class="section-label" id="activity">Party finder</p>
+<div class="list">
+  {% if registration %}
+  <div class="row"><div class="grow"><div class="title">Looking for a group</div><div class="sub">{{ registration_text }} · until <time data-ts="{{ registration.expires_at }}" data-style="t"></time></div></div>
+    <form method="post" action="/me/registration/cancel" class="inline-form">{{ csrf_field() }}<button class="btn small secondary" type="submit">Cancel</button></form></div>
+  {% endif %}
+  {% if party %}
+  <div class="row"><div class="grow"><div class="title">In {{ party_title }}</div><div class="sub">{{ party.status }} · leader {{ party.leader_name }} · {{ party.members | length }}/{{ party.size }}</div></div>
+    <form method="post" action="/me/party/leave" class="inline-form" data-confirm="Leave {{ party_title }}?">{{ csrf_field() }}<button class="btn small danger" type="submit">Leave party</button></form></div>
+  {% endif %}
+  {% if not registration and not party %}<div class="row"><span class="muted">Not registered or in a party. Use the panels in the party finder channel.</span></div>{% endif %}
+</div>
+{% endblock %}

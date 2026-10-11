@@ -18,6 +18,7 @@
       Nyerk
     </a>
     <nav class="nav" aria-label="Sections">
+      {% if is_admin %}
       <a href="/" class="{{ 'active' if nav == 'overview' }}">Overview</a>
       <a href="/events" class="{{ 'active' if nav in ('events', 'event_edit') }}">Events</a>
       <a href="/timers" class="{{ 'active' if nav == 'timers' }}">Boss timers</a>
@@ -27,9 +28,12 @@
       <a href="/defaults" class="{{ 'active' if nav == 'defaults' }}">Defaults{% if pending_changes %}<span class="badge">{{ pending_changes }}</span>{% endif %}</a>
       <a href="/members" class="{{ 'active' if nav in ('members', 'member') }}">Members</a>
       <a href="/stats" class="{{ 'active' if nav == 'stats' }}">Stats</a>
-      <a href="/settings" class="{{ 'active' if nav == 'settings' }}">Settings</a>
+      {% if is_owner %}<a href="/settings" class="{{ 'active' if nav == 'settings' }}">Settings</a>{% endif %}
       <a href="/logs" class="{{ 'active' if nav == 'logs' }}">Logs</a>
+      {% endif %}
+      {% if user %}<a href="/me" class="{{ 'active' if nav == 'me' }}">My page</a>{% endif %}
     </nav>
+    {% if user %}<span class="small muted who" title="{{ level }}">{{ user.name }}{% if level != 'member' %} · {{ level }}{% endif %}</span>{% endif %}
     <form method="post" action="/logout" class="inline-form">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button class="btn plain small" type="submit">Sign out</button>

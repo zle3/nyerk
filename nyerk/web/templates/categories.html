@@ -13,6 +13,8 @@
   </form>
 </div>
 
+{% if not is_owner %}<div class="banner">Only the owner can change roles, role messages and the header. You can repost the roles channel.</div>{% endif %}
+<fieldset {{ 'disabled' if not is_owner }} class="{{ '' if is_owner else 'owner-only' }}">
 <p class="section-label" id="header">Channel header</p>
 <form method="post" action="/roles/header" class="card">
   {{ csrf_field() }}
@@ -102,6 +104,8 @@
   </div>
   <div class="actions"><button class="btn" type="submit">Save assignments</button><span class="small muted">Roles without an ID are left off until you set one.</span></div>
 </form>
+
+</fieldset>
 
 <p class="section-label">Roles channel preview</p>
 {% if roles_header %}<div class="discord mt">{{ roles_header | discord }}</div>{% endif %}

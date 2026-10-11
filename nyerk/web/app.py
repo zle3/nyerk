@@ -20,6 +20,7 @@ from markupsafe import Markup, escape
 from sqlalchemy import func, select
 from starlette.middleware.sessions import SessionMiddleware
 
+from . import auth
 from . import security as websecurity
 
 from .. import db, engine, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
@@ -76,11 +77,45 @@ class Login(Exception):
     pass
 
 
+class Forbidden(Exception):
+    pass
+
+
 def create_app(cfg, bot=None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     safety.protect_guild(cfg.guild_id)
     app.state.bot = bot
     app.state.fails: dict[str, tuple[int, float]] = {}
+    @app.middleware("http")
+    async def _user(request: Request, call_next):
+        """Keep the signed-in user current: drop sessions from before a
+        "sign everyone out", re-read Discord roles every few minutes and
+        apply the owner's admin lock."""
+        user = request.session.get("user")
+        if user:
+            with db.session() as s:
+                epoch, locked = get_state(s).session_epoch, get_settings(s).admin_locked
+            bot = app.state.bot
+            if user.get("epoch") != epoch:
+                request.session.clear()
+                user = None
+            elif user["via"] == "discord" and time.time() - user["checked"] > auth.RECHECK_SECONDS \
+                    and bot and bot.is_ready():
+                found = await bot.fetch_member(user["uid"])
+                if found is None and user["uid"] not in cfg.owner_ids:
+                    request.session.clear()
+                    user = None
+                else:
+                    name, roles = found or (user["name"], set())
+                    user.update(name=name, level=auth.level_for(user["uid"], roles, cfg, locked),
+                                checked=int(time.time()))
+                    request.session["user"] = user
+            elif user["level"] == "admin" and locked:
+                user["level"] = "member"
+                request.session["user"] = user
+        request.state.user = user
+        return await call_next(request)
+
     secret = cfg.session_secret or _persistent_secret(cfg)
     # Lax (not Strict) so the cookie survives the redirect back from Discord
     # login; every form also carries a CSRF token. 12 hour sessions.
@@ -92,13 +127,37 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def _to_login(request: Request, exc: Login):
         return RedirectResponse("/login", status_code=303)
 
+    @app.exception_handler(Forbidden)
+    async def _forbidden(request: Request, exc: Forbidden):
+        user = request.session.get("user") or {}
+        if user.get("level") == "member" and request.method == "GET" and request.url.path == "/":
+            return RedirectResponse("/me", status_code=303)
+        resp = render(request, "forbidden.html", reason=str(exc))
+        resp.status_code = 403
+        return resp
+
     app.state.limiter = websecurity.install(app, cfg)
 
     # -- helpers ----------------------------------------------------------------
 
-    def require(request: Request) -> None:
-        if not request.session.get("auth"):
+    def current(request: Request) -> dict | None:
+        return request.session.get("user")
+
+    def is_owner(request: Request) -> bool:
+        return auth.allows((current(request) or {}).get("level"), "owner")
+
+    def require(request: Request) -> dict:
+        user = current(request)
+        if not user:
             raise Login()
+        need = auth.needed_level(request.url.path, request.method)
+        if not auth.allows(user.get("level"), need):
+            raise Forbidden("Only the owner can change this." if need == "owner"
+                            else "This page is for Nyerk admins.")
+        if need == "owner" and request.method == "POST" and time.time() - user["issued"] > auth.FRESH_SECONDS:
+            request.session["after_login"] = str(request.headers.get("referer") or "/")
+            raise Login()  # sensitive change: sign in again first
+        return user
 
     async def form(request: Request) -> dict[str, Any]:
         require(request)
@@ -115,7 +174,10 @@ def create_app(cfg, bot=None) -> FastAPI:
             request.session["csrf"] = secrets.token_urlsafe(32)
         with db.session() as s:
             pending = get_state(s).pending_import
+        user = current(request) or {}
         ctx.update(
+            user=user, level=user.get("level", ""), is_owner=auth.allows(user.get("level"), "owner"),
+            is_admin=auth.allows(user.get("level"), "admin"),
             request=request, csrf=request.session["csrf"], flashes=request.session.pop("flash", []),
             nav=name.split(".")[0], pending_changes=len((pending or {}).get("changes", [])),
             bot_status=app.state.bot.status() if app.state.bot else None,
@@ -131,12 +193,24 @@ def create_app(cfg, bot=None) -> FastAPI:
 
     # -- auth ---------------------------------------------------------------------
 
+    def password_allowed(request: Request) -> bool:
+        return cfg.password_login == "on" or (cfg.password_login == "lan" and not request.state.via_cloudflare)
+
+    def epoch_now() -> int:
+        with db.session() as s:
+            return get_state(s).session_epoch
+
+    def landing(user: dict) -> str:
+        return "/" if auth.allows(user["level"], "admin") else "/me"
+
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request):
-        return render(request, "login.html")
+        return render(request, "login.html", discord_login=cfg.discord_login, password_login=password_allowed(request))
 
     @app.post("/login")
     async def login(request: Request):
+        if not password_allowed(request):
+            raise HTTPException(404)
         ip = websecurity.client_ip(request)
         fails, until = app.state.fails.get(ip, (0, 0.0))
         if until > time.time():
@@ -150,14 +224,56 @@ def create_app(cfg, bot=None) -> FastAPI:
         pw = str(data.get("password", "")).encode()
         if hashed and bcrypt.checkpw(pw, hashed.encode()):
             app.state.fails.pop(ip, None)
+            after = request.session.get("after_login", "/")
             request.session.clear()
-            request.session.update(auth=True, csrf=secrets.token_urlsafe(32))
-            return back("/")
+            request.session.update(user=auth.new_session(0, "Owner (password)", "owner", "password", epoch_now()),
+                                   csrf=secrets.token_urlsafe(32))
+            bus.info("admin", f"Owner signed in with the password from {ip}.", discord=False)
+            return back(after if after.startswith("/") else "/")
         fails += 1
         app.state.fails[ip] = (fails, time.time() + LOCKOUT if fails >= MAX_FAILS else 0.0)
         bus.warn("admin", f"Failed admin login from {ip}.", discord=fails >= MAX_FAILS)
         flash(request, "Wrong password.", "err")
         return back("/login")
+
+    @app.get("/auth/discord")
+    async def auth_discord(request: Request):
+        if not cfg.discord_login:
+            raise HTTPException(404)
+        state = secrets.token_urlsafe(24)
+        request.session["oauth_state"] = state
+        return RedirectResponse(auth.authorize_url(cfg, state), status_code=303)
+
+    @app.get("/auth/callback", response_class=HTMLResponse)
+    async def auth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+        if not cfg.discord_login:
+            raise HTTPException(404)
+        expected = request.session.pop("oauth_state", None)
+        if error or not code or not expected or not secrets.compare_digest(state, expected):
+            flash(request, "Discord sign-in was cancelled or expired. Try again.", "err")
+            return back("/login")
+        try:
+            uid, name = await auth.discord_identify(cfg, code)
+        except Exception as exc:  # network or Discord error: never leak details
+            bus.warn("admin", f"Discord sign-in failed: {type(exc).__name__}", discord=False)
+            flash(request, "Couldn't reach Discord. Try again in a moment.", "err")
+            return back("/login")
+        bot = app.state.bot
+        found = await bot.fetch_member(uid) if bot and bot.is_ready() else None
+        if found is None and uid not in cfg.owner_ids:
+            flash(request, "You need to be a member of the server to use Nyerk." if bot and bot.is_ready()
+                  else "Nyerk is offline right now, so it can't check your server roles. Try again later.", "err")
+            return back("/login")
+        name, roles = found or (name, set())
+        with db.session() as s:
+            locked = get_settings(s).admin_locked
+        level = auth.level_for(uid, roles, cfg, locked)
+        after = request.session.get("after_login", "")
+        request.session.clear()
+        user = auth.new_session(uid, name, level, "discord", epoch_now())
+        request.session.update(user=user, csrf=secrets.token_urlsafe(32))
+        bus.info("admin", f"{name} signed in with Discord as {level}.", discord=level != "member")
+        return back(after if after.startswith("/") and level != "member" else landing(user))
 
     @app.post("/logout")
     async def logout(request: Request):
@@ -184,6 +300,161 @@ def create_app(cfg, bot=None) -> FastAPI:
         refresh(repost=True)
         flash(request, "Dashboard will be reposted in a moment." if app.state.bot else "Bot is not running.")
         return back("/")
+
+    # -- member self-service (/me) -------------------------------------------------------
+
+    def me(request: Request) -> dict:
+        user = require(request)
+        if not user.get("uid"):
+            raise Forbidden("Sign in with Discord to manage your own timers and roles. "
+                            "The owner password isn't tied to a Discord account.")
+        return user
+
+    @app.get("/me", response_class=HTMLResponse)
+    async def me_page(request: Request):
+        user = me(request)
+        uid = user["uid"]
+        bot = _bot_ready()
+        live = await bot.fetch_member(uid) if bot else None
+        with db.session() as s:
+            info = members.detail(s, uid)
+            options = members.role_options(s)
+            gear = party.gear_of(s, uid)
+            ctx = dict(gear_id=gear.id if gear else 0, brackets=party.brackets(s),
+                       default_tz=get_settings(s).default_tz)
+        info.pop("name", None)
+        return render(request, "me.html", uid=uid, live=live is not None,
+                      held=live[1] if live else info["tracked"], options=options, zones=quiet.ZONES,
+                      hours=[(h, quiet.hour_label(h)) for h in range(24)], **ctx, **info)
+
+    @app.post("/me/roles")
+    async def me_roles(request: Request):
+        data = await form(request)
+        user = me(request)
+        bot = _bot_ready()
+        live = await bot.fetch_member(user["uid"]) if bot else None
+        if live is None:
+            flash(request, "Nyerk is offline right now, so roles can't be changed. Try again later.", "err")
+            return back("/me")
+        name, held = live
+        chosen = {int(v) for v in data.getlist("role") if str(v).isdigit()}
+        with db.session() as s:
+            add, remove, hold = members.plan_roles(s, user["uid"], held, chosen)
+            labels = {o.role_id: o.label for o in members.role_options(s)}
+        errors = await bot.admin_apply_roles(user["uid"], add, remove)
+        with db.session() as s:
+            members.record(s, user["uid"], name, chosen, hold)
+        changed = [f"+{labels.get(r, 'type role')}" for r in add] + [f"-{labels.get(r, 'type role')}" for r in remove]
+        if changed:
+            bus.info("roles", f"{name} changed their roles on the web: {', '.join(changed)}.", discord=False)
+        flash(request, ("Some changes failed. Ask an admin." if errors else "Roles saved.") if changed or errors
+              else "No changes.", "err" if errors else "ok")
+        return back("/me#roles")
+
+    @app.post("/me/gear")
+    async def me_gear(request: Request):
+        data = await form(request)
+        user = me(request)
+        raw = str(data.get("bracket", ""))
+        with db.session() as s:
+            try:
+                b = party.set_gear(s, user["uid"], user["name"], int(raw) if raw.isdigit() else None,
+                                   int(time.time()))
+            except party.PartyError as exc:
+                flash(request, str(exc), "err")
+                return back("/me#gear")
+        refresh()
+        flash(request, f"Gear score set to {b.label}." if b else "Gear score cleared.")
+        return back("/me#gear")
+
+    @app.post("/me/quiet")
+    async def me_quiet(request: Request):
+        data = await form(request)
+        user = me(request)
+        bot = _bot_ready()
+        live = await bot.fetch_member(user["uid"]) if bot else None
+        try:
+            with db.session() as s:
+                if data.get("enabled"):
+                    tz = str(data.get("tz", "UTC"))
+                    if tz not in dict(quiet.ZONES):
+                        raise ValueError("Pick a time zone from the list.")
+                    q = quiet.set_hours(s, user["uid"], user["name"], _int(data, "start", 23, 0, 23),
+                                        _int(data, "end", 7, 0, 23), tz, live[1] if live else set())
+                    msg = f"Quiet hours set: {quiet.window_text(q)}."
+                else:
+                    q = quiet.turn_off(s, user["uid"])
+                    msg = "Quiet hours turned off." if q else "Quiet hours are off."
+        except ValueError as exc:
+            flash(request, str(exc), "err")
+            return back("/me#quiet")
+        if bot:
+            await bot.apply_quiet_hours(only=user["uid"])
+        flash(request, msg)
+        return back("/me#quiet")
+
+    def _own_timer_row(s, user: dict, tid: int) -> UserTimer:
+        t = s.get(UserTimer, tid)
+        if t is None or t.user_id != user["uid"]:
+            raise HTTPException(404)
+        _ = t.event
+        return t
+
+    @app.post("/me/timers/{tid}/edit")
+    async def me_timer_edit(request: Request, tid: int):
+        data = await form(request)
+        user = me(request)
+        with db.session() as s:
+            result = timers.edit(s, _own_timer_row(s, user, tid), int(time.time()),
+                                 str(data.get("killed_at", ""))[:40], str(data.get("respawns_in", ""))[:40],
+                                 user["name"])
+        if result.ok:
+            bus.info("timer", result.log + " (web)")
+            refresh()
+        flash(request, _plain(result.reply), "ok" if result.ok else "err")
+        return back("/me#timers")
+
+    @app.post("/me/timers/{tid}/cancel")
+    async def me_timer_cancel(request: Request, tid: int):
+        await form(request)
+        user = me(request)
+        with db.session() as s:
+            result = timers.cancel(_own_timer_row(s, user, tid), user["name"])
+        if result.ok:
+            bus.info("timer", result.log + " (web)")
+            refresh()
+        flash(request, _plain(result.reply), "ok" if result.ok else "err")
+        return back("/me#timers")
+
+    @app.post("/me/registration/cancel")
+    async def me_registration_cancel(request: Request):
+        await form(request)
+        user = me(request)
+        with db.session() as s:
+            row = party.cancel_registration(s, user["uid"])
+        if row:
+            refresh()
+        flash(request, "Registration cancelled." if row else "You weren't registered.")
+        return back("/me#activity")
+
+    @app.post("/me/party/leave")
+    async def me_party_leave(request: Request):
+        await form(request)
+        user = me(request)
+        try:
+            with db.session() as s:
+                p = party.live_party_for(s, user["uid"])
+                if p is None:
+                    raise party.PartyError("You're not in a party.")
+                title = party.party_title(p)
+                party.remove_member(s, p, user["uid"], int(time.time()))
+        except party.PartyError as exc:
+            flash(request, str(exc), "err")
+            return back("/me#activity")
+        bus.info("party", f"{user['name']} left party {title} (web).")
+        refresh()
+        flash(request, f"You left {title}.")
+        return back("/me#activity")
 
     # -- members -----------------------------------------------------------------------
 
@@ -411,7 +682,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             if e is None:
                 raise HTTPException(404)
             try:
-                changes = _apply_event_form(s, e, data)
+                changes = _apply_event_form(s, e, data, owner=is_owner(request))
             except ValueError as exc:
                 s.rollback()
                 e = s.get(Event, event_id) if event_id else None
@@ -673,7 +944,8 @@ def create_app(cfg, bot=None) -> FastAPI:
                 e.sort_order = i
                 e.enabled = bool(data.get(f"show_{e.id}"))
             st = get_settings(s)
-            st.boss_button_label, st.custom_button_label = label, custom
+            if is_owner(request):  # button wording is owner-only
+                st.boss_button_label, st.custom_button_label = label, custom
             summary = ", ".join(e.name for e in order if e.enabled)
         bus.info("config", f"Dashboard buttons saved: {summary or 'none'}.")
         refresh()
@@ -1077,9 +1349,11 @@ def create_app(cfg, bot=None) -> FastAPI:
         try:
             with db.session() as s:
                 rows = party.contents(s, False)
+                owner = is_owner(request)
                 updates = {c.id: _pf_values("content", {k: data.get(f"{k}_{c.id}", "") for k in (
                     "name", "emoji", "role_id", "min_gear_score", "sort_order")}
-                    | {"active": data.get(f"active_{c.id}")}) for c in rows}
+                    | {"active": data.get(f"active_{c.id}")}
+                    | ({} if owner else {"role_id": str(c.role_id or "")})) for c in rows}  # role IDs: owner-only
                 names = [u["name"].lower() for u in updates.values()]
                 if len(names) != len(set(names)):
                     raise ValueError("Two dungeons have the same name")
@@ -1264,6 +1538,12 @@ def _snowflake(raw) -> int:
     return int(m[1])
 
 
+def _plain(text: str) -> str:
+    """Bot replies use Discord formatting; turn <t:..> stamps and ** into text."""
+    text = re.sub(r"<t:(\d+):[a-zA-Z]>", lambda m: fmt_ts(int(m[1])), text)
+    return text.replace("**", "")
+
+
 def _role_id(raw) -> int:
     return safety.check_role(_snowflake(raw))
 
@@ -1281,7 +1561,7 @@ def _int(data, key: str, default: int = 0, lo: int = 0, hi: int = 10**6) -> int:
     return val
 
 
-def _apply_event_form(s, e: Event, data) -> list[str]:
+def _apply_event_form(s, e: Event, data, owner: bool = True) -> list[str]:
     """Copy form values onto e. Raises ValueError with a readable message."""
     name = str(data.get("name", "")).strip()
     if not name:
@@ -1327,8 +1607,9 @@ def _apply_event_form(s, e: Event, data) -> list[str]:
     e.duration_minutes, e.respawn_minutes = duration, respawn
     e.enabled = bool(data.get("enabled"))
     e.dashboard = data.get("dashboard") if data.get("dashboard") in ("top", "main", "hidden") else "main"
-    e.dashboard_label = str(data.get("dashboard_label", "")).strip()[:100]
-    e.dashboard_label_active = str(data.get("dashboard_label_active", "")).strip()[:100]
+    if owner:  # dashboard wording is owner-only
+        e.dashboard_label = str(data.get("dashboard_label", "")).strip()[:100]
+        e.dashboard_label_active = str(data.get("dashboard_label_active", "")).strip()[:100]
     e.sort_order = _int(data, "sort_order", e.sort_order or 0, -1000, 1000)
     e.edited_fields = sorted(edited)
 
@@ -1341,7 +1622,8 @@ def _apply_event_form(s, e: Event, data) -> list[str]:
             continue
         sl.enabled = bool(data.get(f"slot_{lead}_enabled"))
         sl.ping = bool(data.get(f"slot_{lead}_ping"))
-        sl.template = str(data.get(f"slot_{lead}_template", "")).replace("\r\n", "\n").strip()[:1500]
+        if owner:  # message wording is owner-only
+            sl.template = str(data.get(f"slot_{lead}_template", "")).replace("\r\n", "\n").strip()[:1500]
     new_lead = str(data.get("new_slot_lead", "")).strip()
     if new_lead:
         lead = _int(data, "new_slot_lead", 0, 0, 7 * 1440)

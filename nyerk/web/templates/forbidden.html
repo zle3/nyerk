@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}No access{% endblock %}
+{% block content %}
+<h1>No access</h1>
+<p class="lede">{{ reason }}</p>
+<div class="actions">
+  {% if level == 'member' %}<a class="btn" href="/me">Go to my page</a>{% else %}<a class="btn" href="/">Back to overview</a>{% endif %}
+</div>
+{% endblock %}

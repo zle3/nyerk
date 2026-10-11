@@ -455,3 +455,9 @@ td > .order-input { width: 5rem; }
 .topbar-inner { gap: 0.75rem; max-width: 1180px; }
 .discord .command { background: rgba(88, 101, 242, 0.3); color: #c9cdfb; border-radius: 3px; padding: 0 2px; font-weight: 500; }
 .discord code.icode { background: #2b2d31; border-radius: 3px; padding: 0 3px; font-size: 0.85em; }
+.discord-btn { width: 100%; background: #5865f2; margin-top: 1.25rem; }
+.discord-btn:active { background: #4752c4; }
+.login form { margin-top: 1rem; }
+.who { white-space: nowrap; }
+.owner-only { opacity: 0.6; }
+.owner-note { font-size: 0.75rem; color: var(--warn); }

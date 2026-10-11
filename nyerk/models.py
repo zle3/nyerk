@@ -55,6 +55,8 @@ class Settings(Base):
     shugo_url: Mapped[str] = mapped_column(String(255), default="https://shugo.gg/timers")
     shugo_region: Mapped[str] = mapped_column(String(64), default="NA East")
     admin_password_hash: Mapped[str] = mapped_column(String(255), default="")
+    # Owner switch: while on, admin-role holders get member access only.
+    admin_locked: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # First message in the roles channel. Blank posts no header.
     roles_header: Mapped[str] = mapped_column(
@@ -204,6 +206,8 @@ class BotState(Base):
     roles_gear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     # One-time data upgrades already applied, so deleting a seeded row sticks.
     upgrades_done: Mapped[list] = mapped_column(JSON, default=list)
+    # Bumped by "Sign everyone out"; sessions from an older epoch are dropped.
+    session_epoch: Mapped[int] = mapped_column(Integer, default=0)
     roles_class_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     roles_clear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     last_tick_at: Mapped[int] = mapped_column(BigInteger, default=0)

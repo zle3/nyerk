@@ -6,14 +6,22 @@
     <h1>Nyerk</h1>
     <p class="muted small">AION 2 timers, roles and party finder</p>
     {% for kind, text in flashes %}<div class="flash {{ kind }}" role="alert">{{ text }}</div>{% endfor %}
+    {% if discord_login %}
+      <a class="btn discord-btn" href="/auth/discord">Sign in with Discord</a>
+      <p class="small muted">Nyerk only sees your Discord name and ID, then checks your roles in the server.</p>
+    {% endif %}
+    {% if password_login %}
     <form method="post" action="/login">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="field">
-        <label for="password">Password</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+        <label for="password">{{ 'Owner password' if discord_login else 'Password' }}</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" {{ '' if discord_login else 'autofocus' }} required>
       </div>
-      <button class="btn" type="submit">Sign in</button>
+      <button class="btn {{ 'secondary' if discord_login }}" type="submit">Sign in</button>
     </form>
+    {% elif not discord_login %}
+      <p class="muted">Sign-in isn't available from here.</p>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
