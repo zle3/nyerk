@@ -44,6 +44,8 @@ class Settings(Base):
     dashboard_top_label: Mapped[str] = mapped_column(String(64), default="Server")
     dashboard_main_label: Mapped[str] = mapped_column(String(64), default="Upcoming events")
     oneoff_label: Mapped[str] = mapped_column(String(64), default="World Bosses")
+    # Small note under the World Bosses heading (the usual boss route); blank hides it.
+    dashboard_boss_note: Mapped[str] = mapped_column(String(300), default="Route: Gartua (Eternal Isle) > Lagta (Laborer's Rest Stop) > Kashapa (Ancient Zumion Temple Site) > Dartan (Beast Hunter Campsite)")
     # Dashboard buttons: "{name}" is the boss name.
     boss_button_label: Mapped[str] = mapped_column(String(80), default="{name} died")
     custom_button_label: Mapped[str] = mapped_column(String(80), default="Custom time")

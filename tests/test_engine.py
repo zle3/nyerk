@@ -122,7 +122,8 @@ def test_dashboard_layout(s):
     assert lines[5] == "### Upcoming events"
     assert [l.split(" starts")[0] for l in lines[6:9]] == ["Dimensional Invasion", "Shugo Festival", "Spacetime Rift"]
     assert lines[9] == "### World Bosses"
-    assert lines[10].startswith("Silent Dartan respawning")
+    assert lines[10].startswith("-# Route: Gartua (Eternal Isle) > Lagta")
+    assert lines[11].startswith("Silent Dartan respawning")
     assert lines[-2].startswith("💡 Type `/nyerk` for more") and lines[-3] == ""
     assert lines[-1].startswith("-# Times are in your own time zone")
     assert len(dash.bosses) == 5  # four bosses plus Custom time
@@ -133,6 +134,7 @@ def test_dashboard_blank_headings_fall_back_to_spacing(s):
     st.dashboard_title = st.dashboard_top_label = st.dashboard_main_label = st.oneoff_label = st.dashboard_footer = ""
     st.dashboard_divider = ""
     st.dashboard_commands_label = ""
+    st.dashboard_boss_note = ""
     dash = engine.build_dashboard(s, st, ny(2026, 10, 9, 12, 10))
     assert "#" not in dash.text
     assert dash.text.split("\n\n")[1].startswith("Dimensional Invasion")
@@ -253,3 +255,26 @@ def test_upgrade_renames_section_and_reorders_bosses_once(s):
     boss(s, "Silent Dartan").sort_order = -5  # admin reorders later
     upgrade_defaults(s)
     assert boss(s, "Silent Dartan").sort_order == -5
+
+
+def test_boss_route_note_shows_without_timers(s):
+    text = engine.build_dashboard(s, _settings(s), ny(2026, 10, 9, 12, 0)).text
+    assert "### World Bosses\n-# Route: Gartua (Eternal Isle) > Lagta (Laborer's Rest Stop) > Kashapa" in text
+    for name in ("Eternal Gartua", "High Commander Lagta", "Silent Dartan", "Soul Ruler Kashapa"):
+        boss(s, name).enabled = False
+    assert "World Bosses" not in engine.build_dashboard(s, _settings(s), ny(2026, 10, 9, 12, 0)).text
+
+
+def test_new_text_setting_with_apostrophe_reaches_old_databases(tmp_path):
+    import sqlite3
+    from nyerk import db
+    from nyerk.db import get_settings
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE settings (id INTEGER PRIMARY KEY, timer_channel_id BIGINT)")
+    con.execute("INSERT INTO settings (id, timer_channel_id) VALUES (1, 5)")
+    con.commit()
+    con.close()
+    db.init_engine(path)
+    with db.session() as s:
+        assert "(Laborer's Rest Stop)" in get_settings(s).dashboard_boss_note

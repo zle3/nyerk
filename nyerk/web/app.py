@@ -1223,6 +1223,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                 st.dashboard_top_label = str(data.get("dashboard_top_label", "")).strip()[:64]
                 st.dashboard_main_label = str(data.get("dashboard_main_label", "")).strip()[:64]
                 st.oneoff_label = str(data.get("oneoff_label", "")).strip()[:64]
+                st.dashboard_boss_note = str(data.get("dashboard_boss_note", "")).strip()[:300]
                 st.dashboard_footer = str(data.get("dashboard_footer", "")).strip()[:200]
                 st.link_preview_title = str(data.get("link_preview_title", "")).strip()[:100] or "Nyerk"
                 st.link_preview_description = str(data.get("link_preview_description", "")).strip()[:300]

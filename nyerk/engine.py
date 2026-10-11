@@ -303,10 +303,13 @@ def build_dashboard(s: Session, settings: Settings, now: int) -> Dashboard:
         sections.append((settings.dashboard_top_label, top))
     if main:
         sections.append((settings.dashboard_main_label, [line for _, line in sorted(main)]))
-    if oneoffs:
+    note = (settings.dashboard_boss_note or "").strip()
+    has_bosses = any(e.schedule_type == "kill_report" and e.enabled for e in events)
+    if oneoffs or (note and has_bosses):
         oneoffs.sort()
         cap = max(1, settings.dashboard_max_oneoffs)
-        lines = [line for _, line in oneoffs[:cap]]
+        lines = [f"-# {note}"] if note and has_bosses else []
+        lines += [line for _, line in oneoffs[:cap]]
         if len(oneoffs) > cap:
             lines.append(f"+{len(oneoffs) - cap} more")
         sections.append((settings.oneoff_label, lines))
