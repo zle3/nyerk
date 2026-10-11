@@ -3,6 +3,7 @@
 {% block content %}
 <h1>Settings</h1>
 <p class="lede">Applies on the next scheduler check, no restart needed.</p>
+<div class="actions"><a class="btn secondary small" href="/access">Access and security</a><a class="btn secondary small" href="/history">Change history</a></div>
 
 <form method="post" action="/settings">
   <input type="hidden" name="csrf" value="{{ csrf }}">

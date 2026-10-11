@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
+{% block title %}Access{% endblock %}
+{% block content %}
+<p><a href="/settings">‹ Settings</a></p>
+<h1>Access and security</h1>
+<p class="lede">Who can sign in and what they can do. Owners and admin roles are set in the env file, so nobody can grant themselves access from this page.</p>
+
+<div class="grid">
+  <div class="card stat"><span class="label">Public address</span><span class="value small mono">{{ cfg_public or 'not set (LAN only)' }}</span>
+    <span class="label">Discord sign-in {{ 'on' if discord_login else 'off' }} · password sign-in: {{ password_login }}</span></div>
+  <div class="card stat"><span class="label">Owners (OWNER_IDS)</span><span class="value small mono">{{ owner_ids | join(', ') or 'none: password only' }}</span></div>
+  <div class="card stat"><span class="label">Admin roles (ADMIN_ROLE_IDS)</span><span class="value small mono">{{ admin_role_ids | join(', ') or 'none' }}</span></div>
+</div>
+
+<p class="section-label">Emergency switches</p>
+<div class="card">
+  <form method="post" action="/access/lock" class="actions">
+    {{ csrf_field() }}
+    {% if locked %}
+      <span class="pill err">Admin access is locked</span>
+      <button class="btn" type="submit">Unlock admin access</button>
+    {% else %}
+      <input type="hidden" name="lock" value="1">
+      <button class="btn danger" type="submit">Lock admin access</button>
+      <span class="small muted">Admin-role holders drop to their own page until you unlock. Use this if an admin account looks compromised.</span>
+    {% endif %}
+  </form>
+  <form method="post" action="/access/signout-all" class="actions mt" data-confirm="Sign everyone out, including you?">
+    {{ csrf_field() }}
+    <button class="btn danger" type="submit">Sign everyone out</button>
+    <span class="small muted">Ends every web session right away. People sign in again with Discord.</span>
+  </form>
+</div>
+
+<p class="section-label">What each level can do</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Level</th><th>Can</th><th>Can't</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Owner</strong></td><td class="small">Everything</td><td class="small">–</td></tr>
+    <tr><td><strong>Admin</strong></td><td class="small">Events and alert toggles, boss timers and button order, maintenance, party finder content and panels, members, defaults, stats, logs, posting the roles channel</td><td class="small">Message wording, role IDs, roles channel setup, classes, Settings, export/import, history, this page. Limited to {{ 30 }} changes an hour.</td></tr>
+    <tr><td><strong>Member</strong></td><td class="small">Their own page: boss timers, classes and pings, gear score, quiet hours, registration and party</td><td class="small">Anything else</td></tr>
+  </tbody>
+</table></div>
+
+<p class="section-label">Recent sign-ins</p>
+{% set logs = logins %}{% include "_logs.html" %}
+{% endblock %}

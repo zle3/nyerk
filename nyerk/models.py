@@ -404,3 +404,19 @@ class MemberProfile(Base):
     updated_at: Mapped[int] = mapped_column(BigInteger, default=0)
 
     bracket: Mapped["PfBracket | None"] = relationship()
+
+
+class ConfigChange(Base):
+    """One saved change to Nyerk's configuration, with who made it and the
+    full settings export from just before, so it can be undone."""
+
+    __tablename__ = "config_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    at: Mapped[int] = mapped_column(BigInteger)
+    user_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    user_name: Mapped[str] = mapped_column(String(100), default="")
+    level: Mapped[str] = mapped_column(String(8), default="")
+    path: Mapped[str] = mapped_column(String(200), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    before: Mapped[dict] = mapped_column(JSON, default=dict)

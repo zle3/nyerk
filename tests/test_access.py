@@ -218,3 +218,78 @@ def test_every_route_requires_sign_in(app):
             assert resp.status_code == 303 and resp.headers["location"] == "/login", (method, r.path, resp.status_code)
             checked += 1
     assert checked > 60
+
+
+@pytest.mark.parametrize("text", ["JOIN https://x.co", "discord.gg/abc", "visit spam.com now", "hey @everyone",
+                                  "www.site", "dsc.gg/x", "free nitro at nitro.gift.xyz"])
+def test_filter_blocks_ads(text):
+    from nyerk import safety
+    assert safety.blocked_text(text)
+
+
+@pytest.mark.parametrize("text", ["Fire Temple", "Raid: Abyss", "{name} spawns in {minutes} minutes", "14:30",
+                                  "10 min ago", "1h 20m", "America/New_York", "💀 {name}", "e.g. fast clear"])
+def test_filter_allows_normal_text(text):
+    from nyerk import safety
+    assert not safety.blocked_text(text)
+
+
+def _event_form(c, eid, **extra):
+    with db.session() as s:
+        ev = s.get(Event, eid)
+        cat = ev.category_id
+    return {"csrf": csrf(c, f"/events/{eid}"), "name": "Shugo Festival", "category_id": cat,
+            "schedule_type": "hourly", "p_hourly_minute": "0", "p_hourly_tz": "America/New_York",
+            "enabled": "1", "dashboard": "main", **extra}
+
+
+def test_owner_cannot_save_links_either(app, monkeypatch):
+    c = sign_in(app, OWNER, monkeypatch)
+    with db.session() as s:
+        eid = s.scalar(select(Event).where(Event.name == "Shugo Festival")).id
+    r = c.post(f"/events/{eid}", data=_event_form(c, eid, slot_5_template="{name} — join discord.gg/x"))
+    assert "aren&#39;t allowed" in r.text or "aren't allowed" in r.text
+    with db.session() as s:
+        assert all("discord.gg" not in sl.template for sl in s.get(Event, eid).slots)
+
+
+def test_changes_are_recorded_and_restorable(app, monkeypatch):
+    from nyerk.models import ConfigChange
+    c = sign_in(app, ADMIN, monkeypatch)
+    with db.session() as s:
+        eid = s.scalar(select(Event).where(Event.name == "Shugo Festival")).id
+    c.post(f"/events/{eid}", data=_event_form(c, eid, slot_15_enabled="1", slot_5_enabled="1"))
+    with db.session() as s:
+        row = s.scalar(select(ConfigChange).order_by(ConfigChange.id.desc()))
+        assert row.user_id == ADMIN and row.level == "admin"
+        assert "events[Shugo Festival].slots[15].enabled: False → True" in row.summary
+        cid = row.id
+    owner = sign_in(app, OWNER, monkeypatch)
+    page = owner.get("/history").text
+    assert "user22" in page and "slots[15].enabled" in page
+    owner.post(f"/history/{cid}/restore", data={"csrf": csrf(owner, "/history")})
+    with db.session() as s:
+        assert not {sl.lead_minutes: sl.enabled for sl in s.get(Event, eid).slots}[15]
+
+
+def test_admin_change_limit(app, monkeypatch):
+    from nyerk.web import app as webapp_module
+    monkeypatch.setattr(webapp_module, "ADMIN_CHANGES_PER_HOUR", 2)
+    c = sign_in(app, ADMIN, monkeypatch)
+    with db.session() as s:
+        eid = s.scalar(select(Event).where(Event.name == "Shugo Festival")).id
+    codes = [c.post(f"/events/{eid}", data=_event_form(c, eid)).status_code for _ in range(3)]
+    assert codes[-1] == 429
+
+
+def test_owner_switches(app, monkeypatch):
+    admin = sign_in(app, ADMIN, monkeypatch)
+    assert admin.get("/access").status_code == 403 and admin.get("/history").status_code == 403
+    owner = sign_in(app, OWNER, monkeypatch)
+    assert "Lock admin access" in owner.get("/access").text
+    owner.post("/access/lock", data={"csrf": csrf(owner, "/access"), "lock": "1"})
+    assert admin.get("/events").status_code == 403
+    owner.post("/access/lock", data={"csrf": csrf(owner, "/access")})
+    assert admin.get("/events").status_code == 200
+    owner.post("/access/signout-all", data={"csrf": csrf(owner, "/access")})
+    assert admin.get("/me", follow_redirects=False).status_code == 303

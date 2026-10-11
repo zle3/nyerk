@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Change history{% endblock %}
+{% block content %}
+<p><a href="/settings">‹ Settings</a></p>
+<h1>Change history</h1>
+<p class="lede">Every change to Nyerk's configuration, newest first, with who made it. Restore puts every setting back to how it was just before that change; rows added since then are kept. The last 300 changes are kept.</p>
+<div class="list">
+{% for c in items %}
+  <div class="row">
+    <div class="grow">
+      <div class="title"><time data-ts="{{ c.at }}" data-style="f"></time> · {{ c.who or 'unknown' }} <span class="pill {{ 'accent' if c.level == 'owner' else '' }}">{{ c.level }}</span> <span class="small muted mono">{{ c.path }}</span></div>
+      <div class="sub mono small">{% for l in c.lines[:8] %}{{ l }}<br>{% endfor %}{% if c.lines | length > 8 %}… {{ c.lines | length - 8 }} more{% endif %}</div>
+    </div>
+    <form method="post" action="/history/{{ c.id }}/restore" class="inline-form" data-confirm="Put every setting back to how it was before this change?">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn small secondary" type="submit">Restore before this</button>
+    </form>
+  </div>
+{% else %}
+  <div class="row"><span class="muted">No changes recorded yet.</span></div>
+{% endfor %}
+</div>
+{% endblock %}

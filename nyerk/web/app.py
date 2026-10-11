@@ -23,13 +23,13 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import auth
 from . import security as websecurity
 
-from .. import db, engine, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
+from .. import db, engine, history, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus
 from ..models import (
     AlertSlot, Category, Event, LogEntry, PfBracket, PfClass, PfContent, PfInterest, PfParty, PfWindow,
-    QuietHours, ReactionGroup, RoleHolder, UserTimer,
+    ConfigChange, QuietHours, ReactionGroup, RoleHolder, UserTimer,
 )
 from ..seed import make_slots, NONE
 
@@ -81,11 +81,48 @@ class Forbidden(Exception):
     pass
 
 
+class BlockedText(Exception):
+    pass
+
+
+# Form fields the link/invite filter skips: secrets, the import file and search.
+UNFILTERED_FIELDS = {"csrf", "password", "current", "new", "confirm", "shugo_url", "raw", "file", "q"}
+AUDIT_SKIP = ("/me", "/login", "/logout", "/auth")
+ADMIN_CHANGES_PER_HOUR = 30
+
+
 def create_app(cfg, bot=None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     safety.protect_guild(cfg.guild_id)
     app.state.bot = bot
     app.state.fails: dict[str, tuple[int, float]] = {}
+    @app.middleware("http")
+    async def _audit(request: Request, call_next):
+        """Record every configuration change by an admin or owner (with the
+        settings from just before, for undo) and cap how fast admins can
+        change things."""
+        user = request.session.get("user") if "session" in request.scope else None
+        path = request.url.path
+        if request.method != "POST" or not user or user.get("level") not in ("admin", "owner") \
+                or any(path == p or path.startswith(p + "/") for p in AUDIT_SKIP):
+            return await call_next(request)
+        if user["level"] == "admin" and not app.state.limiter.allow(
+                str(user["uid"]), "admin-changes", ADMIN_CHANGES_PER_HOUR, 3600):
+            bus.warn("admin", f"{user['name']} hit the admin change limit ({ADMIN_CHANGES_PER_HOUR}/hour).")
+            from starlette.responses import PlainTextResponse
+            return PlainTextResponse("Too many changes this hour. Ask the owner if you need more.", status_code=429)
+        with db.session() as s:
+            before = history.snapshot(s)
+        response = await call_next(request)
+        with db.session() as s:
+            lines = history.diff(before, history.snapshot(s))
+            if lines:
+                history.record(s, int(time.time()), user, path, before, lines)
+        if lines:
+            more = f" (+{len(lines) - 3} more)" if len(lines) > 3 else ""
+            bus.info("config", f"{user['name']} ({user['level']}) changed: " + "; ".join(lines[:3]) + more)
+        return response
+
     @app.middleware("http")
     async def _user(request: Request, call_next):
         """Keep the signed-in user current: drop sessions from before a
@@ -107,11 +144,15 @@ def create_app(cfg, bot=None) -> FastAPI:
                     user = None
                 else:
                     name, roles = found or (user["name"], set())
-                    user.update(name=name, level=auth.level_for(user["uid"], roles, cfg, locked),
+                    user.update(name=name, role_level=auth.level_for(user["uid"], roles, cfg, False),
                                 checked=int(time.time()))
-                    request.session["user"] = user
-            elif user["level"] == "admin" and locked:
-                user["level"] = "member"
+            if user:
+                # The admin lock applies on top of what the roles give, so
+                # locking and unlocking both take effect immediately.
+                base = user.get("role_level", user["level"])
+                effective = "member" if base == "admin" and locked else base
+                if user.get("role_level") != base or user["level"] != effective:
+                    user.update(role_level=base, level=effective)
                 request.session["user"] = user
         request.state.user = user
         return await call_next(request)
@@ -126,6 +167,14 @@ def create_app(cfg, bot=None) -> FastAPI:
     @app.exception_handler(Login)
     async def _to_login(request: Request, exc: Login):
         return RedirectResponse("/login", status_code=303)
+
+    @app.exception_handler(BlockedText)
+    async def _blocked(request: Request, exc: BlockedText):
+        flash(request, str(exc), "err")
+        ref = request.headers.get("referer") or "/"
+        from urllib.parse import urlsplit
+        target = urlsplit(ref).path or "/"
+        return RedirectResponse(target if target.startswith("/") else "/", status_code=303)
 
     @app.exception_handler(Forbidden)
     async def _forbidden(request: Request, exc: Forbidden):
@@ -164,6 +213,14 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await request.form()
         if not secrets.compare_digest(str(data.get("csrf", "")), request.session.get("csrf", "-")):
             raise HTTPException(400, "Form expired, go back and reload the page.")
+        for key, value in data.multi_items():
+            if key not in UNFILTERED_FIELDS and isinstance(value, str):
+                bad = safety.blocked_text(value)
+                if bad:
+                    bus.warn("admin", f"Blocked text from {(current(request) or {}).get('name', '?')} on "
+                                      f"{request.url.path}: {bad!r}")
+                    raise BlockedText(f"Nothing saved: links, invites and @everyone/@here aren't allowed "
+                                      f"in Nyerk text (found {bad!r}).")
         return data
 
     def flash(request: Request, text: str, kind: str = "ok") -> None:
@@ -267,10 +324,12 @@ def create_app(cfg, bot=None) -> FastAPI:
         name, roles = found or (name, set())
         with db.session() as s:
             locked = get_settings(s).admin_locked
+        role_level = auth.level_for(uid, roles, cfg, False)
         level = auth.level_for(uid, roles, cfg, locked)
         after = request.session.get("after_login", "")
         request.session.clear()
         user = auth.new_session(uid, name, level, "discord", epoch_now())
+        user["role_level"] = role_level
         request.session.update(user=user, csrf=secrets.token_urlsafe(32))
         bus.info("admin", f"{name} signed in with Discord as {level}.", discord=level != "member")
         return back(after if after.startswith("/") and level != "member" else landing(user))
@@ -300,6 +359,63 @@ def create_app(cfg, bot=None) -> FastAPI:
         refresh(repost=True)
         flash(request, "Dashboard will be reposted in a moment." if app.state.bot else "Bot is not running.")
         return back("/")
+
+    # -- owner: change history and access ---------------------------------------------------
+
+    @app.get("/history", response_class=HTMLResponse)
+    async def history_page(request: Request):
+        require(request)
+        with db.session() as s:
+            rows = list(s.scalars(select(ConfigChange).order_by(ConfigChange.id.desc()).limit(200)))
+            items = [dict(id=r.id, at=r.at, who=r.user_name, level=r.level, path=r.path,
+                          lines=r.summary.splitlines()) for r in rows]
+        return render(request, "history.html", items=items)
+
+    @app.post("/history/{cid}/restore")
+    async def history_restore(request: Request, cid: int):
+        await form(request)
+        try:
+            with db.session() as s:
+                lines = history.restore(s, cid)
+        except (ValueError, transfer.ImportError_) as exc:
+            flash(request, str(exc), "err")
+            return back("/history")
+        refresh(repost=True)
+        flash(request, f"Restored the settings from before change #{cid} ({len(lines)} value(s) changed back). "
+                       "Rows added since then were kept.")
+        return back("/history")
+
+    @app.get("/access", response_class=HTMLResponse)
+    async def access_page(request: Request):
+        require(request)
+        with db.session() as s:
+            locked = get_settings(s).admin_locked
+            logins = list(s.scalars(select(LogEntry).where(LogEntry.kind == "admin", LogEntry.text.like("% signed in%"))
+                                    .order_by(LogEntry.id.desc()).limit(30)))
+        return render(request, "access.html", locked=locked, logins=logins, cfg_public=cfg.public_url,
+                      discord_login=cfg.discord_login, owner_ids=sorted(cfg.owner_ids),
+                      admin_role_ids=sorted(cfg.admin_role_ids), password_login=cfg.password_login)
+
+    @app.post("/access/lock")
+    async def access_lock(request: Request):
+        data = await form(request)
+        lock = bool(data.get("lock"))
+        with db.session() as s:
+            get_settings(s).admin_locked = lock
+        bus.warn("admin", "Admin access LOCKED by the owner." if lock else "Admin access unlocked by the owner.")
+        flash(request, "Admin access locked: admin-role holders now only see their own page." if lock
+              else "Admin access unlocked.")
+        return back("/access")
+
+    @app.post("/access/signout-all")
+    async def access_signout_all(request: Request):
+        await form(request)
+        with db.session() as s:
+            st = get_state(s)
+            st.session_epoch = (st.session_epoch or 0) + 1
+        bus.warn("admin", "The owner signed everyone out of the web page.")
+        request.session.clear()
+        return back("/login")
 
     # -- member self-service (/me) -------------------------------------------------------
 
