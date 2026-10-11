@@ -222,6 +222,7 @@ Import merges: rows are matched by name, and anything missing from the file is l
 
 - **Restarts:** alerts whose send time passed while Nyerk was down are skipped and logged to #logs. They are not sent late. The `sent_messages` ledger prevents double posts after a restart.
 - **Kill reports:** a report with no time assumes the kill happened 1 minute ago (the report offset, editable in Settings). A `respawns_in` report uses the remaining time exactly as given. Warnings that are already in the past when a timer is reported are skipped silently.
+- **Alert cleanup:** alert messages are deleted 2 hours after their event starts (or the boss spawns), so the timer channel only shows what's current. Change it in Settings → **Delete alerts after**; alerts under an hour old are always kept.
 - **Re-reporting a boss:** one active timer per boss. Reporting a boss you already reported replaces your timer. If someone else reported it, you get a private warning with **Override their timer** or **Keep theirs**; overrides replace their timer and are logged to #logs with both names.
 - **Time zones:** each event stores its own time zone. Game events keep their New York hour, while resets and maintenance stay pinned to UTC, so their New York time moves an hour earlier on November 1. Tests cover both cases.
 - **Maintenance overrides:** an override replaces one week's regular window. Emergency windows are added on top of the regular schedule.

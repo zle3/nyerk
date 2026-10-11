@@ -347,23 +347,14 @@ def build_dashboard(s: Session, settings: Settings, now: int) -> Dashboard:
 CLEANUP_MIN_AGE = 3600  # never clean up an alert younger than this
 
 
-def messages_to_delete(s: Session, keep: int, now: int | None = None) -> list[SentMessage]:
-    """Alert messages beyond the `keep` most recent occurrences per event.
-    A world boss kill report counts as one occurrence (keyed by timer).
+def messages_to_delete(s: Session, retention_min: int, now: int) -> list[SentMessage]:
+    """Alert messages whose event is more than `retention_min` minutes in
+    the past (scheduled events: the start time; boss timers: the spawn time).
     Alerts sent within the last hour are never returned, as a safety net."""
-    rows = list(
-        s.scalars(
-            select(SentMessage).where(SentMessage.message_id.is_not(None), SentMessage.deleted.is_(False))
+    cutoff = now - max(1, retention_min) * 60
+    return list(s.scalars(
+        select(SentMessage).where(
+            SentMessage.message_id.is_not(None), SentMessage.deleted.is_(False),
+            SentMessage.occurrence_at <= cutoff, SentMessage.sent_at <= now - CLEANUP_MIN_AGE,
         )
-    )
-    by_event: dict[int, dict[tuple[int, int], list[SentMessage]]] = {}
-    for r in rows:
-        by_event.setdefault(r.event_id, {}).setdefault((r.timer_id, r.occurrence_at), []).append(r)
-    doomed: list[SentMessage] = []
-    for groups in by_event.values():
-        keys = sorted(groups, key=lambda k: k[1], reverse=True)
-        for k in keys[max(1, keep):]:
-            doomed.extend(groups[k])
-    if now is not None:
-        doomed = [r for r in doomed if r.sent_at <= now - CLEANUP_MIN_AGE]
-    return doomed
+    ))

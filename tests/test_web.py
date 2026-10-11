@@ -128,7 +128,7 @@ def test_maintenance_override_and_cancel_timer(client):
 def test_settings_validation(client):
     csrf = _csrf(client)
     base = {"csrf": csrf, "timer_channel_id": "111111111111111111", "roles_channel_id": "", "log_channel_id": "",
-            "user_timer_limit": "7", "report_offset_min": "5", "keep_occurrences": "2",
+            "user_timer_limit": "7", "report_offset_min": "5", "alert_retention_min": "120",
             "dashboard_max_oneoffs": "20", "default_tz": "America/New_York", "time_style_near": "t",
             "time_style_far": "f", "oneoff_label": "One-offs", "shugo_url": "https://shugo.gg/timers",
             "shugo_region": "NA East", "party_lifetime_min": "60", "party_warn_min": "10",

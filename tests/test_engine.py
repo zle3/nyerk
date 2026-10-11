@@ -157,13 +157,16 @@ def test_maintenance_override_replaces_week(s):
     assert len(occ) == 1 and occ[0].duration_min == 60 and occ[0].at != regular
 
 
-def test_cleanup_keeps_two_occurrences(s):
-    for i, occ in enumerate([100, 200, 300]):
-        s.add(SentMessage(message_id=1000 + i, event_id=7, occurrence_at=occ, slot=5, sent_at=occ))
+def test_cleanup_deletes_alerts_two_hours_after_the_event(s):
+    now = 100_000
+    rows = [(1000, now - 2 * 3600 - 60, now - 3 * 3600),   # event 2 h 1 m ago: delete
+            (1001, now - 2 * 3600 + 60, now - 3 * 3600),   # 1 h 59 m ago: keep
+            (1002, now + 600, now - 60)]                   # upcoming event: keep
+    for mid, occ, sent in rows:
+        s.add(SentMessage(message_id=mid, event_id=7, occurrence_at=occ, slot=5, sent_at=sent))
     s.flush()
-    doomed = engine.messages_to_delete(s, keep=2)
-    assert [d.message_id for d in doomed] == [1000]
-
+    assert [d.message_id for d in engine.messages_to_delete(s, 120, now)] == [1000]
+    assert [d.message_id for d in engine.messages_to_delete(s, 30, now)] == [1000, 1001]
 
 def _settings(s):
     from nyerk.db import get_settings
@@ -171,12 +174,10 @@ def _settings(s):
 
 
 def test_cleanup_never_touches_recent_alerts(s):
-    for i, occ in enumerate([100, 200, 300]):
-        s.add(SentMessage(message_id=2000 + i, event_id=8, occurrence_at=occ, slot=5, sent_at=10_000 + i))
+    s.add(SentMessage(message_id=2000, event_id=8, occurrence_at=100, slot=5, sent_at=10_000))
     s.flush()
-    assert engine.messages_to_delete(s, keep=1, now=10_100) == []           # all younger than an hour
-    assert [m.message_id for m in engine.messages_to_delete(s, keep=1, now=20_000)] == [2001, 2000]
-
+    assert engine.messages_to_delete(s, 30, now=10_100) == []      # sent under an hour ago
+    assert [m.message_id for m in engine.messages_to_delete(s, 30, now=20_000)] == [2000]
 
 def test_upgrade_adds_text_columns_with_real_newlines(tmp_path):
     import sqlite3

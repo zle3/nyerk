@@ -458,7 +458,7 @@ class NyerkBot(discord.Client):
                     to_send.append((d.occ.event.id, d.occ.event.name, d.occ.timer_id, d.occ.at,
                                     d.slot.lead_minutes, content, role_id))
             channel_id = settings.timer_channel_id
-            keep = settings.keep_occurrences
+            retention = settings.alert_retention_min
 
         if skipped:
             head = f"Skipped {len(skipped)} missed alert(s): "
@@ -496,7 +496,7 @@ class NyerkBot(discord.Client):
             doomed = [(m.id, m.channel_id, m.message_id,
                        f"{names.get(m.event_id, f'event {m.event_id}')} {_slot_name(m.slot)} alert "
                        f"for {engine.ts(m.occurrence_at, 'f')}")
-                      for m in engine.messages_to_delete(s, keep, t)]
+                      for m in engine.messages_to_delete(s, retention, t)]
 
         await self._cleanup(doomed)
         repost = posted > 0 or self._force_repost
@@ -520,8 +520,8 @@ class NyerkBot(discord.Client):
             if channel is not None:
                 try:
                     await channel.get_partial_message(message_id).delete()
-                    bus.info("cleanup", f"Deleted {what} (message {message_id}): older than the last "
-                                        f"occurrences kept.", discord=False)
+                    bus.info("cleanup", f"Deleted {what} (message {message_id}): event ended over the "
+                                        f"retention time.", discord=False)
                 except discord.NotFound:
                     pass
                 except discord.HTTPException as exc:

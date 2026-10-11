@@ -28,7 +28,9 @@ class Settings(Base):
     default_tz: Mapped[str] = mapped_column(String(64), default="America/New_York")
     user_timer_limit: Mapped[int] = mapped_column(Integer, default=10)
     report_offset_min: Mapped[int] = mapped_column(Integer, default=1)
-    keep_occurrences: Mapped[int] = mapped_column(Integer, default=2)
+    keep_occurrences: Mapped[int] = mapped_column(Integer, default=2)  # no longer used
+    # Delete alert messages this long after their event's start / spawn time.
+    alert_retention_min: Mapped[int] = mapped_column(Integer, default=120)
     # Max one-off lines on the dashboard before "+N more".
     dashboard_max_oneoffs: Mapped[int] = mapped_column(Integer, default=20)
     # Discord timestamp styles for dashboard lines inside / beyond 24 hours.

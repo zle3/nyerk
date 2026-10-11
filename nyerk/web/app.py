@@ -812,7 +812,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                 for key in ("timer_channel_id", "roles_channel_id", "log_channel_id", "party_channel_id"):
                     setattr(st, key, _snowflake(data.get(key)))
                 for key, lo, hi in (("user_timer_limit", 1, 100), ("report_offset_min", 0, 120),
-                                    ("keep_occurrences", 1, 50), ("dashboard_max_oneoffs", 1, 60),
+                                    ("alert_retention_min", 30, 10080), ("dashboard_max_oneoffs", 1, 60),
                                     ("party_lifetime_min", 5, 720), ("party_warn_min", 1, 120),
                                     ("party_extend_min", 5, 720), ("party_max_extensions", 0, 10),
                                     ("party_status_hold_min", 5, 1440), ("party_ping_gap_min", 0, 240)):

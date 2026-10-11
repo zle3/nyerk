@@ -23,7 +23,7 @@
 
   <p class="section-label">Dashboard and cleanup</p>
   <div class="card fields">
-    <div class="field"><label for="keep_occurrences">Keep alerts for the last N occurrences</label><input id="keep_occurrences" name="keep_occurrences" type="number" min="1" max="50" value="{{ st.keep_occurrences }}"></div>
+    <div class="field"><label for="alert_retention_min">Delete alerts after (minutes)</label><input id="alert_retention_min" name="alert_retention_min" type="number" min="30" max="10080" value="{{ st.alert_retention_min }}"><div class="help">Counted from the event's start time, or a boss's spawn time. 120 = 2 hours. Alerts under an hour old are always kept.</div></div>
     <div class="field"><label for="dashboard_max_oneoffs">Max one-off lines</label><input id="dashboard_max_oneoffs" name="dashboard_max_oneoffs" type="number" min="1" max="60" value="{{ st.dashboard_max_oneoffs }}"></div>
     <div class="field"><label for="dashboard_divider">Divider line</label><input id="dashboard_divider" name="dashboard_divider" type="text" maxlength="100" value="{{ st.dashboard_divider }}"><div class="help">Sits above the title to separate the dashboard from alerts. Blank hides it.</div></div>
     <div class="field"><label for="dashboard_title">Title</label><input id="dashboard_title" name="dashboard_title" type="text" maxlength="100" value="{{ st.dashboard_title }}"><div class="help">Large heading. Blank hides it.</div></div>
