@@ -12,6 +12,7 @@
 - An interest list that pings registered members when a matching party opens.
 - 5 or 20 person party listings with join, leave, kick, extend, and a shared party status message.
 - **Quiet hours**: members pick a daily window (in their own time zone) when their dungeon ping roles are paused, then given back.
+- A **Members** page to manage one person in one place: their class and ping roles, quiet hours, boss timers, registration and party.
 - A **Stats** page: class distribution, content demand, party activity by day and hour, and the most active members.
 
 ## Screenshots

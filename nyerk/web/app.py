@@ -20,7 +20,7 @@ from markupsafe import Markup, escape
 from sqlalchemy import func, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from .. import db, engine, party, quiet, reaction_roles, schedules, shugo, stats, timers, transfer
+from .. import db, engine, members, party, quiet, reaction_roles, schedules, shugo, stats, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus
@@ -184,6 +184,137 @@ def create_app(cfg, bot=None) -> FastAPI:
         refresh(repost=True)
         flash(request, "Dashboard will be reposted in a moment." if app.state.bot else "Bot is not running.")
         return back("/")
+
+    # -- members -----------------------------------------------------------------------
+
+    def _bot_ready():
+        bot = app.state.bot
+        return bot if bot and bot.is_ready() else None
+
+    @app.get("/members", response_class=HTMLResponse)
+    async def members_page(request: Request, q: str = ""):
+        require(request)
+        with db.session() as s:
+            rows = members.known(s, q)
+        lookup = q.strip() if re.fullmatch(r"\d{15,21}", q.strip()) else ""
+        return render(request, "members.html", rows=rows, q=q, lookup=lookup)
+
+    @app.get("/members/{uid}", response_class=HTMLResponse)
+    async def member_page(request: Request, uid: int):
+        require(request)
+        bot = _bot_ready()
+        live = await bot.fetch_member(uid) if bot else None
+        with db.session() as s:
+            info = members.detail(s, uid)
+            options = members.role_options(s)
+            default_tz = get_settings(s).default_tz
+        if live is None and bot is not None and not info["name"]:
+            flash(request, f"No member with ID {uid} in the server.", "err")
+            return back("/members")
+        held = live[1] if live else info["tracked"]
+        info["member_name"] = live[0] if live else (info.pop("name") or f"User {uid}")
+        info.pop("name", None)
+        return render(request, "member.html", uid=uid, live=live is not None, held=held,
+                      options=options, zones=quiet.ZONES, default_tz=default_tz,
+                      hours=[(h, quiet.hour_label(h)) for h in range(24)], **info)
+
+    @app.post("/members/{uid}/roles")
+    async def member_roles(request: Request, uid: int):
+        data = await form(request)
+        bot = _bot_ready()
+        if bot is None:
+            flash(request, "The bot must be connected to change roles.", "err")
+            return back(f"/members/{uid}")
+        live = await bot.fetch_member(uid)
+        if live is None:
+            flash(request, "That member isn't in the server.", "err")
+            return back(f"/members/{uid}")
+        name, held = live
+        chosen = {int(v) for v in data.getlist("role") if str(v).isdigit()}
+        with db.session() as s:
+            add, remove, hold = members.plan_roles(s, uid, held, chosen)
+            labels = {o.role_id: o.label for o in members.role_options(s)}
+        errors = await bot.admin_apply_roles(uid, add, remove)
+        with db.session() as s:
+            members.record(s, uid, name, chosen, hold)
+        changed = [f"+{labels.get(r, 'type role')}" for r in add] + [f"-{labels.get(r, 'type role')}" for r in remove]
+        changed += [f"+{labels[r]} (paused for quiet hours)" for r in hold if r not in held and r in labels]
+        if changed:
+            bus.info("admin", f"Roles for {name} changed by admin: {', '.join(changed)}.")
+        if errors:
+            flash(request, "Some changes failed: " + "; ".join(errors), "err")
+        else:
+            flash(request, f"Saved roles for {name}." if changed else "No changes.")
+        return back(f"/members/{uid}")
+
+    @app.post("/members/{uid}/quiet")
+    async def member_quiet(request: Request, uid: int):
+        data = await form(request)
+        bot = _bot_ready()
+        live = await bot.fetch_member(uid) if bot else None
+        try:
+            with db.session() as s:
+                if data.get("enabled"):
+                    name = live[0] if live else (members.detail(s, uid)["name"] or f"User {uid}")
+                    q = quiet.set_hours(s, uid, name, _int(data, "start", 23, 0, 23), _int(data, "end", 7, 0, 23),
+                                        str(data.get("tz", "UTC")), live[1] if live else set())
+                    msg = f"Quiet hours for {name}: {quiet.window_text(q)}."
+                else:
+                    q = quiet.turn_off(s, uid)
+                    msg = "Quiet hours turned off." if q else "No quiet hours to turn off."
+        except ValueError as exc:
+            flash(request, str(exc), "err")
+            return back(f"/members/{uid}#quiet")
+        bus.info("admin", f"{msg} (admin, member {uid})")
+        if bot:
+            await bot.apply_quiet_hours(only=uid)
+        flash(request, msg)
+        return back(f"/members/{uid}#quiet")
+
+    @app.post("/members/{uid}/timers/{tid}/cancel")
+    async def member_timer_cancel(request: Request, uid: int, tid: int):
+        await form(request)
+        with db.session() as s:
+            t = s.get(UserTimer, tid)
+            if t is None or t.user_id != uid:
+                raise HTTPException(404)
+            result = timers.cancel(t, "admin")
+        if result.ok:
+            bus.info("timer", result.log)
+            refresh()
+        flash(request, result.reply.replace("your ", ""), "ok" if result.ok else "err")
+        return back(f"/members/{uid}#activity")
+
+    @app.post("/members/{uid}/registration/cancel")
+    async def member_registration_cancel(request: Request, uid: int):
+        await form(request)
+        with db.session() as s:
+            row = party.cancel_registration(s, uid)
+            name = row.user_name if row else ""
+        if row:
+            bus.info("party", f"Registration of {name} cancelled by admin.")
+            refresh()
+        flash(request, "Registration cancelled." if row else "No active registration.")
+        return back(f"/members/{uid}#activity")
+
+    @app.post("/members/{uid}/party/remove")
+    async def member_party_remove(request: Request, uid: int):
+        await form(request)
+        try:
+            with db.session() as s:
+                p = party.live_party_for(s, uid)
+                if p is None:
+                    raise party.PartyError("Not in a party.")
+                title = party.party_title(p)
+                name = next((m.user_name for m in p.members if m.user_id == uid), str(uid))
+                party.remove_member(s, p, uid, int(time.time()))
+        except party.PartyError as exc:
+            flash(request, str(exc), "err")
+            return back(f"/members/{uid}#activity")
+        bus.info("party", f"{name} removed from {title} by admin.")
+        refresh()
+        flash(request, f"Removed from {title}. The listing updates within 30 seconds.")
+        return back(f"/members/{uid}#activity")
 
     @app.get("/stats", response_class=HTMLResponse)
     async def stats_page(request: Request, range: str = "30"):

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Members{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Members</h1>
+    <p class="lede">Everyone Nyerk has seen through class picks, ping reactions, quiet hours, boss reports, registrations or parties. Open a member to change their roles, quiet hours and activity.</p>
+  </div>
+</div>
+<form method="get" action="/members" class="card inline">
+  <input type="text" name="q" value="{{ q }}" placeholder="Name or Discord user ID" aria-label="Search members" autofocus>
+  <button class="btn" type="submit">Search</button>
+  {% if q %}<a class="btn plain" href="/members">Clear</a>{% endif %}
+</form>
+{% if lookup and not rows %}
+<div class="card"><p>Nyerk hasn't seen user {{ lookup }} yet. <a href="/members/{{ lookup }}">Open them anyway</a> to set roles or quiet hours.</p></div>
+{% endif %}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Member</th><th>Classes</th><th>Pings</th><th>Quiet hours</th><th>Activity</th><th></th></tr></thead>
+  <tbody>
+  {% for m in rows %}
+    <tr>
+      <td><a href="/members/{{ m.user_id }}"><strong>{{ m.name }}</strong></a><br><span class="small muted mono">{{ m.user_id }}</span></td>
+      <td class="small">{{ m.classes | join(', ') or '–' }}</td>
+      <td class="num">{{ m.pings or '–' }}</td>
+      <td>{% if m.quiet == 'quiet now' %}<span class="pill accent">quiet now</span>{% elif m.quiet %}<span class="pill">on</span>{% else %}<span class="muted">–</span>{% endif %}</td>
+      <td class="small">
+        {% if m.timers %}<span class="pill">{{ m.timers }} timer{{ 's' if m.timers != 1 }}</span>{% endif %}
+        {% if m.registered %}<span class="pill ok">registered</span>{% endif %}
+        {% if m.in_party %}<span class="pill accent">in {{ m.in_party }}</span>{% endif %}
+      </td>
+      <td><a class="btn small secondary" href="/members/{{ m.user_id }}">Manage</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">{{ 'No match.' if q else 'Nobody yet. Members appear once they use Nyerk.' }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

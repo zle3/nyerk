@@ -449,3 +449,7 @@ td > .order-input { width: 5rem; }
 .heat-key .l3 { background: color-mix(in oklab, var(--accent) 56%, var(--surface)); }
 .heat-key .l5 { background: var(--accent); }
 .grid.tiles { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.625rem 1rem; }
+/* 12 tabs: tighter pills so the whole menu fits on a laptop screen */
+.nav a { padding: 0.375rem 0.5rem; font-size: 0.8125rem; }
+.topbar-inner { gap: 0.75rem; max-width: 1180px; }

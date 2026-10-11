@@ -672,6 +672,35 @@ class NyerkBot(discord.Client):
             bus.info("roles", f"Created dungeon role {name} ({role.id}).")
         return made
 
+    async def fetch_member(self, user_id: int) -> tuple[str, set[int]] | None:
+        """Display name and role IDs for one member, straight from Discord.
+        Uses a normal API lookup, so no privileged intent is needed."""
+        guild = self._guild()
+        if guild is None:
+            return None
+        try:
+            m = guild.get_member(user_id) or await guild.fetch_member(user_id)
+        except discord.NotFound:
+            return None
+        return m.display_name, {r.id for r in m.roles}
+
+    async def admin_apply_roles(self, user_id: int, add: set[int], remove: set[int]) -> list[str]:
+        """Add and remove roles for one member; returns error lines."""
+        guild = self._guild()
+        if guild is None:
+            return ["Not connected to the server."]
+        errors = []
+        for rid, adding in [(r, False) for r in remove] + [(r, True) for r in add]:
+            try:
+                if adding:
+                    await self.http.add_role(guild.id, user_id, rid, reason="Nyerk admin: member page")
+                else:
+                    await self.http.remove_role(guild.id, user_id, rid, reason="Nyerk admin: member page")
+            except discord.HTTPException as exc:
+                role = guild.get_role(rid)
+                errors.append(f"{'Add' if adding else 'Remove'} {role.name if role else rid}: {exc.text or exc}")
+        return errors
+
     async def show_my_roles(self, interaction: discord.Interaction) -> None:
         """Private overview: classes, ping roles, quiet hours, registration."""
         member = interaction.user
