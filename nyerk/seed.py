@@ -18,12 +18,17 @@ ALL_PING = ((True, True), (True, True), (True, True))
 FIVE_ONLY = ((False, False), (True, False), (False, False))
 NONE = ((False, False), (False, False), (False, False))
 
-BOSSES = [  # also the dashboard button order
-    ("Eternal Gartua", "Isle of Eternity", 12 * 60),
-    ("High Commander Lagta", "Red Forest", 12 * 60),
-    ("Silent Dartan", "Artamia Plateau South", 6 * 60),
-    ("Soul Ruler Kashapa", "Artamia Plateau East", 6 * 60),
+BOSSES = [  # the usual route, which is also the dashboard button order
+    ("Eternal Gartua", "Eternal Isle", 12 * 60),
+    ("High Commander Lagta", "Laborer's Rest Stop", 12 * 60),
+    ("Soul Ruler Kashapa", "Ancient Zumion Temple Site", 6 * 60),
+    ("Silent Dartan", "Beast Hunter Campsite", 6 * 60),
 ]
+# Locations first shipped, so the route update only replaces untouched ones.
+OLD_BOSS_LOCATIONS = {
+    "Eternal Gartua": "Isle of Eternity", "High Commander Lagta": "Red Forest",
+    "Soul Ruler Kashapa": "Artamia Plateau East", "Silent Dartan": "Artamia Plateau South",
+}
 BOSS_ORDER = [name for name, _, _ in BOSSES]
 
 SCHEDULED = [
@@ -121,6 +126,20 @@ def upgrade_defaults(s: Session) -> list[str]:
                 e.sort_order = i
             done.append("boss button order")
         applied.append("boss_order_gartua_first")
+        state.upgrades_done = applied
+    if "boss_route_2026_10_11" not in applied:
+        bosses = {e.name: e for e in s.scalars(select(Event).where(Event.schedule_type == "kill_report"))}
+        if bosses:
+            locations = {name: loc for name, loc, _ in BOSSES}
+            for name, e in bosses.items():
+                if name in OLD_BOSS_LOCATIONS and e.location == OLD_BOSS_LOCATIONS[name]:
+                    e.location = locations[name]
+            ordered = [bosses[n] for n in BOSS_ORDER if n in bosses]
+            ordered += sorted((e for n, e in bosses.items() if n not in BOSS_ORDER), key=lambda e: e.sort_order)
+            for i, e in enumerate(ordered):
+                e.sort_order = i
+            done.append("boss route order and locations")
+        applied.append("boss_route_2026_10_11")
         state.upgrades_done = applied
     if st.dashboard_commands_label == "Commands":  # was a heading over a command list
         st.dashboard_commands_label = "💡 Type `/nyerk` for more: report a kill with a custom time, and see, edit or cancel your timers."

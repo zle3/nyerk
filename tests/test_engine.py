@@ -106,7 +106,7 @@ def test_render_boss_warning_with_role(s):
     lines = text.splitlines()
     assert role == 42 and lines[0] == "<@&42>"
     assert lines[1] == "Soul Ruler Kashapa spawns in 15 minutes"
-    assert lines[3] == r"Artamia Plateau East | reported by Rae\_lin"
+    assert lines[3] == r"Ancient Zumion Temple Site | reported by Rae\_lin"
 
 
 def test_dashboard_layout(s):
@@ -232,7 +232,7 @@ def test_2100_plus_bracket_added_once(s):
 def test_boss_buttons_order_and_labels(s):
     dash = engine.build_dashboard(s, _settings(s), ny(2026, 10, 9, 12, 0))
     assert [label for _, label in dash.bosses] == [
-        "Eternal Gartua died", "High Commander Lagta died", "Silent Dartan died", "Soul Ruler Kashapa died",
+        "Eternal Gartua died", "High Commander Lagta died", "Soul Ruler Kashapa died", "Silent Dartan died",
         "Custom time"]
     st = _settings(s)
     st.boss_button_label, st.custom_button_label = "💀 {name}", "Other time"
@@ -278,3 +278,20 @@ def test_new_text_setting_with_apostrophe_reaches_old_databases(tmp_path):
     db.init_engine(path)
     with db.session() as s:
         assert "(Laborer's Rest Stop)" in get_settings(s).dashboard_boss_note
+
+
+def test_route_update_reorders_and_renames_untouched_locations(s):
+    from nyerk.db import get_state
+    from nyerk.seed import upgrade_defaults
+    state = get_state(s)
+    state.upgrades_done = [x for x in (state.upgrades_done or []) if x != "boss_route_2026_10_11"]
+    old = {"Eternal Gartua": "Isle of Eternity", "High Commander Lagta": "Red Forest",
+           "Soul Ruler Kashapa": "Artamia Plateau East", "Silent Dartan": "My own spot"}
+    for i, (name, loc) in enumerate(old.items()):
+        boss(s, name).location, boss(s, name).sort_order = loc, 3 - i
+    s.flush()
+    assert "boss route order and locations" in upgrade_defaults(s)
+    assert [boss(s, n).sort_order for n in ("Eternal Gartua", "High Commander Lagta", "Soul Ruler Kashapa",
+                                            "Silent Dartan")] == [0, 1, 2, 3]
+    assert boss(s, "High Commander Lagta").location == "Laborer's Rest Stop"
+    assert boss(s, "Silent Dartan").location == "My own spot"  # edited by the admin: kept
