@@ -480,7 +480,10 @@ class NyerkBot(discord.Client):
                     msg = await channel.send(content, allowed_mentions=mentions)
                     msg_id = msg.id
                     posted += 1
-                    bus.info("alert", f"Sent {name} {_slot_name(lead)} alert" + (" with ping." if role_id else "."))
+                    # Scheduled alerts (Shugo, Rift…) stay on the web Logs page; boss alerts
+                    # come from member reports and also go to #logs.
+                    bus.info("alert", f"Sent {name} {_slot_name(lead)} alert" + (" with ping." if role_id else "."),
+                             discord=bool(timer_id))
                 except discord.HTTPException as exc:
                     status = "failed"
                     bus.error("error", f"Could not send {name} alert: {exc!r}")

@@ -174,3 +174,26 @@ def test_override_prompt_then_confirm(s, monkeypatch):
     assert reply.startswith("Timer set: Silent Dartan")
     s.expire_all()
     assert s.get(type(first), first.id).status == "overridden"
+
+
+def test_scheduled_alerts_skip_discord_log_channel(s, monkeypatch):
+    from nyerk.logbus import bus
+    from nyerk.models import LogEntry
+    clock = [ny(2026, 10, 9, 13, 25, 1)]  # Dimensional Invasion 5 minute warning
+    get_state(s).last_tick_at = clock[0] - 30
+    s.commit()
+
+    async def run():
+        q = bus.attach_queue()
+        b, _ = make_bot(monkeypatch, clock)
+        await b.tick()
+        lines = []
+        while not q.empty():
+            lines.append(q.get_nowait())
+        return lines
+
+    discord_lines = asyncio.run(run())
+    bus.queue = None
+    assert not any("Sent Dimensional Invasion" in x for x in discord_lines)
+    s.expire_all()
+    assert s.scalar(select(LogEntry).where(LogEntry.text.like("Sent Dimensional Invasion%")))  # web Logs page
