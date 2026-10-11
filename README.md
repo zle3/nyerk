@@ -20,6 +20,18 @@
 - **Members** page to manage one person in one place, **Stats** (class distribution, content demand, busiest times, most active members), change history with undo.
 - Optional **public access** through a Cloudflare Tunnel with Discord sign-in, including a **My page** where members manage their own timers, roles, gear score and quiet hours.
 
+## Contents
+
+- [Screenshots](#screenshots)
+- [Quick start](#quick-start)
+- [Setup checklist](#setup-checklist)
+- [How members use it](#how-members-use-it)
+- [Running and updating](#running-and-updating)
+- [Settings export and import](#settings-export-and-import)
+- [Public access (Cloudflare Tunnel + Discord sign-in)](#public-access-cloudflare-tunnel--discord-sign-in)
+- [Security updates](#security-updates)
+- [Reference](#reference): [Discord permissions](#discord-permissions) · [Behaviour notes](#behaviour-notes) · [What's where](#whats-where) · [Develop](#develop)
+
 ## Screenshots
 
 Generated from a demo instance with made-up members (`python -m tools.screenshots`), and refreshed automatically when the code changes.
