@@ -1,25 +1,24 @@
 # Nyerk
 
-**AION 2 event timers, roles and party finder for Discord**, configured from a password-protected web admin on your LAN. Built for one server (NA East, Siel, Elyos).
+**AION 2 event timers, roles and party finder for Discord.** One bot for one server (built for NA East, Siel, Elyos), set up from its own web page. Run it at home; optionally open the web page to your members at your own domain.
 
 **Timers** (#aion-2-timer)
-- Plain-text alerts with optional role pings for scheduled events, world boss respawns, resets and maintenance.
+- Alerts with optional role pings for scheduled events, world boss respawns, resets and maintenance.
 - A live dashboard, always the newest message, with one-click world boss kill reports.
 
 **Roles** (#aion-2-roles)
 - Self-serve reaction roles for event and dungeon pings, grouped into role messages you define and numbered 1️⃣ 2️⃣ 3️⃣.
 - Class buttons (several classes per member, with Tank/Support/DPS roles that follow) and gear score buttons.
 - **My roles** overview, **Quiet hours** that pause dungeon pings during a daily window in each member's own time zone, and a one-click **Remove all my ping roles**.
-- Nyerk can create dungeon ping roles for you; activity is logged to #logs.
 
 **Party finder** (#aion-2-party-finder)
-- The same class and gear score selectors, plus an interest list that pings registered members when a matching party opens.
+- An interest list that pings registered members when a matching party opens.
 - 5 or 20 person party listings with join, leave, kick, extend, and a shared party status message.
 
-**Web admin**
-- A **Members** page to manage one person in one place: their class and ping roles, quiet hours, boss timers, registration and party.
-- A **Stats** page: class distribution, content demand, party activity by day and hour, and the most active members.
-- Optional **public access** at your own domain through a Cloudflare Tunnel, with Discord sign-in: owner, admin-role and member levels, and a **My page** where members manage their own timers, roles, gear score and quiet hours.
+**Web page**
+- Everything above is configured here: events, alerts and their wording, roles, party finder content, maintenance windows.
+- **Members** page to manage one person in one place, **Stats** (class distribution, content demand, busiest times, most active members), change history with undo.
+- Optional **public access** through a Cloudflare Tunnel with Discord sign-in, including a **My page** where members manage their own timers, roles, gear score and quiet hours.
 
 ## Screenshots
 
@@ -28,37 +27,36 @@
 | ![Timer alerts and the live dashboard in Discord](docs/images/discord-timers.png) | ![Roles channel: class selector, ping roles and ping settings](docs/images/discord-roles.png) |
 | **Timers:** alerts with role pings, then the dashboard with one-click boss reports | **Roles channel:** class selector, event and dungeon ping roles, quiet hours |
 | ![Party finder panels in Discord](docs/images/discord-party-finder.png) | ![Web admin overview](docs/images/admin-overview.png) |
-| **Party finder:** class picker, interest list, create party, party status | **Web admin:** bot status, dashboard preview and recent activity |
-
-No channel or role IDs are in this repository. Set them in the admin page, or import them (see **Settings export and import** below).
+| **Party finder:** class picker, interest list, create party, party status | **Web page:** bot status, dashboard preview and recent activity |
 
 ## Quick start
 
-No coding needed. You need a computer or server that stays on and has [Docker](https://docs.docker.com/get-docker/) installed, and admin rights on your Discord server. Plan on about 20 minutes.
+No coding needed. You need a computer or home server that stays on, with [Docker](https://docs.docker.com/get-docker/) installed, and admin rights on your Discord server. Plan on about 20 minutes.
 
-**1. Create the bot in Discord**
+**1. Create the bot**
 
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**. Name it (for example Nyerk).
-2. Open **Bot**, click **Reset Token** and copy the token. Treat it like a password: never share it or post it anywhere.
-3. Open **General Information** and copy the **Application ID**.
-4. Invite the bot by opening this link with your Application ID pasted in, then pick your server:
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**, name it (for example Nyerk).
+2. **Bot** → **Reset Token** → copy the token. Treat it like a password: never share it.
+3. **General Information** → copy the **Application ID**.
+4. Invite the bot: open this link with your Application ID pasted in, and pick your server.
    `https://discord.com/oauth2/authorize?client_id=YOUR_APPLICATION_ID&scope=bot+applications.commands&permissions=2415995968`
 
-**2. Get your server's IDs**
+**2. Prepare your Discord server**
 
-In Discord, open **User Settings → Advanced** and turn on **Developer Mode**. Now you can right-click things and choose **Copy ID**. Copy:
-- your **server** (right-click the server icon),
-- the channels you want to use for timers, reaction roles, logs and the party finder.
+1. Turn on **User Settings → Advanced → Developer Mode**, so you can right-click anything → **Copy ID**.
+2. Make four channels (any names): timers, roles, logs, and party finder (optional). Make the timer and party finder channels **read-only** for members; buttons and commands still work there.
+3. Make the roles members will pick: one per event they want pings for (World Boss, Shugo, Rift, …), each set to **Allow anyone to @mention this role**. For the party finder, also one per class and Tank, Support and DPS.
+4. In **Server Settings → Roles**, drag **Nyerk's role above all of those**, or it can't hand them out.
 
 **3. Start Nyerk**
 
-Make a folder, open a terminal in it, and run:
+Make a folder and open a terminal in it. Download the compose file:
 
 ```bash
 curl -O https://raw.githubusercontent.com/zle3/nyerk/main/compose.yaml
 ```
 
-In the same folder, create a file named `.env` with these three lines, filled in:
+Create a file named `.env` in the same folder:
 
 ```
 DISCORD_TOKEN=paste-your-bot-token
@@ -66,111 +64,95 @@ GUILD_ID=paste-your-server-id
 ADMIN_PASSWORD=pick-a-long-password
 ```
 
-Then start it:
+Start it:
 
 ```bash
 docker compose up -d
 ```
 
-Using Dockge? Create a stack named `nyerk`, paste in the contents of `compose.yaml`, put the three lines in the env box, and click **Deploy**.
+*Using Dockge?* Create a stack named `nyerk`, paste in the contents of `compose.yaml`, put the three lines in the env box, and click **Deploy**.
 
 **4. Set it up in the web page**
 
-1. Open `https://YOUR-COMPUTER-IP:8443` (type the `https://`). Your browser will warn about the certificate. That's expected, so accept it.
+1. Open `https://YOUR-COMPUTER-IP:8443` (type the `https://`). Your browser warns about the certificate; that's expected, so continue.
 2. Sign in with your `ADMIN_PASSWORD`.
-3. **Settings:** paste your channel IDs and click **Save settings**. The dashboard appears in your timer channel within a minute.
-4. **Roles:** create roles in Discord for the pings you want (World Boss, Shugo, and so on), paste their IDs here, then click **Post roles channel**.
-5. **Party finder** (optional): paste your class role IDs and the Tank, Support and DPS role IDs, add the dungeons people group for under **Content**, click **Create missing roles** so each dungeon gets a ping role, then **Post all panels** here and **Post roles channel** on the Roles page.
+3. **Settings:** paste your channel IDs → **Save settings**. Within a minute the dashboard appears in your timer channel.
+4. **Roles:** paste the role ID next to each event category and click **Save** on that row. When they're all in, click **Post roles channel**.
+5. **Party finder** (optional): paste the class role IDs (**Save classes**) and the Tank, Support and DPS role IDs (**Save**). Add the dungeons people group for under **Content**, click **Create missing roles**, then **Post all panels**. Back on **Roles**, click **Post roles channel** again so the dungeon roles appear.
 
-**5. Finish the Discord side**
+**5. Check it works**
 
-- Drag Nyerk's role above every role it hands out (Server Settings → Roles).
-- Make the timer and party finder channels read-only for members. Buttons still work.
+The dashboard is in your timer channel, #logs says *Nyerk online*, and clicking a boss button on the dashboard gives you a private "Timer set" reply. (Remove that test timer with `/nyerk cancel`.)
 
-That's it. Everything else, such as event times, alert toggles and message wording, can be changed in the web page at any time. The sections below cover the details.
+That's it. Event times, alert toggles, message wording and everything else can be changed in the web page whenever you like.
 
 ## Setup checklist
 
-Everything a new server needs, in order. Items marked *optional* can be skipped.
+The full list behind the Quick start, for reference. *Optional* items can be skipped.
 
-**Before starting Nyerk**
-- [ ] Discord application and bot created; bot token copied
-- [ ] Bot invited with the `bot` and `applications.commands` scopes and its permissions (the Quick start link includes them)
-- [ ] `.env` (or Dockge's env box) with `DISCORD_TOKEN`, `GUILD_ID` and `ADMIN_PASSWORD`
-- [ ] *Optional:* `WEB_TLS=off` if a reverse proxy handles HTTPS; `PUID`/`PGID` if the data folder must belong to a specific host user
+**Discord**
+- [ ] Bot created and invited with the Quick start link (it includes every permission Nyerk needs)
+- [ ] Timer, roles, logs and party finder channels; timer and party finder read-only for members
+- [ ] Ping roles for the events you want, each mentionable
+- [ ] Class roles and Tank, Support and DPS roles (party finder)
+- [ ] Nyerk's role above every role it hands out
+- [ ] *Optional:* Manage Messages for Nyerk in the roles channel, so **Remove all my ping roles** also clears members' reactions
 
-**In Discord**
-- [ ] Channels for timers, reaction roles, logs and the party finder
-- [ ] Timer and party finder channels read-only for members (members keep Use Application Commands); Nyerk allowed to view, post and read history there
-- [ ] Ping roles for the event categories you want (World Boss, Shugo, Rift, …), each mentionable
-- [ ] Class roles (one per class) and Tank, Support and DPS roles
-- [ ] Nyerk's role dragged above every role it hands out
-- [ ] *Optional:* Manage Messages in the roles channel, so **Remove all my ping roles** can also clear members' reactions
+**Server**
+- [ ] `DISCORD_TOKEN`, `GUILD_ID` and `ADMIN_PASSWORD` in `.env` (or Dockge's env box)
+- [ ] *Optional:* `WEB_TLS=off` behind your own HTTPS reverse proxy; `PUID`/`PGID` if the data folder must belong to a specific host user
 
-**Web admin → Settings**
-- [ ] Timer, roles, log and party channel IDs
-- [ ] Server time zone (defaults to America/New_York)
-- [ ] *Optional:* change the admin password, timer limit per user, report offset (1 minute), dashboard headings and party timings
-- [ ] *Optional:* import a settings file instead of typing IDs (Export and import)
+**Web page**
+- [ ] **Settings:** the four channel IDs; server time zone (default America/New_York)
+- [ ] **Roles:** a role ID for each event category, then **Post roles channel**
+- [ ] **Party finder:** class and Tank/Support/DPS role IDs, content with minimum gear score, dungeon roles (paste IDs or **Create missing roles**), then **Post all panels**
+- [ ] **Events / Maintenance:** check boss respawn times, which alerts send and ping, and the weekly maintenance window
+- [ ] *Optional:* the shugo.gg suggestions on **Defaults** (Artifact Siege, Siege Bosses, Nahma, Watcher Kaira), message wording, dashboard headings, party timings, gear score options
+- [ ] *Optional:* import a settings file instead of typing IDs (**Settings → Export and import**)
 
-**Web admin → Roles**
-- [ ] Role ID for each event ping category
-- [ ] *Optional:* channel header text, extra role messages, which message each role goes in, custom emojis
-- [ ] **Post roles channel**
+On first start Nyerk already has the ten launch events, six ping categories, eight classes, the gear score options and availability windows. No channel or role IDs are built in; you add your own.
 
-**Web admin → Party finder**
-- [ ] Class role IDs (one Save for all), then Tank, Support and DPS role IDs
-- [ ] Content: the dungeons and activities people group for, with minimum gear score
-- [ ] Dungeon ping roles: paste IDs or click **Create missing roles**
-- [ ] *Optional:* gear score options, availability windows, standard makeup
-- [ ] **Post all panels**, then delete any old class message by hand
+## How members use it
 
-**Web admin → Events, Maintenance, Defaults**
-- [ ] Check boss respawn times and which alerts send and ping
-- [ ] Check the weekly maintenance window
-- [ ] *Optional:* review shugo.gg suggestions on Defaults (Artifact Siege, Siege Bosses, Nahma, Watcher Kaira)
+**Timer channel**
+- The **dashboard** (always the newest message) shows resets, maintenance, upcoming events and world boss timers, in each reader's own time zone.
+- Killed a world boss? Click its **"… died"** button. **Custom time** reports a kill from earlier, or the time left on a respawn.
+- `/nyerk worldboss` does the same from the keyboard; `/nyerk mytimers`, `/nyerk edit` and `/nyerk cancel` manage your own timers. Reporting a boss you already reported replaces your timer; if someone else reported it, Nyerk asks before overriding theirs.
 
-**Check it works**
-- [ ] Dashboard appears in the timer channel within a minute
-- [ ] #logs shows "Nyerk online"
-- [ ] A test boss report, a class pick and a ping reaction all work
+**Roles channel** (top to bottom)
+- **Classes:** pick every class you play; click again to remove one.
+- **Gear score:** one choice; pick another to change it.
+- **Event pings** and **Dungeon pings:** react with the number to get that role; remove the reaction to drop it.
+- **Ping settings:** **My roles** (a private overview), **Quiet hours** (pause dungeon pings every day during hours you choose), **Remove all my ping roles**.
 
-## Run it
+**Party finder channel**
+- **Register** to say you're free for certain dungeons for a while; Nyerk pings you when a matching party opens, and you can join from the ping.
+- **Create party** for 5 or 20 players (open to any class, a standard 1 tank / 1 support / 3 DPS, or a custom makeup). Members join with one click; the leader can kick, extend or close it. Full parties move to the **Party status** message.
 
-Every push to `main` runs the tests in GitHub Actions, builds the image and publishes it as `ghcr.io/zle3/nyerk:latest` (plus a `sha-xxxxxxx` tag, and `1.2.0`-style tags for `v1.2.0` git tags). The server only needs `compose.yaml`; it never sees the source.
+**Web page** (with public access): **My page** lets members do all of the above from a browser after signing in with Discord.
 
-### Dockge (or Portainer, Komodo, any compose manager)
+## Running and updating
 
-1. In Dockge, **+ Compose**, name the stack `nyerk`, paste the contents of `compose.yaml`.
-2. In the env editor set `DISCORD_TOKEN`, `GUILD_ID` and `ADMIN_PASSWORD`, then **Deploy**. Dockge pulls the image.
-3. Open `https://<homelab-ip>:8443` (type the `https://`). The certificate is self-signed, so the browser asks you to accept it once. Behind an HTTPS reverse proxy, set `WEB_TLS=off` and point the proxy at port 8443.
+The image is built by GitHub Actions and published as `ghcr.io/zle3/nyerk:latest`; your server only needs `compose.yaml`.
 
-**If you make the repo private:** the image becomes private too, so the server must log in once: create a GitHub token (classic) with only `read:packages`, then on the server run `docker login ghcr.io -u zle3` and paste the token as the password. A public repo needs no login.
+- **Update:** click **Update** in Dockge, or `docker compose pull && docker compose up -d`. To update automatically, add a cron job on the server (`crontab -e`); it only restarts Nyerk when there's a new image:
+  ```
+  */15 * * * * cd /opt/stacks/nyerk && docker compose pull -q && docker compose up -d
+  ```
+- **Roll back or pin a version:** set `NYERK_IMAGE=ghcr.io/zle3/nyerk:sha-abc1234` (or a `weekly-YYYYMMDD` tag) in the env and deploy.
+- **Your data** lives in the `data/` folder next to `compose.yaml`: the database, nightly backups (04:00 server time, last 14 kept), logs and the web page's certificate. Back up by copying that folder.
+- **Data folder permissions:** on start the container hands `data/` to `PUID:PGID` (default 1000:1000) and stops running as root. If that can't work (an NFS/SMB share, SELinux, or ownership changes ignored), it logs a `nyerk-entrypoint:` line saying why and runs as root instead of failing. To fix it, keep `data/` on a local disk or run `chown -R 1000:1000 data` on the host; on SELinux hosts (Fedora, RHEL, Rocky) change the volume to `./data:/data:z`.
+- **Forgot the password?** Add `NYERK_RESET_PASSWORD=1` and a new `ADMIN_PASSWORD` to the env, deploy, then remove `NYERK_RESET_PASSWORD`.
+- **Private fork?** A private repo makes the image private too: create a GitHub token (classic) with only `read:packages` and run `docker login ghcr.io` once on the server.
+- **Build from source instead:**
+  ```bash
+  cp .env.example .env        # fill in DISCORD_TOKEN, GUILD_ID, ADMIN_PASSWORD
+  docker compose -f compose.build.yaml up -d --build
+  ```
 
-**Updating:** push to `main`, wait for the Actions run to go green (about 2 minutes), then click **Update** in Dockge. To update automatically, add a cron job on the server (`crontab -e`); it only restarts Nyerk when a new image was pulled:
+## Settings export and import
 
-```
-*/15 * * * * cd /opt/stacks/nyerk && docker compose pull -q && docker compose up -d
-```
-
-**Rolling back / pinning:** set `NYERK_IMAGE=ghcr.io/zle3/nyerk:sha-abc1234` (or `:1.2.0`) in the env editor and Deploy.
-
-On first start Nyerk seeds the ten launch events, the six ping categories, the eight classes, the gear score options and the availability windows. No channel or role IDs are seeded; follow the **Setup checklist** above.
-
-#### Data folder permissions
-
-Data lands in `/opt/stacks/nyerk/data`. On start the container hands it to `PUID:PGID` (default 1000:1000) and drops root. If that can't work — the stack lives on an NFS/SMB share, SELinux blocks the mount, or chown is ignored — it logs a `nyerk-entrypoint:` line saying why and runs as root instead of crashing. To get back to non-root, either keep `data/` on a local disk, or on the host run `chown -R 1000:1000 /opt/stacks/nyerk/data`. On SELinux hosts (Fedora, RHEL, Rocky) change the volume to `./data:/data:z`.
-
-### Build from source instead
-
-```bash
-cp .env.example .env        # fill in DISCORD_TOKEN, GUILD_ID, ADMIN_PASSWORD
-docker compose -f compose.build.yaml up -d --build
-```
-
-### Settings export and import
-
-**Settings → Export settings** downloads one JSON file with every setting, ping category, event, alert template and party finder list, IDs included. It never contains the admin password or the bot token. **Settings → Preview import** shows every change before anything is applied.
+**Settings → Export settings** downloads one JSON file with every setting, ping category, event, alert template, role message and party finder list, channel and role IDs included. It never contains the admin password or any token. **Settings → Preview import** shows every change before anything is applied.
 
 Import merges: rows are matched by name, and anything missing from the file is left alone. A short file that only sets IDs is enough:
 
@@ -184,27 +166,11 @@ Import merges: rows are matched by name, and anything missing from the file is l
 }
 ```
 
-`nyerk-settings*.json` is git-ignored, so keep your own copy next to the repo without committing it.
-
-### Party finder setup
-
-1. Settings: set **Party channel** and check the party timing values.
-2. Party finder page: paste the Tank, Support and DPS role IDs and the class role IDs (or import them), and add the **content** (dungeons and activities) with their minimum gear score. Give each dungeon a ping role: paste an ID or click **Create role** (or **Create missing roles**). A new party pings that role and the members registered for it.
-3. Create the Tank, Support and DPS roles in Discord yourself, and move Nyerk's role above all class and type roles.
-4. Make #aion-2-party-finder read-only for members, then click **Post all panels**. Delete the old "AION 2 Classes" message by hand.
-5. Roles page: click **Post roles channel**. It posts, top to bottom: the header, a copy of the class selector, the gear score buttons, one message per role message (Event pings, Dungeon pings, and any you add; numbered 1️⃣ 2️⃣ 3️⃣, then 🇦 🇧 after 🔟, unless you set an emoji, continuing in a second message past 20), and **Ping settings** with **My roles**, **Quiet hours**, **Turn off quiet hours** and **Remove all my ping roles**. Choose which message each role goes in under **Which message each role goes in**.
-
-### Discord setup
-
-- **Bot invite scopes:** `bot` and `applications.commands`.
-- **Permissions in the four channels** (timer, roles, logs, party finder): View Channel, Send Messages, Read Message History, Add Reactions, Use Application Commands. Nyerk also needs Manage Roles, and its role must sit above every role it hands out (ping, class, Tank/Support/DPS). Nyerk deletes only its own messages, which needs no extra permission; Manage Messages in the roles channel lets **Remove all my ping roles** also clear members' reactions.
-- **Role pings:** make each category role mentionable, or give Nyerk Mention All Roles.
-- **Intents:** none of the privileged ones; Nyerk uses guilds and guild reactions only.
-- **Channels:** make #aion-2-timer and #aion-2-party-finder read-only for members. Buttons and slash commands still work.
+`nyerk-settings*.json` is git-ignored, so you can keep your own copy next to the repo without committing it.
 
 ## Public access (Cloudflare Tunnel + Discord sign-in)
 
-Optional. Lets people open Nyerk at your own domain without opening any port on your router or revealing your home IP. Everyone signs in with Discord; nobody gets an account or a password.
+Optional. People open Nyerk at your own domain; no port is opened on your router and your home IP stays hidden. Everyone signs in with Discord, so there are no accounts or passwords to hand out.
 
 | Who | How | Can |
 |---|---|---|
@@ -212,11 +178,13 @@ Optional. Lets people open Nyerk at your own domain without opening any port on 
 | **Admin** | Holds a role in `ADMIN_ROLE_IDS` (checked again every 5 minutes) | Events and alert toggles, boss timers and button order, maintenance, party finder content and panels, members, defaults, stats, logs, posting the roles channel. Not message wording, role IDs, roles channel setup, classes, Settings or export/import. 30 changes an hour. |
 | **Member** | Anyone in your server | **My page**: their boss timers, classes and pings, gear score, quiet hours, registration and party |
 
-**1. Discord.** In the [Developer Portal](https://discord.com/developers/applications), open your bot's application → **OAuth2**. Add the redirect `https://nyerk.example.com/auth/callback` (your domain), copy the **Client ID** and **Client Secret**.
+**1. Your domain on Cloudflare.** Add the domain at [dash.cloudflare.com](https://dash.cloudflare.com) (Free plan) and switch its nameservers at your registrar to the two Cloudflare gives you. Wait until it shows **Active**.
 
-**2. Cloudflare.** In Zero Trust → **Networks → Tunnels**, create a tunnel (type *Cloudflared*) and copy its token. Add a **published application** (public hostname): `nyerk.example.com` → Service URL **`http://nyerk:8080`**. That port is plain HTTP inside the stack only (never published to your LAN); visitors still get HTTPS from Cloudflare. *(Alternative: `https://nyerk:8443` with Additional application settings → TLS → **No TLS Verify** on.)*
+**2. Discord sign-in.** In the [Developer Portal](https://discord.com/developers/applications) → your app → **OAuth2**, add the redirect `https://nyerk.example.com/auth/callback` (your domain) and copy the **Client ID** and **Client Secret**.
 
-**3. Env.** Add to the stack's env, then Deploy:
+**3. The tunnel.** In [Cloudflare Zero Trust](https://one.dash.cloudflare.com) → **Networks → Tunnels** → **Create a tunnel** (Cloudflared), and copy the token from the Docker command it shows (the part after `--token`). Add a **published application**: `nyerk` + your domain → Service URL **`http://nyerk:8080`**. That port is plain HTTP inside the stack only and is never published; visitors still get HTTPS from Cloudflare.
+
+**4. Env.** Add to the stack's env and deploy:
 
 ```
 PUBLIC_URL=https://nyerk.example.com
@@ -227,40 +195,70 @@ ADMIN_ROLE_IDS=role-id-of-your-admins
 COMPOSE_PROFILES=tunnel
 TUNNEL_TOKEN=…
 WEB_BIND=127.0.0.1:8443   # optional: stop publishing the port on your LAN
-# CLOUDFLARED_VERSION=2026.10.0   # optional: pin a newer cloudflared release
 ```
 
-**4. Cloudflare protection** (free plan, in your domain's dashboard):
+Check: the stack shows a `nyerk-tunnel` container, the **nyerk** log says *Tunnel listener on http://nyerk:8080*, and your address shows the sign-in page.
+
+| Problem | Fix |
+|---|---|
+| No `nyerk-tunnel` container | `COMPOSE_PROFILES=tunnel` missing, or an old `compose.yaml`; paste the current one |
+| 502 Bad Gateway, log says *connection refused* | `PUBLIC_URL` not set, or an old `compose.yaml` that doesn't pass it to Nyerk |
+| Error 1033 | The tunnel container isn't running, or the token is incomplete |
+| Discord: *Invalid OAuth2 redirect_uri* | The redirect and `PUBLIC_URL` must match exactly, including `https://` |
+
+**5. Cloudflare protection** (free plan, your domain's dashboard):
 - **Security → WAF → Rate limiting rules:** when *URI Path* starts with `/auth` or `/login`, 10 requests per 1 minute per IP → **Block** for 10 minutes.
 - **Security → Bots:** turn on **Bot Fight Mode**.
 - **Security → Settings:** keep *Security Level* at Medium; switch on **I'm Under Attack** if you're ever flooded.
 
-**5. Keep the containers off your LAN** (recommended, Linux host). Even if someone found a hole in Nyerk, this stops the container from reaching your router, NAS or other machines. Replace `192.168.0.0/16` with your LAN range:
+**6. Keep the containers off your LAN** (recommended, Linux host). Even if someone found a hole in Nyerk, the container can't reach your router, NAS or other machines. Replace `192.168.0.0/16` with your LAN range:
 
 ```bash
 sudo iptables -I DOCKER-USER -s 172.30.70.0/24 -d 192.168.0.0/16 -m conntrack --ctstate NEW -j DROP
 sudo apt install iptables-persistent && sudo netfilter-persistent save   # keep it after reboots
 ```
 
-**What's already in place:** Discord sign-in reads only your name and ID (`identify` scope) and discards the token; sessions last 12 hours and are re-checked against your server roles; owner-only changes need a sign-in from the last hour; password sign-in is refused through Cloudflare; per-IP rate limits and a 2 MB request cap; strict security headers and HSTS; links, invites and @everyone/@here are refused in all text; every change is recorded in **Settings → Change history** with one-click restore and posted to #logs; the container runs read-only, as a normal user, with all privileges dropped.
+**Already built in:** Discord sign-in reads only your name and ID and discards the token; sessions last 12 hours and are re-checked against your server roles; owner-only changes need a sign-in from the last hour; password sign-in is refused through Cloudflare; per-IP rate limits and a 2 MB request cap; strict security headers and HSTS; links, invites and @everyone/@here are refused in all text; every change is recorded in **Settings → Change history** with one-click restore and posted to #logs; the container runs read-only, as a normal user, with all privileges dropped.
 
 **If an admin account looks compromised:** **Settings → Access and security → Lock admin access** (instant), then **Change history** to restore anything they changed, then remove their role in Discord.
+
+Pasting your address in Discord shows a link preview; its title and text are under **Settings → Link preview**.
 
 ## Security updates
 
 Mostly automatic:
 
-- **Dependabot** opens weekly pull requests for Python libraries (every library is pinned to an exact version in `requirements.txt`), the Python base image and the GitHub Actions; security fixes arrive as soon as GitHub knows about them. Merge the ones where CI is green.
-- **CI** on every push and pull request runs the tests, `pip-audit` (known vulnerabilities in the Python libraries) and a **Trivy** scan of the finished image. A fixable HIGH or CRITICAL issue fails the build, so it never gets published. Reports appear under the repo's **Security** tab.
-- **Weekly rebuild:** every Monday the image is rebuilt from scratch with the latest Debian security updates and published as `latest` (plus a `weekly-YYYYMMDD` tag), even with no code changes. The server's update cron (see **Run it**) deploys it.
-- **cloudflared:** a weekly job opens a pull request when Cloudflare releases a newer version. After merging, update the compose file in Dockge (or set `CLOUDFLARED_VERSION`) and Deploy.
-- The image ships without `pip`, which isn't needed at runtime.
+- **Dependabot** opens weekly pull requests for the Python libraries (each pinned to an exact version in `requirements.txt`), the Python base image and the GitHub Actions; security fixes arrive as soon as GitHub knows about them. Merge the ones where CI is green.
+- **CI** on every push and pull request runs the tests, `pip-audit` and a **Trivy** scan of the finished image. A fixable HIGH or CRITICAL issue fails the build, so it never gets published. Reports appear under the repo's **Security** tab.
+- **Weekly rebuild:** every Monday the image is rebuilt from scratch with the latest Debian security updates and published as `latest` (plus `weekly-YYYYMMDD`), even with no code changes. Your update cron deploys it.
+- **cloudflared:** a weekly job opens a pull request when Cloudflare releases a newer version (pinned in `compose.yaml`, or set `CLOUDFLARED_VERSION`). It doesn't run CI, so merge with **Merge without waiting for requirements**, then update the compose file in Dockge and deploy.
+- **This repository** has Dependabot alerts and security updates, secret scanning with push protection, and a protected `main` that requires the **test** and **image** checks. For a fork, turn these on under the repo's **Settings**.
+- **On the server:** keep the host patched (`sudo apt install unattended-upgrades` on Debian/Ubuntu) and update Docker and Dockge every month or two.
 
-**One-time GitHub settings** (repo → Settings): *Code security* → enable **Dependabot alerts**, **Dependabot security updates**, **Secret scanning** and **Push protection**; *Actions → General* → allow **GitHub Actions to create pull requests** (for the cloudflared job); *Branches* → protect `main` and require the **test** and **image** checks.
+## Reference
 
-**On the server:** keep the host patched (`sudo apt install unattended-upgrades` on Debian/Ubuntu) and update Docker and Dockge every month or two.
+### Discord permissions
 
-## What's where
+- **Invite scopes:** `bot` and `applications.commands`.
+- **In the four channels:** View Channel, Send Messages, Read Message History, Add Reactions, Use Application Commands.
+- **Manage Roles,** with Nyerk's role above every role it hands out (ping, class, Tank/Support/DPS). Nyerk only creates roles when you click **Create role** for a dungeon.
+- **Manage Messages** is only needed in the roles channel, so **Remove all my ping roles** can clear members' reactions. Nyerk deletes its own messages without it.
+- **Role pings:** make each ping role mentionable, or give Nyerk Mention All Roles. Nyerk never pings @everyone.
+- **Intents:** none of the privileged ones; Nyerk uses guilds and guild reactions only.
+
+### Behaviour notes
+
+- **Restarts:** alerts whose send time passed while Nyerk was down are skipped and listed in #logs, not sent late. A sent-alerts ledger prevents double posts after a restart.
+- **Kill reports:** a report with no time assumes the kill happened 1 minute ago (Settings → **Report offset**). A "respawns in" report uses the time left exactly as given. Warnings already in the past when a timer is reported are skipped.
+- **Alert cleanup:** alert messages are deleted 2 hours after their event starts or the boss spawns (Settings → **Delete alerts after**); alerts under an hour old are always kept.
+- **Time zones:** each event stores its own time zone. Game events keep their New York hour, while resets and maintenance stay pinned to UTC, so their New York time moves an hour earlier on November 1.
+- **Maintenance overrides:** an override replaces one week's regular window; emergency windows are added on top.
+- **Message templates:** a line containing only `{role}` is dropped when that alert's ping is off. Reporters are shown by display name; timer alerts never mention users.
+- **Who gets mentioned:** timer alerts ping only their category role. Party finder pings mention only the people they're for: matching registrants and the dungeon role for a new party, the leader for the closing warning, and the members when a party is full.
+- **#logs vs the Logs page:** routine lines (scheduled alerts, cleanup, registrations expiring) stay on the web Logs page; reports, overrides, role changes, config changes and problems also go to #logs.
+- **Data from shugo.gg:** Nyerk reads the shugo.gg timer table once a day and only suggests changes on **Defaults**; nothing changes until you approve it, and fields you edited are never overwritten.
+
+### What's where
 
 | Path | Purpose |
 | --- | --- |
@@ -271,31 +269,19 @@ Mostly automatic:
 | `nyerk/party.py` / `nyerk/party_bot.py` | Party finder rules (classes, gear score, slots, registrations, pings) and its Discord panels, buttons and forms. |
 | `nyerk/reaction_roles.py` | Builds the roles channel's role messages and emoji numbering. |
 | `nyerk/quiet.py` | Quiet hours: when to pause and restore dungeon ping roles. |
-| `nyerk/members.py` / `nyerk/tracking.py` | The admin Members page, and the record of class and ping roles Nyerk has handed out. |
+| `nyerk/members.py` / `nyerk/tracking.py` | The Members page, and the record of class and ping roles Nyerk has handed out. |
 | `nyerk/stats.py` | Numbers for the Stats page. |
-| `nyerk/transfer.py` | Settings export and import. |
-| `nyerk/shugo.py` | shugo.gg table parser and the review diff. Hand-edited fields are never overwritten. |
-| `nyerk/housekeeping.py` | Nightly SQLite backup (04:00 server time), daily shugo.gg check, self-signed cert. |
-| `nyerk/web/` | FastAPI admin with server-rendered pages; `auth.py` (sign-in and who may do what), `security.py` (rate limits, headers, Cloudflare client IPs). |
-| `nyerk/history.py` / `nyerk/safety.py` | Change history with restore; the link/invite filter and the @everyone guard. |
-| `data/` | `nyerk.db`, `backups/`, `logs/nyerk.log`, `tls/`. Back up by copying this folder. |
+| `nyerk/transfer.py` / `nyerk/history.py` | Settings export and import; change history with restore. |
+| `nyerk/safety.py` | The link/invite filter and the @everyone guard. |
+| `nyerk/shugo.py` | shugo.gg table parser and the review diff. |
+| `nyerk/housekeeping.py` | Nightly backup, daily shugo.gg check, self-signed certificate. |
+| `nyerk/web/` | The web page (FastAPI, server-rendered); `auth.py` decides who may do what, `security.py` handles rate limits, headers and Cloudflare client IPs. |
+| `data/` | `nyerk.db`, `backups/`, `logs/nyerk.log`, `tls/`. |
 
-## Behaviour notes
-
-- **Restarts:** alerts whose send time passed while Nyerk was down are skipped and listed in #logs. They are not sent late. The `sent_messages` ledger prevents double posts after a restart.
-- **Kill reports:** a report with no time assumes the kill happened 1 minute ago (the report offset, editable in Settings). A `respawns_in` report uses the remaining time exactly as given. Warnings that are already in the past when a timer is reported are skipped silently.
-- **Alert cleanup:** alert messages are deleted 2 hours after their event starts (or the boss spawns), so the timer channel only shows what's current. Change it in Settings → **Delete alerts after**; alerts under an hour old are always kept.
-- **Re-reporting a boss:** one active timer per boss. Reporting a boss you already reported replaces your timer. If someone else reported it, you get a private warning with **Override their timer** or **Keep theirs**; overrides replace their timer and are logged to #logs with both names.
-- **Time zones:** each event stores its own time zone. Game events keep their New York hour, while resets and maintenance stay pinned to UTC, so their New York time moves an hour earlier on November 1. Tests cover both cases.
-- **Maintenance overrides:** an override replaces one week's regular window. Emergency windows are added on top of the regular schedule.
-- **Message templates:** a line containing only `{role}` is dropped when that slot's ping is off. Reporters are shown by display name; timer alerts never mention users.
-- **Who gets mentioned:** timer alerts ping only their category role. Party finder pings mention only the people they're for: matching registrants and the dungeon role for a new party, the leader for the closing warning, and the members when a party is full.
-- **#logs vs the Logs page:** routine lines (scheduled alerts, cleanup, registrations expiring) stay on the web Logs page; reports, overrides, role changes, config changes and problems also go to #logs.
-
-## Develop
+### Develop
 
 ```bash
 uv venv -p 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest -q
-NYERK_WEB_ONLY=1 ADMIN_PASSWORD=devpassword .venv/bin/python -m nyerk   # admin page without Discord
+NYERK_WEB_ONLY=1 ADMIN_PASSWORD=devpassword .venv/bin/python -m nyerk   # web page without Discord
 ```
