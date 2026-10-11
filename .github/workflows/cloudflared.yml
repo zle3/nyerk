@@ -1,0 +1,48 @@
+name: cloudflared update
+
+# Weekly: if Cloudflare released a newer cloudflared than the version pinned
+# in compose.yaml, open a pull request that bumps it. (Dependabot can't read
+# the ${CLOUDFLARED_VERSION:-...} default in the compose file.)
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compare pinned and latest release
+        id: v
+        run: |
+          current=$(grep -oP 'cloudflared:\$\{CLOUDFLARED_VERSION:-\K[0-9.]+' compose.yaml)
+          latest=$(curl -fsSL "https://hub.docker.com/v2/repositories/cloudflare/cloudflared/tags?page_size=100&ordering=last_updated" \
+            | jq -r '.results[].name' | grep -E '^[0-9]{4}\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          echo "current=$current latest=$latest"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)" != "$current" ]; then
+            for f in compose.yaml compose.build.yaml .env.example README.md; do
+              sed -i "s/$current/$latest/g" "$f"
+            done
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Open pull request
+        if: steps.v.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: deps/cloudflared
+          commit-message: "Bump cloudflared from ${{ steps.v.outputs.current }} to ${{ steps.v.outputs.latest }}"
+          title: "Bump cloudflared from ${{ steps.v.outputs.current }} to ${{ steps.v.outputs.latest }}"
+          body: |
+            Cloudflare released cloudflared ${{ steps.v.outputs.latest }}.
+            Release notes: https://github.com/cloudflare/cloudflared/releases
+
+            After merging, paste the new compose.yaml into Dockge (or set
+            CLOUDFLARED_VERSION=${{ steps.v.outputs.latest }} in the env) and Deploy.
+          labels: dependencies

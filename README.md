@@ -246,6 +246,20 @@ sudo apt install iptables-persistent && sudo netfilter-persistent save   # keep 
 
 **If an admin account looks compromised:** **Settings → Access and security → Lock admin access** (instant), then **Change history** to restore anything they changed, then remove their role in Discord.
 
+## Security updates
+
+Mostly automatic:
+
+- **Dependabot** opens weekly pull requests for Python libraries (every library is pinned to an exact version in `requirements.txt`), the Python base image and the GitHub Actions; security fixes arrive as soon as GitHub knows about them. Merge the ones where CI is green.
+- **CI** on every push and pull request runs the tests, `pip-audit` (known vulnerabilities in the Python libraries) and a **Trivy** scan of the finished image. A fixable HIGH or CRITICAL issue fails the build, so it never gets published. Reports appear under the repo's **Security** tab.
+- **Weekly rebuild:** every Monday the image is rebuilt from scratch with the latest Debian security updates and published as `latest` (plus a `weekly-YYYYMMDD` tag), even with no code changes. The server's update cron (see **Run it**) deploys it.
+- **cloudflared:** a weekly job opens a pull request when Cloudflare releases a newer version. After merging, update the compose file in Dockge (or set `CLOUDFLARED_VERSION`) and Deploy.
+- The image ships without `pip`, which isn't needed at runtime.
+
+**One-time GitHub settings** (repo → Settings): *Code security* → enable **Dependabot alerts**, **Dependabot security updates**, **Secret scanning** and **Push protection**; *Actions → General* → allow **GitHub Actions to create pull requests** (for the cloudflared job); *Branches* → protect `main` and require the **test** and **image** checks.
+
+**On the server:** keep the host patched (`sudo apt install unattended-upgrades` on Debian/Ubuntu) and update Docker and Dockge every month or two.
+
 ## What's where
 
 | Path | Purpose |
