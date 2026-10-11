@@ -22,12 +22,52 @@
 
 ## Screenshots
 
-| | |
-|---|---|
-| ![Timer alerts and the live dashboard in Discord](docs/images/discord-timers.png) | ![Roles channel: class selector, ping roles and ping settings](docs/images/discord-roles.png) |
-| **Timers:** alerts with role pings, then the dashboard with one-click boss reports | **Roles channel:** class selector, event and dungeon ping roles, quiet hours |
-| ![Party finder panels in Discord](docs/images/discord-party-finder.png) | ![Web admin overview](docs/images/admin-overview.png) |
-| **Party finder:** class picker, interest list, create party, party status | **Web page:** bot status, dashboard preview and recent activity |
+Generated from a demo instance with made-up members (`python -m tools.screenshots`), and refreshed automatically when the code changes.
+
+### In Discord
+
+**Timer channel:** alerts with role pings, then the live dashboard with one-click boss reports.
+
+<img src="docs/images/discord-timers.png" width="760" alt="Timer alerts and the live dashboard in Discord">
+
+**Roles channel:** class buttons, event and dungeon ping roles, and ping settings (My roles, quiet hours).
+
+<img src="docs/images/discord-roles.png" width="760" alt="Roles channel with class buttons, ping roles and ping settings">
+
+**Party finder:** class picker, interest list, create party and party status.
+
+<img src="docs/images/discord-party-finder.png" width="760" alt="Party finder panels in Discord">
+
+### Web page
+
+**Overview:** bot status and a live preview of the dashboard.
+
+<img src="docs/images/web-overview.png" width="760" alt="Web page overview with dashboard preview">
+
+**My page:** what members see after signing in with Discord.
+
+<img src="docs/images/web-my-page.png" width="760" alt="Member page with timers, classes, pings, gear score and quiet hours">
+
+<details>
+<summary><b>More: stats, members, roles setup, access and security</b></summary>
+
+**Stats:** party activity by day and hour, content demand and class distribution.
+
+<img src="docs/images/web-stats.png" width="760" alt="Stats page">
+
+**Members:** everyone Nyerk has seen, with their classes, gear score and activity.
+
+<img src="docs/images/web-members.png" width="760" alt="Members page">
+
+**Roles:** a preview of the whole roles channel before posting it.
+
+<img src="docs/images/web-roles-preview.png" width="760" alt="Roles channel preview">
+
+**Access and security:** who can sign in, what each level may do, and the emergency switches.
+
+<img src="docs/images/web-access.png" width="760" alt="Access and security page">
+
+</details>
 
 ## Quick start
 
@@ -284,4 +324,12 @@ Mostly automatic:
 uv venv -p 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest -q
 NYERK_WEB_ONLY=1 ADMIN_PASSWORD=devpassword .venv/bin/python -m nyerk   # web page without Discord
+```
+
+Screenshots in `docs/images` come from `tools/screenshots.py`: it builds a demo database (fake members and IDs, fixed clock), renders the Discord channels from Nyerk's real message code and photographs the web pages with Playwright. The **Screenshots** workflow runs it after each change on `main` and opens a pull request when an image changes. To run it locally:
+
+```bash
+uv pip install --python .venv/bin/python -r requirements-screenshots.txt
+.venv/bin/python -m playwright install chromium
+.venv/bin/python -m tools.screenshots docs/images
 ```

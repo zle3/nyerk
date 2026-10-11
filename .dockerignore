@@ -7,3 +7,4 @@ tests
 .github
 compose*.yaml
 docs
+tools
