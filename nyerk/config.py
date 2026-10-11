@@ -55,6 +55,9 @@ class Config:
     # Password sign-in: "lan" (default; only for requests that did not come
     # through Cloudflare), "on" (anywhere) or "off".
     password_login: str = field(default_factory=lambda: _env("PASSWORD_LOGIN", "lan").lower())
+    # Plain-HTTP port for the Cloudflare Tunnel, inside the stack only (never
+    # published). Opened when PUBLIC_URL is set; 0 turns it off.
+    tunnel_port: int = field(default_factory=lambda: _env_int("TUNNEL_PORT", 8080))
 
     @property
     def is_public(self) -> bool:

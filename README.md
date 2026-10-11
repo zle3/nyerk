@@ -214,7 +214,7 @@ Optional. Lets people open Nyerk at your own domain without opening any port on 
 
 **1. Discord.** In the [Developer Portal](https://discord.com/developers/applications), open your bot's application → **OAuth2**. Add the redirect `https://nyerk.example.com/auth/callback` (your domain), copy the **Client ID** and **Client Secret**.
 
-**2. Cloudflare.** In Zero Trust → **Networks → Tunnels**, create a tunnel (type *Cloudflared*) and copy its token. Add a **public hostname**: `nyerk.example.com` → service **HTTPS**, URL `nyerk:8443`; under *Additional settings → TLS* turn on **No TLS Verify** (Nyerk uses its own self-signed certificate inside the stack).
+**2. Cloudflare.** In Zero Trust → **Networks → Tunnels**, create a tunnel (type *Cloudflared*) and copy its token. Add a **published application** (public hostname): `nyerk.example.com` → Service URL **`http://nyerk:8080`**. That port is plain HTTP inside the stack only (never published to your LAN); visitors still get HTTPS from Cloudflare. *(Alternative: `https://nyerk:8443` with Additional application settings → TLS → **No TLS Verify** on.)*
 
 **3. Env.** Add to the stack's env, then Deploy:
 
@@ -227,6 +227,7 @@ ADMIN_ROLE_IDS=role-id-of-your-admins
 COMPOSE_PROFILES=tunnel
 TUNNEL_TOKEN=…
 WEB_BIND=127.0.0.1:8443   # optional: stop publishing the port on your LAN
+# CLOUDFLARED_VERSION=2026.10.0   # optional: pin a newer cloudflared release
 ```
 
 **4. Cloudflare protection** (free plan, in your domain's dashboard):

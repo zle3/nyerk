@@ -28,6 +28,7 @@ services:
       OWNER_IDS: ${OWNER_IDS:-}
       ADMIN_ROLE_IDS: ${ADMIN_ROLE_IDS:-}
       PASSWORD_LOGIN: ${PASSWORD_LOGIN:-lan}
+      TUNNEL_PORT: ${TUNNEL_PORT:-8080}
     # Container lockdown: read-only filesystem except /data and /tmp, no extra
     # privileges. The startup script keeps only what it needs to hand /data to
     # PUID:PGID, then Nyerk runs as that user with no capabilities at all.
@@ -53,7 +54,8 @@ services:
   # Optional Cloudflare Tunnel: set COMPOSE_PROFILES=tunnel and TUNNEL_TOKEN
   # in the env. No ports are opened on your router; see README "Public access".
   cloudflared:
-    image: cloudflare/cloudflared:2025.10.0
+    # Pinned release; set CLOUDFLARED_VERSION in the env to move to a newer one.
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.0}
     container_name: nyerk-tunnel
     profiles: [tunnel]
     restart: unless-stopped

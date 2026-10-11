@@ -60,8 +60,18 @@ async def amain(cfg: Config) -> None:
     scheme = "http" if cfg.web_tls == "off" else "https"
     bus.info("startup", f"Nyerk starting. Web admin on {scheme}://{cfg.web_host}:{cfg.web_port}", discord=False)
 
-    tasks = [asyncio.create_task(server.serve(), name="web"),
-             asyncio.create_task(housekeeping.loop(cfg), name="housekeeping")]
+    servers = [server]
+    if cfg.is_public and cfg.tunnel_port and cfg.tunnel_port != cfg.web_port:
+        # For cloudflared on the stack network: plain HTTP, never published.
+        # Cloudflare provides HTTPS to visitors.
+        tunnel_server = uvicorn.Server(uvicorn.Config(
+            app, host="0.0.0.0", port=cfg.tunnel_port, log_level="warning", proxy_headers=False))
+        tunnel_server.install_signal_handlers = lambda: None  # the main server owns Ctrl-C/SIGTERM
+        servers.append(tunnel_server)
+        bus.info("startup", f"Tunnel listener on http://nyerk:{cfg.tunnel_port} (stack network only)", discord=False)
+
+    tasks = [asyncio.create_task(s.serve(), name=f"web{i}") for i, s in enumerate(servers)]
+    tasks.append(asyncio.create_task(housekeeping.loop(cfg), name="housekeeping"))
     if bot is not None:
         tasks.append(asyncio.create_task(bot.start(cfg.discord_token), name="discord"))
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -70,7 +80,8 @@ async def amain(cfg: Config) -> None:
             log.error("%s stopped: %r", t.get_name(), t.exception())
     if bot is not None and not bot.is_closed():
         await bot.close()
-    server.should_exit = True
+    for s in servers:
+        s.should_exit = True
     for t in pending:
         t.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
