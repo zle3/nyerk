@@ -15,7 +15,7 @@ from sqlalchemy import select
 from . import db, engine, party, party_bot, quiet, reaction_roles, timers, tracking
 from .db import get_settings, get_state
 from .logbus import bus
-from .models import PfContent, SentMessage, UserTimer
+from .models import Event, PfContent, SentMessage, UserTimer
 from .timeparse import humanize
 
 log = logging.getLogger("nyerk.bot")
@@ -93,6 +93,28 @@ class PingSettingsButton(discord.ui.DynamicItem[discord.ui.Button],
         client = interaction.client
         await {"clear": client.clear_pings, "quiet": client.open_quiet_hours,
                "quietoff": client.quiet_hours_off, "mine": client.show_my_roles}[self.what](interaction)
+
+
+class OverrideView(discord.ui.View):
+    """Private confirmation before replacing someone else's boss timer."""
+
+    def __init__(self, client, user_id: int, event_id: int, timer_id: int, killed_at: str, respawns_in: str):
+        super().__init__(timeout=120)
+        self.client, self.user_id, self.event_id, self.timer_id = client, user_id, event_id, timer_id
+        self.killed_at, self.respawns_in = killed_at, respawns_in
+
+    @discord.ui.button(label="Override their timer", style=discord.ButtonStyle.danger)
+    async def override(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return
+        self.stop()
+        await self.client.confirm_override(interaction, self.event_id, self.timer_id, self.killed_at,
+                                           self.respawns_in)
+
+    @discord.ui.button(label="Keep theirs", style=discord.ButtonStyle.secondary)
+    async def keep(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(content="Kept the existing timer. Nothing changed.", view=None)
 
 
 class QuietHoursModal(discord.ui.Modal, title="Quiet hours"):
@@ -366,9 +388,36 @@ class NyerkBot(discord.Client):
                                                         allowed_mentions=NO_MENTIONS)
                 return
             result = timers.report(s, event, interaction.user.id, name, now(), killed_at, respawns_in)
+            conflict = (result.conflict.id, result.conflict.user_name) if result.conflict else None
+            event_id = event.id
+        if conflict:
+            view = OverrideView(self, interaction.user.id, event_id, conflict[0], killed_at, respawns_in)
+            await interaction.response.send_message(result.reply, view=view, ephemeral=True,
+                                                    allowed_mentions=NO_MENTIONS)
+            return
         await interaction.response.send_message(result.reply, ephemeral=True, allowed_mentions=NO_MENTIONS)
         if result.log:
-            (bus.info if result.ok else bus.warn)("timer", result.log)
+            (bus.warn if result.log_level == "warn" or not result.ok else bus.info)("timer", result.log)
+        if result.ok:
+            self.request_refresh()
+
+    async def confirm_override(self, interaction: discord.Interaction, event_id: int, timer_id: int,
+                               killed_at: str, respawns_in: str) -> None:
+        name = interaction.user.display_name
+        with db.session() as s:
+            event = s.get(Event, event_id)
+            if event is None:
+                await interaction.response.edit_message(content="That boss no longer exists.", view=None)
+                return
+            result = timers.report(s, event, interaction.user.id, name, now(), killed_at, respawns_in,
+                                   override_id=timer_id)
+            if result.conflict:  # the timer changed while they were deciding
+                await interaction.response.edit_message(
+                    content="That timer changed in the meantime. Report again to see the current one.", view=None)
+                return
+        await interaction.response.edit_message(content=result.reply, view=None)
+        if result.log:
+            (bus.warn if result.log_level == "warn" or not result.ok else bus.info)("timer", result.log)
         if result.ok:
             self.request_refresh()
 

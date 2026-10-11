@@ -136,3 +136,41 @@ def test_dashboard_never_deletes_an_alert(s, monkeypatch):
 
     ch, alert_id = asyncio.run(run())
     assert alert_id not in ch.deleted
+
+
+class _Resp:
+    def __init__(self):
+        self.sent, self.edits = [], []
+
+    async def send_message(self, content, view=None, ephemeral=False, allowed_mentions=None):
+        self.sent.append((content, view))
+
+    async def edit_message(self, content=None, view=None):
+        self.edits.append(content)
+
+
+def _interaction(uid, name):
+    user = type("U", (), {"id": uid, "display_name": name})()
+    return type("I", (), {"user": user, "response": _Resp()})()
+
+
+def test_override_prompt_then_confirm(s, monkeypatch):
+    from nyerk import timers as t
+    clock = [ny(2026, 10, 9, 12, 0)]
+    b, _ = make_bot(monkeypatch, clock)
+    first = t.report(s, s.scalar(select(Event).where(Event.name == "Silent Dartan")), 1, "Raelin", clock[0]).timer
+    s.commit()
+
+    async def run():
+        i = _interaction(2, "Kai")
+        await b.handle_boss_report(i, "Silent Dartan")
+        text, view = i.response.sent[0]
+        assert "Raelin" in text and [c.label for c in view.children] == ["Override their timer", "Keep theirs"]
+        c = _interaction(2, "Kai")
+        await b.confirm_override(c, view.event_id, view.timer_id, "", "")
+        return c.response.edits[0]
+
+    reply = asyncio.run(run())
+    assert reply.startswith("Timer set: Silent Dartan")
+    s.expire_all()
+    assert s.get(type(first), first.id).status == "overridden"

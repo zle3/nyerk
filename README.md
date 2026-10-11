@@ -207,7 +207,7 @@ Import merges: rows are matched by name, and anything missing from the file is l
 | --- | --- |
 | `nyerk/schedules.py` | Schedule types (hourly, daily, every N hours, weekly, monthly, one-off, kill-reported). Each type answers "next occurrence after T". To add a type, subclass `ScheduleType` and decorate it with `@register`; the admin form builds itself from `fields`. |
 | `nyerk/engine.py` | Due alerts, skip-after-downtime, message templates, dashboard text, cleanup. Has no Discord code. |
-| `nyerk/timers.py` | World boss reports, edits, cancels, duplicate and limit rules. |
+| `nyerk/timers.py` | World boss reports, edits, cancels, overrides and limit rules. |
 | `nyerk/bot.py` | The only module that talks to Discord: 30 s scheduler, dashboard repost and buttons, the `/nyerk` commands, reaction roles, #logs. |
 | `nyerk/shugo.py` | shugo.gg table parser and the review diff. Hand-edited fields are never overwritten. |
 | `nyerk/housekeeping.py` | Nightly SQLite backup (04:00 server time), daily shugo.gg check, self-signed cert. |
@@ -218,6 +218,7 @@ Import merges: rows are matched by name, and anything missing from the file is l
 
 - **Restarts:** alerts whose send time passed while Nyerk was down are skipped and logged to #logs. They are not sent late. The `sent_messages` ledger prevents double posts after a restart.
 - **Kill reports:** a report with no time assumes the kill happened 1 minute ago (the report offset, editable in Settings). A `respawns_in` report uses the remaining time exactly as given. Warnings that are already in the past when a timer is reported are skipped silently.
+- **Re-reporting a boss:** one active timer per boss. Reporting a boss you already reported replaces your timer. If someone else reported it, you get a private warning with **Override their timer** or **Keep theirs**; overrides replace their timer and are logged to #logs with both names.
 - **Time zones:** each event stores its own time zone. Game events keep their New York hour, while resets and maintenance stay pinned to UTC, so their New York time moves an hour earlier on November 1. Tests cover both cases.
 - **Maintenance overrides:** an override replaces one week's regular window. Emergency windows are added on top of the regular schedule.
 - **Message templates:** a line containing only `{role}` is dropped when that slot's ping is off. Reporters are shown by display name, and user mentions are always disabled.

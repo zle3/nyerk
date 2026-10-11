@@ -18,12 +18,30 @@ def test_blank_report_assumes_kill_one_minute_ago(s):
     assert "Active timers: 1/10" in r.reply
 
 
-def test_duplicate_denied_and_both_fields_rejected(s):
+def test_rereport_replaces_own_timer(s):
     now = ny(2026, 10, 9, 12, 0)
-    assert timers.report(s, boss(s), 1, "Raelin", now).ok
-    dup = timers.report(s, boss(s), 2, "Other", now + 60)
-    assert not dup.ok and "Raelin" in dup.reply and dup.log
-    both = timers.report(s, boss(s, "Silent Dartan"), 2, "Other", now, "10 min ago", "1h")
+    first = timers.report(s, boss(s), 1, "Raelin", now).timer
+    again = timers.report(s, boss(s), 1, "Raelin", now + 600, respawns_in="2h")
+    assert again.ok and again.timer.id == first.id and again.timer.fire_at == now + 600 + 7200
+    assert "Updated your Soul Ruler Kashapa timer" in again.reply
+    assert timers.active_count(s, 1) == 1
+
+
+def test_someone_elses_timer_needs_confirmed_override(s):
+    now = ny(2026, 10, 9, 12, 0)
+    theirs = timers.report(s, boss(s), 1, "Raelin", now).timer
+    r = timers.report(s, boss(s), 2, "Kai", now + 60)
+    assert not r.ok and r.conflict.id == theirs.id
+    assert "Raelin" in r.reply and "misuse" in r.reply and theirs.status == "active"
+    stale = timers.report(s, boss(s), 2, "Kai", now + 60, override_id=theirs.id + 999)
+    assert stale.conflict is not None  # must name the exact timer that was shown
+    done = timers.report(s, boss(s), 2, "Kai", now + 60, killed_at="2 min ago", override_id=theirs.id)
+    assert done.ok and done.log_level == "warn" and "Overrode timer" in done.log and "Raelin" in done.log
+    assert theirs.status == "overridden" and done.timer.user_id == 2
+
+
+def test_both_fields_rejected(s):
+    both = timers.report(s, boss(s, "Silent Dartan"), 2, "Other", ny(2026, 10, 9, 12, 0), "10 min ago", "1h")
     assert not both.ok and "not both" in both.reply
 
 

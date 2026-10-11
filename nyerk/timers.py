@@ -20,6 +20,7 @@ class Result:
     log: str = ""           # line for #logs ("" = nothing to log)
     timer: UserTimer | None = None
     log_level: str = "info"
+    conflict: UserTimer | None = None  # someone else's active timer for this boss
 
 
 def boss_events(s: Session, enabled_only: bool = True) -> list[Event]:
@@ -64,20 +65,32 @@ def _compute(s: Session, boss: Event, now: int, killed_at: str, respawns_in: str
     return "kill", kill, kill + boss.respawn_minutes * 60
 
 
-def report(
-    s: Session, boss: Event, user_id: int, user_name: str, now: int, killed_at: str = "", respawns_in: str = ""
-) -> Result:
-    settings = get_settings(s)
-    existing = s.scalar(
-        select(UserTimer).where(UserTimer.event_id == boss.id, UserTimer.status == "active").limit(1)
+def active_for(s: Session, boss: Event) -> UserTimer | None:
+    return s.scalar(select(UserTimer).where(UserTimer.event_id == boss.id, UserTimer.status == "active").limit(1))
+
+
+def override_warning(boss: Event, existing: UserTimer) -> str:
+    return (
+        f"⚠️ **{boss.name}** already has a timer from **{existing.user_name}**, reported "
+        f"{ts(existing.created_at, 'R')}, firing {ts(existing.fire_at, 'F')} ({ts(existing.fire_at, 'R')}).\n"
+        "Only override it if you're sure it's wrong, for example you saw the kill yourself. "
+        "Overrides replace their timer, are logged with your name, and misuse can cost you access."
     )
-    if existing:
-        return Result(
-            False,
-            f"{boss.name} already has a timer, reported by {existing.user_name} {ts(existing.created_at, 'R')}. "
-            f"It fires at {ts(existing.fire_at, 'F')} ({ts(existing.fire_at, 'R')}).",
-            f"Denied duplicate report for {boss.name} by {user_name} (active timer by {existing.user_name}).",
-        )
+
+
+def report(
+    s: Session, boss: Event, user_id: int, user_name: str, now: int, killed_at: str = "", respawns_in: str = "",
+    override_id: int | None = None,
+) -> Result:
+    """Report a kill. Re-reporting your own active timer replaces it. Someone
+    else's active timer comes back as a conflict, unless `override_id`
+    names that exact timer (the reporter confirmed the override)."""
+    settings = get_settings(s)
+    existing = active_for(s, boss)
+    if existing and existing.user_id == user_id:
+        return _replace_own(s, boss, existing, now, killed_at, respawns_in, user_name)
+    if existing and existing.id != override_id:
+        return Result(False, override_warning(boss, existing), conflict=existing)
     count = active_count(s, user_id)
     if count >= settings.user_timer_limit:
         return Result(
@@ -91,6 +104,11 @@ def report(
         return Result(False, str(exc))
     if fire <= now:
         return Result(False, f"That puts the respawn at {ts(fire, 'F')}, which has already passed.")
+    replaced = ""
+    if existing:  # confirmed override of someone else's timer
+        existing.status = "overridden"
+        replaced = (f" Overrode timer #{existing.id} by {existing.user_name}, which fired "
+                    f"{ts(existing.fire_at, 'f')}.")
     timer = UserTimer(
         event_id=boss.id, user_id=user_id, user_name=user_name, mode=mode, killed_at=kill,
         fire_at=fire, status="active", created_at=now, armed_at=now,
@@ -102,7 +120,26 @@ def report(
         True,
         f"Timer set: {boss.name}, alert at {ts(fire, 'F')} ({ts(fire, 'R')}). "
         f"Active timers: {count + 1}/{settings.user_timer_limit}.",
-        f"Timer #{timer.id} created by {user_name}: {boss.name}, {how}, fires {ts(fire, 'f')}.",
+        f"Timer #{timer.id} created by {user_name}: {boss.name}, {how}, fires {ts(fire, 'f')}.{replaced}",
+        timer,
+        log_level="warn" if existing else "info",
+    )
+
+
+def _replace_own(s: Session, boss: Event, timer: UserTimer, now: int, killed_at: str, respawns_in: str,
+                 user_name: str) -> Result:
+    try:
+        mode, kill, fire = _compute(s, boss, now, killed_at, respawns_in)
+    except TimeParseError as exc:
+        return Result(False, str(exc))
+    if fire <= now:
+        return Result(False, f"That puts the respawn at {ts(fire, 'F')}, which has already passed.")
+    old = timer.fire_at
+    timer.mode, timer.killed_at, timer.fire_at, timer.armed_at = mode, kill, fire, now
+    return Result(
+        True,
+        f"Updated your {boss.name} timer: alert at {ts(fire, 'F')} ({ts(fire, 'R')}).",
+        f"Timer #{timer.id} ({boss.name}) re-reported by {user_name}: was {ts(old, 'f')}, now fires {ts(fire, 'f')}.",
         timer,
     )
 
