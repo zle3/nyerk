@@ -1,18 +1,22 @@
 # Nyerk
 
-**AION 2 event timers and party finder for Discord**, configured from a password-protected web admin on your LAN. Built for one server (NA East, Siel, Elyos).
+**AION 2 event timers, roles and party finder for Discord**, configured from a password-protected web admin on your LAN. Built for one server (NA East, Siel, Elyos).
 
 **Timers** (#aion-2-timer)
 - Plain-text alerts with optional role pings for scheduled events, world boss respawns, resets and maintenance.
 - A live dashboard, always the newest message, with one-click world boss kill reports.
-- Reaction roles in #aion-2-roles, grouped into role messages you define, plus a class selector and a one-click Remove all pings button. Activity is logged to #logs.
+
+**Roles** (#aion-2-roles)
+- Self-serve reaction roles for event and dungeon pings, grouped into role messages you define and numbered 1️⃣ 2️⃣ 3️⃣.
+- Class buttons (several classes per member, with Tank/Support/DPS roles that follow) and gear score buttons.
+- **My roles** overview, **Quiet hours** that pause dungeon pings during a daily window in each member's own time zone, and a one-click **Remove all my ping roles**.
+- Nyerk can create dungeon ping roles for you; activity is logged to #logs.
 
 **Party finder** (#aion-2-party-finder)
-- A class selector that hands out class and Tank/Support/DPS roles.
-- An interest list that pings registered members when a matching party opens.
+- The same class and gear score selectors, plus an interest list that pings registered members when a matching party opens.
 - 5 or 20 person party listings with join, leave, kick, extend, and a shared party status message.
-- **Quiet hours**: members pick a daily window (in their own time zone) when their dungeon ping roles are paused, then given back.
-- **Gear score** buttons under the class selector (party finder and roles channels). One choice per member, kept by Nyerk rather than as a role, used on listings and for dungeon pings.
+
+**Web admin**
 - A **Members** page to manage one person in one place: their class and ping roles, quiet hours, boss timers, registration and party.
 - A **Stats** page: class distribution, content demand, party activity by day and hour, and the most active members.
 
