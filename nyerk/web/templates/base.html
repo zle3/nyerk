@@ -54,10 +54,17 @@
         </div>
       </details>
       {% endfor %}
-      <a href="/search" class="{{ 'active' if nav == 'search' }}">Search</a>
       {% endif %}
       {% if user %}<a href="/me" class="{{ 'active' if nav == 'me' }}">My page</a>{% endif %}
     </nav>
+    {% if is_admin %}
+    <form class="site-search" role="search" method="get" action="/search">
+      <input id="site-search" name="q" type="search" maxlength="80" autocomplete="off" spellcheck="false"
+             placeholder="Search settings" aria-label="Search settings" role="combobox" aria-expanded="false"
+             aria-controls="site-search-list" aria-autocomplete="list" value="{{ q if nav == 'search' else '' }}">
+      <ul id="site-search-list" class="search-pop" role="listbox" aria-label="Suggestions" hidden></ul>
+    </form>
+    {% endif %}
     {% if user %}<span class="small muted who" title="{{ user.name }} · {{ level }}">{{ user.name }}</span>{% endif %}
     <form method="post" action="/logout" class="inline-form">
       <input type="hidden" name="csrf" value="{{ csrf }}">

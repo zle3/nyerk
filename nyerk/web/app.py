@@ -237,7 +237,10 @@ def create_app(cfg, bot=None) -> FastAPI:
     def limit_user(request: Request, user: dict) -> None:
         limiter, key = app.state.limiter, str(user.get("uid"))
         path, method = request.url.path, request.method
+        live = path in websecurity.LIVE_PATHS
         for prefix, verb, n, window in websecurity.USER_LIMITS:
+            if live and prefix != path:
+                continue
             if websecurity.under(path, prefix) and verb in ("", method) \
                     and not limiter.allow(key, f"user:{prefix}:{verb}", n, window):
                 warn_limit(user, f"the request limit for {prefix or 'all pages'}")
@@ -415,10 +418,7 @@ def create_app(cfg, bot=None) -> FastAPI:
 
     search_index = websearch.build_index(HERE / "templates")
 
-    @app.get("/search", response_class=HTMLResponse)
-    async def search_page(request: Request, q: str = ""):
-        user = require(request)
-        q = q[:websearch.MAX_QUERY]
+    def run_search(user: dict, q: str, limit: int) -> list:
         g = grants()
 
         def visible(url: str) -> bool:
@@ -426,10 +426,26 @@ def create_app(cfg, bot=None) -> FastAPI:
             return auth.may_use(user.get("level"), auth.needed_level(path, "GET"), path, "GET", g)
 
         with db.session() as s:
-            results = websearch.search(s, search_index, websearch.clean_query(q), visible,
-                                       owner=auth.allows(user.get("level"), "owner"))
+            return websearch.search(s, search_index, websearch.clean_query(q), visible,
+                                    owner=auth.allows(user.get("level"), "owner"), limit=limit)
+
+    @app.get("/search", response_class=HTMLResponse)
+    async def search_page(request: Request, q: str = ""):
+        user = require(request)
+        q = q[:websearch.MAX_QUERY]
+        results = run_search(user, q, websearch.MAX_RESULTS)
         return render(request, "search.html", q=q.strip(), results=results, max_query=websearch.MAX_QUERY,
                       max_results=websearch.MAX_RESULTS)
+
+    @app.get("/search/suggest")
+    async def search_suggest(request: Request, q: str = ""):
+        """Live suggestions for the search box in the top bar."""
+        from fastapi.responses import JSONResponse
+        user = require(request)
+        q = q[:websearch.MAX_QUERY]
+        items = run_search(user, q, websearch.MAX_SUGGESTIONS) if len(q.strip()) >= 2 else []
+        return JSONResponse([{"label": e.label, "page": e.page, "url": e.url,
+                              "detail": "" if e.detail == "Section" else e.detail[:120]} for e in items])
 
     @app.get("/history", response_class=HTMLResponse)
     async def history_page(request: Request):

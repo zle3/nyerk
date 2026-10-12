@@ -79,3 +79,88 @@
     if (open) { open.open = false; open.querySelector("summary").focus(); }
   });
 })();
+
+// Search box in the top bar: live suggestions as you type.
+(function () {
+  "use strict";
+  const input = document.getElementById("site-search");
+  const list = document.getElementById("site-search-list");
+  if (!input || !list) return;
+  const cache = new Map();
+  let timer = 0, active = -1, items = [], seq = 0;
+
+  function close() {
+    list.hidden = true; active = -1;
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
+  }
+
+  function select(i) {
+    const rows = list.querySelectorAll("li[role=option]");
+    rows.forEach((li, n) => li.setAttribute("aria-selected", n === i ? "true" : "false"));
+    active = i;
+    if (i >= 0 && rows[i]) {
+      input.setAttribute("aria-activedescendant", rows[i].id);
+      rows[i].scrollIntoView({ block: "nearest" });
+    } else {
+      input.removeAttribute("aria-activedescendant");
+    }
+  }
+
+  function render(q, results) {
+    items = results;
+    list.replaceChildren();
+    results.forEach((r, n) => {
+      const li = document.createElement("li");
+      li.id = "site-search-" + n; li.setAttribute("role", "option");
+      const a = document.createElement("a");
+      a.href = r.url; a.tabIndex = -1;
+      const page = document.createElement("span"); page.className = "s-page"; page.textContent = r.page;
+      const label = document.createElement("span"); label.className = "s-label"; label.textContent = r.label;
+      a.append(page, label);
+      if (r.detail) {
+        const d = document.createElement("span"); d.className = "s-detail"; d.textContent = r.detail;
+        a.append(d);
+      }
+      li.append(a); list.append(li);
+    });
+    if (!results.length) {
+      const li = document.createElement("li"); li.className = "s-empty";
+      li.textContent = "Nothing matches. Press Enter to search anyway.";
+      list.append(li);
+    }
+    const all = document.createElement("li"); all.className = "s-all";
+    const a = document.createElement("a"); a.href = "/search?q=" + encodeURIComponent(q); a.tabIndex = -1;
+    a.textContent = "See all results for “" + q + "”";
+    all.append(a); list.append(all);
+    list.hidden = false; input.setAttribute("aria-expanded", "true"); select(-1);
+  }
+
+  async function suggest() {
+    const q = input.value.trim().slice(0, 80);
+    if (q.length < 2) { close(); return; }
+    if (cache.has(q)) { render(q, cache.get(q)); return; }
+    const mine = ++seq;
+    try {
+      const resp = await fetch("/search/suggest?q=" + encodeURIComponent(q), {
+        headers: { Accept: "application/json" }, credentials: "same-origin",
+      });
+      if (!resp.ok) return;  // rate limited or signed out: keep the box usable, just no list
+      const data = await resp.json();
+      if (cache.size > 100) cache.clear();
+      cache.set(q, data);
+      if (mine === seq) render(q, data);
+    } catch (e) { /* offline: no suggestions */ }
+  }
+
+  input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(suggest, 180); });
+  input.addEventListener("focus", () => { if (input.value.trim().length >= 2) suggest(); });
+  input.addEventListener("keydown", (e) => {
+    if (list.hidden) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); select(Math.min(active + 1, items.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); select(Math.max(active - 1, -1)); }
+    else if (e.key === "Escape") { close(); }
+    else if (e.key === "Enter" && active >= 0 && items[active]) { e.preventDefault(); location.href = items[active].url; }
+  });
+  document.addEventListener("click", (e) => { if (!e.target.closest(".site-search")) close(); });
+})();

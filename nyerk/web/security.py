@@ -47,10 +47,14 @@ def client_ip(request: Request) -> str:
 USER_LIMITS = [
     ("", "", 120, 60),
     ("/search", "GET", 30, 60),
+    # Live suggestions fire as you type, so they get their own, larger
+    # allowance instead of counting toward the two above (see LIVE_PATHS).
+    ("/search/suggest", "GET", 180, 60),
     ("/stats", "GET", 20, 60),
     ("/settings/export", "GET", 10, 600),
     ("/me", "", 30, 60),          # /me reads and changes roles through Discord
 ]
+LIVE_PATHS = ("/search/suggest",)
 # Actions that post or delete many Discord messages, create roles or fetch
 # shugo.gg: at most once per this many seconds, shared by everyone but the
 # owner, so nobody can use them to run Nyerk into Discord's rate limits.

@@ -415,3 +415,33 @@ def test_limit_warnings_do_not_flood_logs(app, monkeypatch):
     with db.session() as s:
         hits = s.scalars(select(LogEntry).where(LogEntry.text.like("%hit the request limit%"))).all()
     assert len(hits) == 1
+
+
+def test_live_suggestions(app, monkeypatch):
+    from nyerk import tracking
+    tracking.add_ping(910000000000000005, "Raelin", 123)
+    admin = sign_in(app, ADMIN, monkeypatch)
+    r = admin.get("/search/suggest?q=chat")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
+    assert {"label", "page", "url", "detail"} <= set(r.json()[0])
+    assert any(x["url"] == "/party#party_chat_delete_min" for x in r.json())
+    assert admin.get("/search/suggest?q=c").json() == []                          # too short
+    assert "/party" in [x["url"] for x in admin.get("/search/suggest?q=lfg").json()]  # synonym
+    assert any(x["label"] == "Quiet hours" for x in admin.get("/search/suggest?q=quite+hours").json())  # typo
+    assert admin.get("/search/suggest?q=stats").json()[0]["url"] == "/stats"     # pages
+    assert any(x["url"] == "/members/910000000000000005" for x in admin.get("/search/suggest?q=raelin").json())
+    assert len(admin.get("/search/suggest?q=e").json()) == 0
+    assert len(admin.get("/search/suggest?q=role").json()) <= 8
+    assert all(not x["url"].startswith("/settings") for x in admin.get("/search/suggest?q=channel").json())
+    member = sign_in(app, MEMBER, monkeypatch)
+    assert member.get("/search/suggest?q=chat").status_code == 403
+    assert 'id="site-search"' in admin.get("/").text and 'id="site-search"' not in member.get("/me").text
+
+
+def test_live_suggestions_have_their_own_limit(app, monkeypatch):
+    admin = sign_in(app, ADMIN, monkeypatch)
+    for _ in range(150):                         # more than the 120/min page budget
+        assert admin.get("/search/suggest?q=ro").status_code == 200
+    assert admin.get("/events").status_code == 200   # pages still work
+    codes = [admin.get("/search/suggest?q=ro").status_code for _ in range(40)]
+    assert codes[-1] == 429                       # but suggestions are capped too

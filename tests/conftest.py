@@ -22,3 +22,11 @@ def s():
         seed_reaction_groups(session)
         session.flush()
         yield session
+
+
+@pytest.fixture(autouse=True)
+def _fresh_search_data():
+    """Each test has its own database; don't reuse search data from another."""
+    from nyerk.web import search
+    search.forget_data()
+    yield
