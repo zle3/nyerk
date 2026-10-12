@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Settings</h1>
 <p class="lede">Applies on the next scheduler check, no restart needed.</p>
-<div class="actions"><a class="btn secondary small" href="/access">Access and security</a><a class="btn secondary small" href="/history">Change history</a></div>
+<div class="actions">{% if is_owner %}<a class="btn secondary small" href="/access">Access and security</a>{% endif %}{% if can.history %}<a class="btn secondary small" href="/history">Change history</a>{% endif %}</div>
 
 <form method="post" action="/settings">
   <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -78,6 +78,7 @@
   <div class="actions">
     <a class="btn secondary" href="/settings/export">Export settings</a>
   </div>
+  {% if can.wording and can.roles %}
   <form method="post" action="/settings/import" enctype="multipart/form-data" class="mt">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <div class="inline">
@@ -86,8 +87,10 @@
     </div>
     <p class="small muted">You'll see every change before anything is applied.</p>
   </form>
+  {% else %}<p class="small muted">Import needs Settings, Message wording and Roles opened to admins on the Access page.</p>{% endif %}
 </div>
 
+{% if is_owner %}
 <p class="section-label">Admin password</p>
 <form method="post" action="/settings/password" class="card">
   <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -99,4 +102,5 @@
   </div>
   <button class="btn secondary" type="submit">Change password</button>
 </form>
+{% endif %}
 {% endblock %}

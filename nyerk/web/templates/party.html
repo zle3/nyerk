@@ -23,8 +23,17 @@
   <p class="small muted">Posted: class {{ '✓' if state.class_panel_message_id else '–' }} · gear {{ '✓' if state.gear_panel_message_id else '–' }} · interest {{ '✓' if state.interest_panel_message_id else '–' }} · create {{ '✓' if state.party_panel_message_id else '–' }} · status {{ '✓' if state.party_status_message_id else '–' }}</p>
 </div>
 
-<fieldset {{ 'disabled' if not is_owner }} class="{{ '' if is_owner else 'owner-only' }}">
-{% if not is_owner %}<p class="owner-note">Class roles, type roles and the standard makeup: owner only.</p>{% endif %}
+<p class="section-label" id="chat">Member chat</p>
+<form method="post" action="/party-chat" class="card">
+  {{ csrf_field() }}
+  <div class="fields">
+    <div class="field"><label for="party_chat_delete_min">Delete member messages after (minutes)</label><input id="party_chat_delete_min" name="party_chat_delete_min" type="number" min="0" max="1440" value="{{ st.party_chat_delete_min }}"><div class="help">Members may type in the party channel to plan runs. Their messages are deleted after this long, and the Party status message tells them so. Nyerk's messages and pinned messages stay. 0 keeps chat and hides the note.</div></div>
+  </div>
+  <button class="btn" type="submit">Save</button>
+</form>
+
+<fieldset {{ 'disabled' if not can.roles }} class="{{ '' if can.roles else 'owner-only' }}">
+{% if not can.roles %}<p class="owner-note">Class roles, type roles and the standard makeup: owner only.</p>{% endif %}
 <p class="section-label" id="types">Class type roles and standard makeup</p>
 <form method="post" action="/party/types" class="card">
   {{ csrf_field() }}
@@ -88,8 +97,8 @@
       <tr class="{{ '' if c.active else 'off' }}">
         <td><input type="text" name="name_{{ c.id }}" value="{{ c.name }}" aria-label="Name" required></td>
         <td><input type="text" name="emoji_{{ c.id }}" value="{{ c.emoji }}" size="4" class="emoji-input" aria-label="Title emoji for {{ c.name }}" title="Shown before the name in listings"></td>
-        <td>{% if c.role_id %}<input type="text" name="role_id_{{ c.id }}" value="{{ c.role_id }}" class="mono" aria-label="Ping role ID for {{ c.name }}" {{ 'disabled' if not is_owner }}>
-            {% else %}<div class="inline"><input type="text" name="role_id_{{ c.id }}" value="" placeholder="Role ID" class="mono" aria-label="Ping role ID for {{ c.name }}" {{ 'disabled' if not is_owner }}><button class="btn small secondary" type="submit" form="mk-role-{{ c.id }}">Create role</button></div>{% endif %}</td>
+        <td>{% if c.role_id %}<input type="text" name="role_id_{{ c.id }}" value="{{ c.role_id }}" class="mono" aria-label="Ping role ID for {{ c.name }}" {{ 'disabled' if not can.roles }}>
+            {% else %}<div class="inline"><input type="text" name="role_id_{{ c.id }}" value="" placeholder="Role ID" class="mono" aria-label="Ping role ID for {{ c.name }}" {{ 'disabled' if not can.roles }}><button class="btn small secondary" type="submit" form="mk-role-{{ c.id }}">Create role</button></div>{% endif %}</td>
         <td><input type="number" name="min_gear_score_{{ c.id }}" value="{{ c.min_gear_score }}" class="order-input" aria-label="Minimum gear for {{ c.name }}"></td>
         <td><input type="number" name="sort_order_{{ c.id }}" value="{{ c.sort_order }}" class="order-input" aria-label="Order for {{ c.name }}"></td>
         <td><label class="switch"><input type="checkbox" name="active_{{ c.id }}" value="1" {{ 'checked' if c.active }}><span class="track"></span></label></td>

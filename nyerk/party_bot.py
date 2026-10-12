@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import discord
@@ -229,6 +230,7 @@ class PartyFinder:
     def __init__(self, bot: "NyerkBot") -> None:
         self.bot = bot
         self._sync_lock = asyncio.Lock()
+        self._chat_warned = False
 
     async def _channel(self):
         with db.session() as s:
@@ -454,7 +456,7 @@ class PartyFinder:
     def _status(self, s):
         full = party.live_parties(s, "full")
         buttons = [PartyButton("done", p.id, f"Done: {party.party_title(p)} ({p.leader_name})"[:80]) for p in full[:25]]
-        return party.status_text(full), _view(*buttons)
+        return party.status_text(full, get_settings(s).party_chat_delete_min), _view(*buttons)
 
     # -- reconciler ---------------------------------------------------------------
 
@@ -468,6 +470,44 @@ class PartyFinder:
         if res.interests_expired:
             bus.info("party", f"{res.interests_expired} registration(s) expired.", discord=False)
         await self.sync()
+        await self.clean_chat()
+
+    async def clean_chat(self) -> None:
+        """Members may chat in the party channel to plan runs; their messages
+        are deleted once they are party_chat_delete_min old. Nyerk's own
+        messages and pinned messages stay."""
+        with db.session() as s:
+            minutes = get_settings(s).party_chat_delete_min
+        me = getattr(self.bot, "user", None)
+        if not minutes or me is None:
+            return
+        channel = await self._channel()
+        if channel is None:
+            return
+        t = now()
+        cutoff = datetime.fromtimestamp(t - minutes * 60, timezone.utc)
+        try:
+            old = [m async for m in channel.history(limit=100, before=cutoff)
+                   if m.author.id != me.id and not m.pinned]
+            # Bulk delete only takes messages under 14 days old.
+            recent = [m for m in old if m.created_at.timestamp() > t - 13 * 86400]
+            if recent:
+                await channel.delete_messages(recent)
+            for m in old:
+                if m not in recent:
+                    await m.delete()
+        except discord.Forbidden:
+            if not self._chat_warned:
+                self._chat_warned = True
+                bus.error("party", "Can't delete member chat in the party channel: give Nyerk Manage Messages "
+                                   "and Read Message History there.")
+            return
+        except discord.HTTPException as exc:
+            log.warning("party chat cleanup failed: %r", exc)
+            return
+        self._chat_warned = False
+        if old:
+            bus.info("party", f"Deleted {len(old)} chat message(s) older than {minutes} minutes.", discord=False)
 
     async def sync(self) -> None:
         async with self._sync_lock:

@@ -565,16 +565,23 @@ def party_title_for(c: PfContent) -> str:
     return f"{c.emoji} {c.name}".strip() if c.emoji else c.name
 
 
-def status_text(parties: list[PfParty]) -> str:
+def chat_note(minutes: int) -> str:
+    """The line under Party status telling members they may chat below."""
+    if not minutes:
+        return ""
+    return f"💬 **Chat below to plan your runs.** Messages here are deleted after {minutes} minutes."
+
+
+def status_text(parties: list[PfParty], chat_minutes: int = 0) -> str:
     lines = ["## Party status"]
     if not parties:
         lines.append("-# No full parties right now. Full parties show here until the leader presses Done.")
-        return "\n".join(lines)
     for p in parties:
         lines.append(f"**{party_title(p)}** | {len(p.members)}/{p.size} | leader {escape_md(p.leader_name)}"
                      f" | ready {ts(p.filled_at or 0, 'R')}")
         lines.append(", ".join(_who(m) for m in p.members))
+    note = chat_note(chat_minutes)
     text = "\n".join(lines)
-    while len(text) > LIMIT:
+    while len(text) + len(note) + 2 > LIMIT:
         text = text[: text.rfind("\n")]
-    return text
+    return f"{text}\n\n{note}" if note else text

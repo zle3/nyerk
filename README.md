@@ -144,10 +144,11 @@ The full list behind the Quick start, for reference. *Optional* items can be ski
 
 **Discord**
 - [ ] Bot created and invited with the Quick start link (it includes every permission Nyerk needs)
-- [ ] Timer, roles, logs and party finder channels; timer and party finder read-only for members
+- [ ] Timer, roles, logs and party finder channels; timer read-only for members, party finder open for chat (Nyerk deletes members' messages after 15 minutes)
 - [ ] Ping roles for the events you want, each mentionable
 - [ ] Class roles and Tank, Support and DPS roles (party finder)
 - [ ] Nyerk's role above every role it hands out
+- [ ] Manage Messages for Nyerk in the party finder channel, so it can delete old chat
 - [ ] *Optional:* Manage Messages for Nyerk in the roles channel, so **Remove all my ping roles** also clears members' reactions
 
 **Server**
@@ -180,6 +181,7 @@ On first start Nyerk already has the ten launch events, six ping categories, eig
 **Party finder channel**
 - **Register** to say you're free for certain dungeons for a while; Nyerk pings you when a matching party opens, and you can join from the ping.
 - **Create party** for 5 or 20 players (open to any class, a standard 1 tank / 1 support / 3 DPS, or a custom makeup). Members join with one click; the leader can kick, extend or close it. Full parties move to the **Party status** message.
+- **Chat** in the channel to plan runs. Messages are deleted after 15 minutes, and the **Party status** message says so. Admins change the time (or turn it off) on the web page under **Party finder → Member chat**; pinned messages stay.
 
 **Web page** (with public access): **My page** lets members do all of the above from a browser after signing in with Discord.
 
@@ -227,8 +229,10 @@ Optional. People open Nyerk at your own domain; no port is opened on your router
 | Who | How | Can |
 |---|---|---|
 | **Owner** | Your Discord user ID in `OWNER_IDS`, or the owner password on your LAN | Everything |
-| **Admin** | Holds a role in `ADMIN_ROLE_IDS` (checked again every 5 minutes) | Events and alert toggles, boss timers and button order, maintenance, party finder content and panels, members, defaults, stats, logs, posting the roles channel. Not message wording, role IDs, roles channel setup, classes, Settings or export/import. 30 changes an hour. |
+| **Admin** | Holds a role in `ADMIN_ROLE_IDS` (checked again every 5 minutes) | Events and alert toggles, boss timers and button order, maintenance, party finder content, panels and member chat, members, defaults, stats, logs, posting the roles channel. Not message wording, role IDs, roles channel setup, classes, Settings, export/import or history, unless you open them (below). 30 changes an hour. |
 | **Member** | Anyone in your server | **My page**: their boss timers, classes and pings, gear score, quiet hours, registration and party |
+
+**Hands off?** On **Settings → Access and security → What admins may change**, open any of the owner-only areas to admins: **Settings**, **Message wording**, **Roles and role IDs**, **Change history**. Importing a settings file also needs the first three, and restoring from history needs all four. The Access page and the owner password always stay yours, and an import or restore can never change who may do what.
 
 **1. Your domain on Cloudflare.** Add the domain at [dash.cloudflare.com](https://dash.cloudflare.com) (Free plan) and switch its nameservers at your registrar to the two Cloudflare gives you. Wait until it shows **Active**.
 
@@ -294,7 +298,7 @@ Mostly automatic:
 - **Invite scopes:** `bot` and `applications.commands`.
 - **In the four channels:** View Channel, Send Messages, Read Message History, Add Reactions, Use Application Commands.
 - **Manage Roles,** with Nyerk's role above every role it hands out (ping, class, Tank/Support/DPS). Nyerk only creates roles when you click **Create role** for a dungeon.
-- **Manage Messages** is only needed in the roles channel, so **Remove all my ping roles** can clear members' reactions. Nyerk deletes its own messages without it.
+- **Manage Messages** in the party finder channel, to delete members' chat once it is old enough, and in the roles channel, so **Remove all my ping roles** can clear members' reactions. Nyerk deletes its own messages without it.
 - **Role pings:** make each ping role mentionable, or give Nyerk Mention All Roles. Nyerk never pings @everyone.
 - **Intents:** none of the privileged ones; Nyerk uses guilds and guild reactions only.
 

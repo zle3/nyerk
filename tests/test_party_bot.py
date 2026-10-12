@@ -122,3 +122,64 @@ def test_create_form_defaults_to_open(s):
     req = asyncio.run(build())["components"][2]["component"]
     assert [o["value"] for o in req["options"] if o["default"]] == ["none"]
     assert req["options"][0]["label"].startswith("Open")
+
+
+class ChatMessage:
+    def __init__(self, ch, author_id, age, pinned=False):
+        from datetime import datetime, timezone
+        self.ch, self.id = ch, author_id * 1000 + age
+        self.author = type("A", (), {"id": author_id})()
+        self.created_at = datetime.fromtimestamp(T - age, timezone.utc)
+        self.pinned = pinned
+
+    async def delete(self):
+        self.ch.single.append(self.id)
+
+
+class ChatChannel:
+    def __init__(self, messages):
+        self.messages, self.bulk, self.single, self.before = messages, [], [], None
+
+    def history(self, limit, before):
+        self.before = before
+
+        async def gen():
+            for m in self.messages:
+                if m.created_at < before:
+                    yield m
+        return gen()
+
+    async def delete_messages(self, msgs):
+        self.bulk += [m.id for m in msgs]
+
+
+def test_chat_cleanup_deletes_old_member_messages_only(s, monkeypatch):
+    setup(s)
+    s.commit()
+    ch = ChatChannel([])
+    ch.messages = [
+        ChatMessage(ch, 5, 20 * 60),             # member, old: bulk delete
+        ChatMessage(ch, 5, 5 * 60),              # member, recent: stays
+        ChatMessage(ch, 99, 60 * 60),            # Nyerk: stays
+        ChatMessage(ch, 6, 30 * 60, pinned=True),  # pinned: stays
+        ChatMessage(ch, 7, 20 * 86400),          # too old for bulk: single delete
+    ]
+    bot = StubBot(ch)
+    bot.user = type("U", (), {"id": 99})()
+    monkeypatch.setattr(party_bot, "now", lambda: T)
+    asyncio.run(party_bot.PartyFinder(bot).clean_chat())
+    assert ch.bulk == [5000 + 20 * 60] and ch.single == [7000 + 20 * 86400]
+    assert ch.before.timestamp() == T - 15 * 60
+
+
+def test_chat_cleanup_off_and_status_note(s, monkeypatch):
+    setup(s)
+    assert "deleted after 15 minutes" in party.status_text([], get_settings(s).party_chat_delete_min)
+    get_settings(s).party_chat_delete_min = 0
+    s.commit()
+    assert "Chat below" not in party.status_text([], 0)
+    ch = ChatChannel([])
+    bot = StubBot(ch)
+    bot.user = type("U", (), {"id": 99})()
+    asyncio.run(party_bot.PartyFinder(bot).clean_chat())
+    assert ch.before is None

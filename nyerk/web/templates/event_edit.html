@@ -89,8 +89,8 @@
       </div>
     </div>
     <div class="field mt">
-      <label for="tmpl{{ sl.lead_minutes }}">Message template {% if not is_owner %}<span class="owner-note">Owner only</span>{% endif %}</label>
-      <textarea id="tmpl{{ sl.lead_minutes }}" name="slot_{{ sl.lead_minutes }}_template" {{ 'disabled' if not is_owner }} placeholder="{{ default_templates.get(sl.lead_minutes, default_templates[15 if sl.lead_minutes else 0]) }}">{{ sl.template }}</textarea>
+      <label for="tmpl{{ sl.lead_minutes }}">Message template {% if not can.wording %}<span class="owner-note">Owner only</span>{% endif %}</label>
+      <textarea id="tmpl{{ sl.lead_minutes }}" name="slot_{{ sl.lead_minutes }}_template" {{ 'disabled' if not can.wording }} placeholder="{{ default_templates.get(sl.lead_minutes, default_templates[15 if sl.lead_minutes else 0]) }}">{{ sl.template }}</textarea>
       <div class="help">Blank uses the default shown in grey. Lines with only <code>{role}</code> are dropped when the ping is off.</div>
     </div>
     {% if sl.lead_minutes not in (15, 5, 0) %}
@@ -117,10 +117,10 @@
           {% for val, label in (('main', 'Upcoming events'), ('top', 'Pinned at the top'), ('hidden', 'Hidden')) %}
           <option value="{{ val }}" {{ 'selected' if (e and e.dashboard == val) or (not e and val == 'main') }}>{{ label }}</option>{% endfor %}
         </select></div>
-      <div class="field"><label for="dashboard_label">Line label {% if not is_owner %}<span class="owner-note">Owner only</span>{% endif %}</label>
-        <input id="dashboard_label" name="dashboard_label" type="text" {{ 'disabled' if not is_owner }} placeholder="{name} starts" value="{{ v('dashboard_label', e.dashboard_label if e else '') }}"></div>
+      <div class="field"><label for="dashboard_label">Line label {% if not can.wording %}<span class="owner-note">Owner only</span>{% endif %}</label>
+        <input id="dashboard_label" name="dashboard_label" type="text" {{ 'disabled' if not can.wording }} placeholder="{name} starts" value="{{ v('dashboard_label', e.dashboard_label if e else '') }}"></div>
       <div class="field"><label for="dashboard_label_active">Label while running</label>
-        <input id="dashboard_label_active" name="dashboard_label_active" type="text" {{ 'disabled' if not is_owner }} placeholder="{name} ends" value="{{ v('dashboard_label_active', e.dashboard_label_active if e else '') }}">
+        <input id="dashboard_label_active" name="dashboard_label_active" type="text" {{ 'disabled' if not can.wording }} placeholder="{name} ends" value="{{ v('dashboard_label_active', e.dashboard_label_active if e else '') }}">
         <div class="help">Pinned events with a duration only.</div></div>
       <div class="field"><label for="sort_order">Sort order</label>
         <input id="sort_order" name="sort_order" type="number" value="{{ v('sort_order', e.sort_order if e else 0) }}">

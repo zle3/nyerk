@@ -30,7 +30,8 @@ ID_FIELDS = {
     "timer_channel_id", "roles_channel_id", "log_channel_id", "party_channel_id",
     "tank_role_id", "support_role_id", "dps_role_id", "role_id",
 }
-SKIP_SETTINGS = {"id", "admin_password_hash"}
+# Access controls never travel in a file, so an import or a restore can't change them.
+SKIP_SETTINGS = {"id", "admin_password_hash", "admin_locked", "admin_grants"}
 CLASS_TYPES = ("tank", "support", "dps")
 
 

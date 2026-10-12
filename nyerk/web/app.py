@@ -192,15 +192,22 @@ def create_app(cfg, bot=None) -> FastAPI:
     def current(request: Request) -> dict | None:
         return request.session.get("user")
 
-    def is_owner(request: Request) -> bool:
-        return auth.allows((current(request) or {}).get("level"), "owner")
+    def grants() -> frozenset[str]:
+        with db.session() as s:
+            return auth.parse_grants(get_settings(s).admin_grants)
+
+    def may(request: Request, area: str) -> bool:
+        """Owner, or an admin the owner has opened this area to."""
+        level = (current(request) or {}).get("level")
+        return auth.allows(level, "owner") or (level == "admin" and area in grants())
 
     def require(request: Request) -> dict:
         user = current(request)
         if not user:
             raise Login()
         need = auth.needed_level(request.url.path, request.method)
-        if not auth.allows(user.get("level"), need):
+        g = grants() if need == "owner" else frozenset()
+        if not auth.may_use(user.get("level"), need, request.url.path, request.method, g):
             raise Forbidden("Only the owner can change this." if need == "owner"
                             else "This page is for Nyerk admins.")
         if need == "owner" and request.method == "POST" and time.time() - user["issued"] > auth.FRESH_SECONDS:
@@ -241,6 +248,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             preview=preview,
             user=user, level=user.get("level", ""), is_owner=auth.allows(user.get("level"), "owner"),
             is_admin=auth.allows(user.get("level"), "admin"),
+            can={a: may(request, a) for a in auth.AREAS},
             request=request, csrf=request.session["csrf"], flashes=request.session.pop("flash", []),
             nav=name.split(".")[0], pending_changes=len((pending or {}).get("changes", [])),
             bot_status=app.state.bot.status() if app.state.bot else None,
@@ -394,11 +402,15 @@ def create_app(cfg, bot=None) -> FastAPI:
     @app.get("/access", response_class=HTMLResponse)
     async def access_page(request: Request):
         require(request)
+        granted = grants()
         with db.session() as s:
             locked = get_settings(s).admin_locked
             logins = list(s.scalars(select(LogEntry).where(LogEntry.kind == "admin", LogEntry.text.like("% signed in%"))
                                     .order_by(LogEntry.id.desc()).limit(30)))
         return render(request, "access.html", locked=locked, logins=logins, cfg_public=cfg.public_url,
+                      AREAS=auth.AREAS, granted=granted,
+                      opened=[auth.AREAS[a][0] for a in auth.AREAS if a in granted],
+                      closed=[auth.AREAS[a][0] for a in auth.AREAS if a not in granted],
                       discord_login=cfg.discord_login, owner_ids=sorted(cfg.owner_ids),
                       admin_role_ids=sorted(cfg.admin_role_ids), password_login=cfg.password_login)
 
@@ -412,6 +424,17 @@ def create_app(cfg, bot=None) -> FastAPI:
         flash(request, "Admin access locked: admin-role holders now only see their own page." if lock
               else "Admin access unlocked.")
         return back("/access")
+
+    @app.post("/access/grants")
+    async def access_grants(request: Request):
+        data = await form(request)
+        chosen = [a for a in auth.AREAS if data.get(f"area_{a}")]
+        with db.session() as s:
+            get_settings(s).admin_grants = ",".join(chosen)
+        names = ", ".join(auth.AREAS[a][0] for a in chosen) or "none"
+        bus.warn("admin", f"The owner set what admins may change. Opened to admins: {names}.")
+        flash(request, f"Saved. Admins may now use: {names}.")
+        return back("/access#areas")
 
     @app.post("/access/signout-all")
     async def access_signout_all(request: Request):
@@ -804,7 +827,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             if e is None:
                 raise HTTPException(404)
             try:
-                changes = _apply_event_form(s, e, data, owner=is_owner(request))
+                changes = _apply_event_form(s, e, data, owner=may(request, "wording"))
             except ValueError as exc:
                 s.rollback()
                 e = s.get(Event, event_id) if event_id else None
@@ -1066,7 +1089,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                 e.sort_order = i
                 e.enabled = bool(data.get(f"show_{e.id}"))
             st = get_settings(s)
-            if is_owner(request):  # button wording is owner-only
+            if may(request, "wording"):  # button wording is owner-only unless opened to admins
                 st.boss_button_label, st.custom_button_label = label, custom
             summary = ", ".join(e.name for e in order if e.enabled)
         bus.info("config", f"Dashboard buttons saved: {summary or 'none'}.")
@@ -1474,7 +1497,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         try:
             with db.session() as s:
                 rows = party.contents(s, False)
-                owner = is_owner(request)
+                owner = may(request, "roles")
                 updates = {c.id: _pf_values("content", {k: data.get(f"{k}_{c.id}", "") for k in (
                     "name", "emoji", "role_id", "min_gear_score", "sort_order")}
                     | {"active": data.get(f"active_{c.id}")}
@@ -1575,6 +1598,21 @@ def create_app(cfg, bot=None) -> FastAPI:
         bus.info("config", f"Party finder {kind}: removed #{row_id}.")
         refresh()
         return back(f"/party#{kind}")
+
+    @app.post("/party-chat")
+    async def party_chat(request: Request):
+        data = await form(request)
+        try:
+            minutes = _int(data, "party_chat_delete_min", 15, 0, 1440)
+        except ValueError as exc:
+            flash(request, str(exc), "err")
+            return back("/party#chat")
+        with db.session() as s:
+            get_settings(s).party_chat_delete_min = minutes
+        bus.info("config", f"Party channel chat: deleted after {minutes} minutes." if minutes
+                 else "Party channel chat: kept.")
+        flash(request, "Saved. Party status shows the new time within 30 seconds.")
+        return back("/party#chat")
 
     @app.post("/party-panels")
     async def party_panels(request: Request):

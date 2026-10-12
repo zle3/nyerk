@@ -25,8 +25,8 @@
   </table>
   </div>
   <div class="fields">
-    <div class="field"><label for="boss_button_label">Boss button text {% if not is_owner %}<span class="owner-note">Owner only</span>{% endif %}</label><input id="boss_button_label" name="boss_button_label" type="text" {{ 'disabled' if not is_owner }} maxlength="80" value="{{ button_label }}"><div class="help"><code>{name}</code> is the boss name.</div></div>
-    <div class="field"><label for="custom_button_label">Custom time button text</label><input id="custom_button_label" name="custom_button_label" type="text" {{ 'disabled' if not is_owner }} maxlength="80" value="{{ custom_label }}"></div>
+    <div class="field"><label for="boss_button_label">Boss button text {% if not can.wording %}<span class="owner-note">Owner only</span>{% endif %}</label><input id="boss_button_label" name="boss_button_label" type="text" {{ 'disabled' if not can.wording }} maxlength="80" value="{{ button_label }}"><div class="help"><code>{name}</code> is the boss name.</div></div>
+    <div class="field"><label for="custom_button_label">Custom time button text</label><input id="custom_button_label" name="custom_button_label" type="text" {{ 'disabled' if not can.wording }} maxlength="80" value="{{ custom_label }}"></div>
   </div>
   <div class="actions"><button class="btn" type="submit">Save buttons</button>
     <span class="small muted">Buttons follow this order on the dashboard. A boss that isn't shown can't be reported with /nyerk worldboss either.</span></div>

@@ -64,6 +64,8 @@ class Settings(Base):
     admin_password_hash: Mapped[str] = mapped_column(String(255), default="")
     # Owner switch: while on, admin-role holders get member access only.
     admin_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Owner-only areas the owner has opened to admins, comma-separated (see web/auth.AREAS).
+    admin_grants: Mapped[str] = mapped_column(String(200), default="")
 
     # First message in the roles channel. Blank posts no header.
     roles_header: Mapped[str] = mapped_column(
@@ -77,6 +79,7 @@ class Settings(Base):
     party_max_extensions: Mapped[int] = mapped_column(Integer, default=2)
     party_status_hold_min: Mapped[int] = mapped_column(Integer, default=120)
     party_ping_gap_min: Mapped[int] = mapped_column(Integer, default=15)
+    party_chat_delete_min: Mapped[int] = mapped_column(Integer, default=15)  # 0 keeps member chat
     tank_role_id: Mapped[int] = mapped_column(BigInteger, default=0)
     support_role_id: Mapped[int] = mapped_column(BigInteger, default=0)
     dps_role_id: Mapped[int] = mapped_column(BigInteger, default=0)

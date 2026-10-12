@@ -293,3 +293,70 @@ def test_owner_switches(app, monkeypatch):
     assert admin.get("/events").status_code == 200
     owner.post("/access/signout-all", data={"csrf": csrf(owner, "/access")})
     assert admin.get("/me", follow_redirects=False).status_code == 303
+
+
+def test_admin_sets_party_chat_delete_time(app, monkeypatch):
+    member = sign_in(app, MEMBER, monkeypatch)
+    assert member.post("/party-chat", data={"csrf": csrf(member), "party_chat_delete_min": "5"}).status_code == 403
+    admin = sign_in(app, ADMIN, monkeypatch)
+    assert 'name="party_chat_delete_min"' in admin.get("/party").text
+    admin.post("/party-chat", data={"csrf": csrf(admin, "/party"), "party_chat_delete_min": "30"})
+    with db.session() as s:
+        assert get_settings(s).party_chat_delete_min == 30
+    admin.post("/party-chat", data={"csrf": csrf(admin, "/party"), "party_chat_delete_min": "5000"})
+    with db.session() as s:
+        assert get_settings(s).party_chat_delete_min == 30  # out of range: refused
+
+
+def test_owner_opens_areas_to_admins(app, monkeypatch):
+    owner = sign_in(app, OWNER, monkeypatch)
+    admin = sign_in(app, ADMIN, monkeypatch)
+    assert admin.get("/settings").status_code == 403
+    owner.post("/access/grants", data={"csrf": csrf(owner, "/access"), "area_settings": "1", "area_wording": "1"})
+    with db.session() as s:
+        assert get_settings(s).admin_grants == "settings,wording"
+    page = admin.get("/settings").text
+    assert 'href="/settings"' in admin.get("/").text
+    assert "Admin password" not in page and 'href="/access"' not in page and 'href="/history"' not in page
+    assert 'action="/settings/import"' not in page                       # import also needs roles
+    # Wording opened: an admin's template change is kept.
+    with db.session() as s:
+        ev = s.scalar(select(Event).where(Event.name == "Shugo Festival"))
+        eid, cat = ev.id, ev.category_id
+    tok = csrf(admin, f"/events/{eid}")
+    admin.post(f"/events/{eid}", data={"csrf": tok, "name": "Shugo Festival", "category_id": cat,
+                                       "schedule_type": "hourly", "p_hourly_minute": "0",
+                                       "p_hourly_tz": "America/New_York", "enabled": "1", "dashboard": "main",
+                                       "slot_5_enabled": "1", "dashboard_label": "Shugo opens"})
+    with db.session() as s:
+        assert s.get(Event, eid).dashboard_label == "Shugo opens"
+    # Still closed: roles, history, the access page and the owner password.
+    assert admin.post("/party/types", data={"csrf": tok}).status_code == 403
+    assert admin.get("/history").status_code == 403
+    assert admin.get("/access").status_code == 403
+    assert admin.post("/access/grants", data={"csrf": tok, "area_roles": "1"}).status_code == 403
+    assert admin.post("/settings/password", data={"csrf": tok, "current": "pw", "new": "x" * 12,
+                                                  "confirm": "x" * 12}).status_code == 403
+    assert admin.post("/settings/import", data={"csrf": tok, "text": "{}"}).status_code == 403
+    # The admin lock still wins over opened areas.
+    owner.post("/access/lock", data={"csrf": csrf(owner, "/access"), "lock": "1"})
+    assert admin.get("/settings").status_code == 403
+
+
+def test_history_restore_needs_every_area(app, monkeypatch):
+    assert auth.areas_for("/history", "GET") == {"history"}
+    assert auth.areas_for("/history/3/restore", "POST") == {"history", "settings", "wording", "roles"}
+    assert auth.areas_for("/settings/import/apply", "POST") == {"settings", "wording", "roles"}
+    assert auth.areas_for("/access/grants", "POST") is None
+    assert auth.areas_for("/settings/password", "POST") is None
+    assert not auth.may_use("member", "owner", "/settings", "GET", frozenset(auth.AREAS))
+
+
+def test_import_cannot_change_access_controls(app, monkeypatch):
+    from nyerk import transfer
+    with db.session() as s:
+        data = transfer.export(s)
+        assert "admin_grants" not in data["settings"] and "admin_locked" not in data["settings"]
+        data["settings"].update(admin_grants="settings,wording,roles,history", admin_locked=True)
+        transfer.apply_import(s, data)
+        assert get_settings(s).admin_grants == "" and not get_settings(s).admin_locked

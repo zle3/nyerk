@@ -13,8 +13,8 @@
   </form>
 </div>
 
-{% if not is_owner %}<div class="banner">Only the owner can change roles, role messages and the header. You can repost the roles channel.</div>{% endif %}
-<fieldset {{ 'disabled' if not is_owner }} class="{{ '' if is_owner else 'owner-only' }}">
+{% if not can.roles %}<div class="banner">Only the owner can change roles, role messages and the header. You can repost the roles channel.</div>{% endif %}
+<fieldset {{ 'disabled' if not can.roles }} class="{{ '' if can.roles else 'owner-only' }}">
 <p class="section-label" id="header">Channel header</p>
 <form method="post" action="/roles/header" class="card">
   {{ csrf_field() }}

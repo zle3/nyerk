@@ -125,7 +125,7 @@ def party_channel(s, ctx):
         Message(at, party.interest_panel_text(s, NOW), [[Button("Register", "primary"),
                                                           Button("Cancel my registration")]], edited=True),
         Message(at, party.CREATE_PANEL.format(lifetime=st.party_lifetime_min), [[Button("Create party", "primary")]]),
-        Message(at, party.status_text(full), buttons_in_rows(
+        Message(at, party.status_text(full, st.party_chat_delete_min), buttons_in_rows(
             [Button(f"Done: {party.party_title(p)} ({p.leader_name})") for p in full]), edited=True),
     ]
     kick = [m.user_name for m in open_p.members if m.user_id != open_p.leader_id]

@@ -41,7 +41,7 @@
       <a href="/defaults" class="{{ 'active' if nav == 'defaults' }}">Defaults{% if pending_changes %}<span class="badge">{{ pending_changes }}</span>{% endif %}</a>
       <a href="/members" class="{{ 'active' if nav in ('members', 'member') }}">Members</a>
       <a href="/stats" class="{{ 'active' if nav == 'stats' }}">Stats</a>
-      {% if is_owner %}<a href="/settings" class="{{ 'active' if nav == 'settings' }}">Settings</a>{% endif %}
+      {% if can.settings or is_owner %}<a href="/settings" class="{{ 'active' if nav == 'settings' }}">Settings</a>{% endif %}
       <a href="/logs" class="{{ 'active' if nav == 'logs' }}">Logs</a>
       {% endif %}
       {% if user %}<a href="/me" class="{{ 'active' if nav == 'me' }}">My page</a>{% endif %}
