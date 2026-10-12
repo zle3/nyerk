@@ -56,7 +56,7 @@ services:
       retries: 3
 
   # Optional Cloudflare Tunnel: set COMPOSE_PROFILES=tunnel and TUNNEL_TOKEN
-  # in the env. No ports are opened on your router; see README "Public access".
+  # in the env. No ports are opened on your router; see https://github.com/zle3/nyerk/wiki/Public-access
   cloudflared:
     # Pinned release; set CLOUDFLARED_VERSION in the env to move to a newer one.
     image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.0}
@@ -74,7 +74,7 @@ services:
       - nyerk
 
 # A fixed address range for this stack, so a firewall rule can stop the
-# containers from reaching other devices on your LAN (README "Public access").
+# containers from reaching other devices on your LAN (https://github.com/zle3/nyerk/wiki/Public-access).
 networks:
   default:
     ipam:

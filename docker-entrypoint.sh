@@ -23,5 +23,5 @@ if setpriv --reuid="$PUID" --regid="$PGID" --clear-groups \
 fi
 
 echo "nyerk-entrypoint: /data is not writable as $PUID:$PGID ($(stat -c 'owner %u:%g mode %a' /data/logs))." >&2
-echo "nyerk-entrypoint: running as root instead. See README 'Data folder permissions'." >&2
+echo "nyerk-entrypoint: running as root instead. See https://github.com/zle3/nyerk/wiki/Running-and-updating" >&2
 exec "$@"

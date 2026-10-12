@@ -50,7 +50,7 @@ class Config:
     discord_client_secret: str = field(default_factory=lambda: _env("DISCORD_CLIENT_SECRET"))
     # Full access. Comma-separated Discord user IDs; set here, never in the web page.
     owner_ids: frozenset = field(default_factory=lambda: _env_ids("OWNER_IDS"))
-    # Members holding any of these roles get admin access (see README).
+    # Members holding any of these roles get admin access (see https://github.com/zle3/nyerk/wiki/Access-levels).
     admin_role_ids: frozenset = field(default_factory=lambda: _env_ids("ADMIN_ROLE_IDS"))
     # Password sign-in: "lan" (default; only for requests that did not come
     # through Cloudflare), "on" (anywhere) or "off".
