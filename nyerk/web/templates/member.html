@@ -74,4 +74,12 @@
   {% endif %}
   {% if not timers and not registration and not party %}<div class="row"><span class="muted">No active boss timers, registration or party.</span></div>{% endif %}
 </div>
+
+<p class="section-label" id="forget">Forget this member</p>
+<form method="post" action="/members/{{ uid }}/forget" class="card" data-confirm="Erase everything Nyerk keeps about {{ member_name }}? This can't be undone.">
+  {{ csrf_field() }}
+  <p class="small muted">For a privacy request. Deletes {{ member_name }}'s roles record, gear score, quiet hours, registrations and past party seats, takes them out of any party, and removes their name from boss timers, parties they led and the logs. Boss timers and past parties stay for everyone else. Nightly backups still hold the old data until they age out ({{ backup_days }} days); if one is restored in that time, Nyerk forgets them again on start.</p>
+  <label class="switch small"><input type="checkbox" name="remove_roles" value="1" checked><span class="track"></span>Also remove the class and ping roles Nyerk manages from them in Discord</label>
+  <div class="actions mt"><button class="btn danger" type="submit">Forget {{ member_name }}</button></div>
+</form>
 {% endblock %}

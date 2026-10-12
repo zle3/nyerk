@@ -12,7 +12,7 @@ import sys
 
 import uvicorn
 
-from . import db, housekeeping
+from . import db, forgotten, housekeeping
 from .config import Config
 from .db import get_settings
 from .logbus import bus
@@ -153,7 +153,7 @@ def main() -> None:
     from . import safety
     safety.protect_guild(cfg.guild_id)
     check_data_dir(cfg)
-    bus.setup(cfg.log_file)
+    bus.setup(cfg.log_file, cfg.log_keep_days)
     db.init_engine(cfg.db_path)
     with db.session() as s:
         if seed(s):
@@ -164,6 +164,7 @@ def main() -> None:
         if seed_party_finder(s):
             log.info("Seeded party finder classes, gear brackets and time windows.")
     init_password(cfg)
+    forgotten.reapply(cfg)  # a restored backup must not bring forgotten members back
     try:
         asyncio.run(amain(cfg))
     except KeyboardInterrupt:

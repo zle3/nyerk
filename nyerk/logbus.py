@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from sqlalchemy import delete, select
@@ -23,10 +23,12 @@ class LogBus:
         self.queue: asyncio.Queue[str] | None = None
         self.dropped = 0
 
-    def setup(self, log_file: Path) -> None:
+    def setup(self, log_file: Path, keep_days: int = 14) -> None:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-        fh = RotatingFileHandler(log_file, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+        # A new file every day (UTC); files older than keep_days are deleted.
+        fh = TimedRotatingFileHandler(log_file, when="midnight", backupCount=keep_days, encoding="utf-8", utc=True)
+        prune_old_files(log_file, keep_days)
         fh.setFormatter(fmt)
         sh = logging.StreamHandler()
         sh.setFormatter(fmt)
@@ -77,3 +79,25 @@ class LogBus:
 
 
 bus = LogBus()
+
+
+def prune_old_files(log_file: Path, keep_days: int, now: float | None = None) -> int:
+    """Delete rotated log files (nyerk.log.<date> and the older size-rotated
+    nyerk.log.<n>) last written more than keep_days ago."""
+    cutoff = (time.time() if now is None else now) - keep_days * 86400
+    gone = 0
+    for f in log_file.parent.glob(log_file.name + ".*"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                gone += 1
+        except OSError:
+            pass
+    return gone
+
+
+def prune_old_rows(keep_days: int, now: float | None = None) -> int:
+    """Delete web Logs page entries older than keep_days."""
+    cutoff = int((time.time() if now is None else now) - keep_days * 86400)
+    with db.session() as s:
+        return s.execute(delete(LogEntry).where(LogEntry.at < cutoff)).rowcount or 0

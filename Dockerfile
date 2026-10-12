@@ -21,6 +21,11 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # Survive copies through Windows: strip CRLF and restore the exec bit.
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && chmod 755 /usr/local/bin/docker-entrypoint.sh
 
+# The commit this image was built from, shown in the web page footer. Last,
+# so a new commit doesn't invalidate the cached layers above.
+ARG NYERK_VERSION=dev
+ENV NYERK_VERSION=$NYERK_VERSION
+
 VOLUME /data
 EXPOSE 8443
 # Starts as root only to fix /data ownership, then runs as PUID:PGID.

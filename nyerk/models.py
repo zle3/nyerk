@@ -211,6 +211,9 @@ class BotState(Base):
     reaction_map: Mapped[dict] = mapped_column(JSON, default=dict)
     # {"<message id>": {"<emoji>": role_id}} for every roles message posted.
     reaction_messages: Mapped[dict] = mapped_column(JSON, default=dict)
+    # IDs of entries in data/forgotten.json already applied to this database
+    # (see forgotten.py). A restored older copy lacks them, so they run again.
+    forgets_applied: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # Extra messages in the roles channel: class selector copy, remove-all.
     roles_header_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     roles_gear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)

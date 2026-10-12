@@ -2,6 +2,6 @@
 {% block title %}Logs{% endblock %}
 {% block content %}
 <h1>Logs</h1>
-<p class="lede">The last 500 entries, also in <code>data/logs/nyerk.log</code>. Reports, overrides, role and config changes and problems are posted to #logs too; routine lines like scheduled alerts stay here.</p>
+<p class="lede">Up to the last 500 entries from the past {{ log_days }} days, also in <code>data/logs/</code>; older ones are deleted. Reports, overrides, role and config changes and problems are posted to #logs too; routine lines like scheduled alerts stay here.</p>
 {% include "_logs.html" %}
 {% endblock %}

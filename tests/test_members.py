@@ -141,3 +141,62 @@ def test_member_quiet_hours_and_activity(admin):
     admin.post(f"/members/5/timers/{tid}/cancel", data={"csrf": csrf})
     with db.session() as s:
         assert s.get(UserTimer, int(tid)).status == "cancelled"
+
+
+def test_forget_member_erases_their_data(s):
+    from nyerk.models import LogEntry, MemberProfile, PfParty, PfPartyMember
+    from .test_party import T, who
+    m = members
+    s.add(PfContent(name="Fire Temple", min_gear_score=0))
+    s.flush()
+    cid = s.scalar(select(PfContent)).id
+    for i, c in enumerate(party.classes(s)):
+        c.role_id = 1001 + i
+    s.flush()
+    tracking.add_ping(5, "Raelin", 777)
+    quiet.set_hours(s, 5, "Raelin", 23, 7, "America/New_York", set())
+    party.set_gear(s, 5, "Raelin", party.brackets(s)[0].id, T)
+    old = party.create(s, who(s, 5, "Templar"), cid, 5, "none", "", "", T - 9000)
+    party.end(old, "done", T - 5000)
+    live = party.create(s, who(s, 6, "Cleric"), cid, 5, "none", "", "", T)
+    party.join(s, live, who(s, 5, "Templar"), T)
+    s.add(LogEntry(at=T, level="INFO", kind="party", text="Raelin joined; Raelinx is someone else."))
+    s.flush()
+    res = m.forget(s, 5, T + 10)
+    s.flush()
+    assert res.name == "Raelin" and res.left_party
+    for model in (RoleHolder, MemberProfile, QuietHours, PfPartyMember):
+        assert not s.scalars(select(model).where(model.user_id == 5)).all()
+    assert s.get(PfParty, old.id).leader_name == m.FORMER and s.get(PfParty, old.id).leader_id == 0
+    assert [x.user_id for x in s.get(PfParty, live.id).members] == [6]
+    text = s.scalar(select(LogEntry.text).where(LogEntry.kind == "party"))
+    assert text == "former member joined; Raelinx is someone else."
+    assert all(x.user_id != 5 for x in m.known(s))
+
+
+def test_forgotten_list_survives_a_restore_and_expires(s, tmp_path, monkeypatch):
+    from nyerk import forgotten
+    from nyerk.db import get_state
+    from .test_party import T
+    monkeypatch.setenv("NYERK_DATA_DIR", str(tmp_path))
+    cfg = Config()
+    tracking.add_ping(5, "Raelin", 777)
+    s.commit()
+    members.forget(s, 5, T)
+    forgotten.record(cfg, s, 5, T)
+    s.commit()
+    entry = forgotten.load(cfg)[0]
+    assert entry["user_id"] == 5 and set(entry) == {"id", "user_id", "at"}
+    # Live database: already applied, so a member who comes back keeps new data.
+    tracking.add_ping(5, "Raelin", 888)
+    assert forgotten.reapply(cfg, T + 60) == 0
+    assert s.scalars(select(RoleHolder).where(RoleHolder.user_id == 5)).all()
+    # A restored older copy: it doesn't know the forget, so it runs again.
+    get_state(s).forgets_applied = []
+    s.commit()
+    assert forgotten.reapply(cfg, T + 120) == 1
+    s.expire_all()
+    assert not s.scalars(select(RoleHolder).where(RoleHolder.user_id == 5)).all()
+    # After the backups have aged out, the entry is dropped.
+    assert forgotten.reapply(cfg, T + (cfg.backup_keep + 2) * 86400) == 0
+    assert forgotten.load(cfg) == []

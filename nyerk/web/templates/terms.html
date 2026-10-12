@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Terms of use{% endblock %}
+{% block content %}
+<article class="legal">
+<h1>Terms of use</h1>
+<p class="lede">Last updated {{ LEGAL_UPDATED }}. By using Nyerk in Discord or on this web page you agree to these terms.</p>
+
+<h2>Who's who</h2>
+<p>Nyerk is software made by <a href="https://kotone.dev" rel="noopener">kotone.dev</a>. This copy is run by the owners of the Discord server it serves (“the server's owners”), who decide how it is set up and who may use it. kotone.dev does not run this copy and cannot see its data. The software itself is open source under the <a href="{{ REPO_URL }}/blob/main/LICENSE" rel="noopener">MIT License</a>.</p>
+
+<h2>Using Nyerk</h2>
+<ul>
+  <li>Use it for what it's for: game timers, roles and finding groups in this Discord server.</li>
+  <li>Don't post ads, invite links, spam, or anything that breaks <a href="https://discord.com/terms" rel="noopener">Discord's Terms of Service</a> or <a href="https://discord.com/guidelines" rel="noopener">Community Guidelines</a>, which also apply here.</li>
+  <li>Don't try to break, overload or get around Nyerk's limits and access levels, or use someone else's account.</li>
+  <li>Messages you type in the party finder channel are deleted automatically after a while (the channel says how long).</li>
+</ul>
+<p>The server's owners and admins can limit or remove anyone's access to Nyerk, as they can in the Discord server.</p>
+
+<h2>No guarantees</h2>
+<p>Nyerk is provided “as is”, without warranty of any kind. Timers and schedules may be wrong or late; always check in game. Neither kotone.dev nor the server's owners are liable for any loss or damage from using it, as far as the law allows.</p>
+
+<h2>Not official</h2>
+<p>Nyerk is a fan-made tool. It is not affiliated with, endorsed or sponsored by NCSOFT or Discord. AION and related names are trademarks of NCSOFT Corporation. Some default schedules are suggested from <a href="https://shugo.gg/timers" rel="noopener">shugo.gg</a>.</p>
+
+<h2>Changes and contact</h2>
+<p>These terms may change; the date above shows when. For this server, contact its admins in Discord. For the software itself, open an issue on <a href="{{ REPO_URL }}/issues" rel="noopener">GitHub</a> or visit <a href="https://kotone.dev" rel="noopener">kotone.dev</a>.</p>
+<p>See also the <a href="/privacy">privacy policy</a>.</p>
+</article>
+{% endblock %}

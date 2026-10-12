@@ -26,8 +26,8 @@
 <header class="topbar">
   <div class="topbar-inner">
     <a class="brand" href="/">
-      <span class="dot {% if bot_status is none %}{% elif bot_status.connected %}on{% else %}off{% endif %}"
-            title="{% if bot_status is none %}Discord disabled{% elif bot_status.connected %}Connected{% else %}Disconnected{% endif %}"></span>
+      {% if user %}<span class="dot {% if bot_status is none %}{% elif bot_status.connected %}on{% else %}off{% endif %}"
+            title="{% if bot_status is none %}Discord disabled{% elif bot_status.connected %}Connected{% else %}Disconnected{% endif %}"></span>{% endif %}
       Nyerk
     </a>
     {% set groups = [
@@ -66,16 +66,21 @@
     </form>
     {% endif %}
     {% if user %}<span class="small muted who" title="{{ user.name }} · {{ level }}">{{ user.name }}</span>{% endif %}
+    {% if user %}
     <form method="post" action="/logout" class="inline-form">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button class="btn plain small" type="submit">Sign out</button>
     </form>
+    {% else %}
+    <a class="btn plain small signin" href="/login">Sign in</a>
+    {% endif %}
   </div>
 </header>
 <main>
   {% for kind, text in flashes %}<div class="flash {{ kind }}" role="status">{{ text }}</div>{% endfor %}
   {% block content %}{% endblock %}
 </main>
+{% include "_footer.html" %}
 {% endblock %}
 </body>
 </html>

@@ -207,7 +207,7 @@ def test_policy_table():
 def test_every_route_requires_sign_in(app):
     from fastapi.routing import APIRoute
     c = TestClient(app, base_url="https://nyerk.example.com")
-    public = {"/login", "/auth/discord", "/auth/callback"}
+    public = {"/login", "/auth/discord", "/auth/callback", "/terms", "/privacy"}
     checked = 0
     for r in app.routes:
         if not isinstance(r, APIRoute) or r.path in public:
@@ -445,3 +445,35 @@ def test_live_suggestions_have_their_own_limit(app, monkeypatch):
     assert admin.get("/events").status_code == 200   # pages still work
     codes = [admin.get("/search/suggest?q=ro").status_code for _ in range(40)]
     assert codes[-1] == 429                       # but suggestions are capped too
+
+
+def test_terms_privacy_and_footer_are_public(app, monkeypatch):
+    c = TestClient(app, base_url="https://nyerk.example.com")
+    for path, title in (("/terms", "Terms of use"), ("/privacy", "Privacy policy")):
+        r = c.get(path)
+        assert r.status_code == 200 and f"<h1>{title}</h1>" in r.text
+        assert 'href="/login"' in r.text and 'action="/logout"' not in r.text   # signed out: Sign in link
+        assert 'id="site-search"' not in r.text and 'href="/settings"' not in r.text
+    page = c.get("/login").text
+    for link in ('href="/terms"', 'href="/privacy"', 'href="https://kotone.dev"', 'href="https://github.com/zle3/nyerk"'):
+        assert link in page
+    admin = sign_in(app, ADMIN, monkeypatch)
+    assert 'href="https://kotone.dev"' in admin.get("/").text and "Nyerk dev" in admin.get("/").text
+
+
+def test_admin_forgets_a_member(app, monkeypatch):
+    from nyerk import tracking
+    from nyerk.models import LogEntry, RoleHolder
+    tracking.add_ping(910000000000000009, "Iska", 555)
+    admin = sign_in(app, ADMIN, monkeypatch)
+    page = admin.get("/members/910000000000000009").text
+    assert 'action="/members/910000000000000009/forget"' in page
+    r = admin.post("/members/910000000000000009/forget", data={"csrf": csrf(admin, "/members/910000000000000009")})
+    assert "Forgot Iska" in r.text
+    with db.session() as s:
+        assert not s.scalars(select(RoleHolder).where(RoleHolder.user_id == 910000000000000009)).all()
+        line = s.scalar(select(LogEntry.text).where(LogEntry.text.like("%Forget member%")))
+        assert line and "Iska" not in line
+    assert "Iska" not in admin.get("/members").text
+    member = sign_in(app, MEMBER, monkeypatch)
+    assert member.post("/members/1/forget", data={"csrf": csrf(member)}).status_code == 403

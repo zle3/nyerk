@@ -6,6 +6,7 @@ Live roles for one member are fetched from Discord when their page opens.
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 from . import party, quiet
 from .db import get_settings
 from .models import (
-    Category, MemberProfile, PfInterest, PfParty, PfPartyMember, QuietHours, RoleHolder, UserTimer,
+    Category, LogEntry, MemberProfile, PfInterest, PfParty, PfPartyMember, QuietHours, RoleHolder, UserTimer,
 )
 
 
@@ -165,3 +166,54 @@ def detail(s: Session, user_id: int) -> dict:
     return dict(name=name, timers=timers, registration=reg, registration_text=reg_text,
                 party=p, party_title=party.party_title(p) if p else "", quiet=q,
                 quiet_text=quiet.window_text(q) if q else "", tracked=tracked, paused=paused_roles(s, user_id))
+
+
+FORMER = "Former member"
+
+
+@dataclass
+class Forgotten:
+    name: str
+    left_party: str = ""
+    removed: dict[str, int] = field(default_factory=dict)
+
+
+def forget(s: Session, user_id: int, now: int) -> Forgotten:
+    """Erase what Nyerk keeps about one member (a privacy request). Their
+    roles, gear score, quiet hours, registrations and past party seats are
+    deleted; boss timers they reported and parties they led stay for
+    everyone else, without their name; log lines lose their name. Discord
+    roles are removed separately by the caller, before this runs."""
+    name = next((m.name for m in known(s) if m.user_id == user_id), "")
+    out = Forgotten(name)
+    p = party.live_party_for(s, user_id)
+    if p is not None:
+        out.left_party = party.party_title(p)
+        party.remove_member(s, p, user_id, now)
+    for label, model in (("roles", RoleHolder), ("gear score", MemberProfile), ("quiet hours", QuietHours),
+                         ("registrations", PfInterest), ("party seats", PfPartyMember)):
+        rows = list(s.scalars(select(model).where(model.user_id == user_id)))
+        for r in rows:
+            s.delete(r)
+        if rows:
+            out.removed[label] = len(rows)
+    timers = list(s.scalars(select(UserTimer).where(UserTimer.user_id == user_id)))
+    for t in timers:
+        t.user_id, t.user_name = 0, FORMER
+    if timers:
+        out.removed["boss timers (kept, name removed)"] = len(timers)
+    led = list(s.scalars(select(PfParty).where(PfParty.leader_id == user_id)))
+    for p in led:
+        p.leader_id, p.leader_name = 0, FORMER
+    if led:
+        out.removed["parties led (kept, name removed)"] = len(led)
+    if name:
+        pattern = re.compile(rf"(?<!\w){re.escape(name)}(?!\w)")
+        scrubbed = 0
+        for row in s.scalars(select(LogEntry).where(LogEntry.text.contains(name))):
+            new = pattern.sub(FORMER.lower(), row.text)
+            if new != row.text:
+                row.text, scrubbed = new, scrubbed + 1
+        if scrubbed:
+            out.removed["log lines (name removed)"] = scrubbed
+    return out

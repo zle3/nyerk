@@ -39,6 +39,8 @@ class Config:
     tls_cert_file: str = field(default_factory=lambda: _env("TLS_CERT_FILE"))
     tls_key_file: str = field(default_factory=lambda: _env("TLS_KEY_FILE"))
     backup_keep: int = field(default_factory=lambda: _env_int("BACKUP_KEEP", 14))
+    # Log files and the web Logs page keep this many days, then delete.
+    log_keep_days: int = field(default_factory=lambda: max(1, _env_int("LOG_KEEP_DAYS", 14)))
     # Disables the Discord side entirely; useful for working on the web admin.
     web_only: bool = field(default_factory=lambda: _env("NYERK_WEB_ONLY") in ("1", "true", "yes"))
 

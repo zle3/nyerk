@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Privacy policy{% endblock %}
+{% block content %}
+<article class="legal">
+<h1>Privacy policy</h1>
+<p class="lede">Last updated {{ LEGAL_UPDATED }}. What Nyerk keeps about you, why, and for how long.</p>
+
+<h2>Who looks after your data</h2>
+<p>This copy of Nyerk runs on a computer controlled by the owners of this Discord server, and your data stays there. <a href="https://kotone.dev" rel="noopener">kotone.dev</a> makes the software but does not run this copy, receives none of its data, and has no access to it. Questions or requests about your data go to this server's admins.</p>
+
+<h2>What Nyerk keeps</h2>
+<ul>
+  <li><strong>Your Discord user ID and display name</strong>, when you use a Nyerk button, reaction or command, or sign in here.</li>
+  <li><strong>What you choose in Nyerk:</strong> classes, gear score, ping roles, quiet hours and their time zone.</li>
+  <li><strong>What you do in Nyerk:</strong> boss timers you report, party finder registrations, and parties you start or join. Past parties are kept (with names) for the server's stats.</li>
+  <li><strong>Activity logs:</strong> recent actions such as “Raelin joined a party”, shown to admins. Logs are deleted after 14 days by default.</li>
+  <li><strong>Change history</strong> (admins only): every configuration change with the name of the admin or owner who made it, kept so it can be undone.</li>
+  <li><strong>Sign-in:</strong> a cookie (<code>nyerk_session</code>) that keeps you signed in for up to 12 hours. It is needed for the page to work. There are no tracking, advertising or analytics cookies.</li>
+</ul>
+
+<h2>What Nyerk doesn't keep</h2>
+<ul>
+  <li>The text of your messages. Nyerk can delete chat in the party finder channel after a set time but never reads or stores it.</li>
+  <li>Your email, password or Discord login. Signing in with Discord only shares your user ID and name with Nyerk (the <code>identify</code> permission); the access token is thrown away right after.</li>
+  <li>Your IP address, except briefly in memory to limit how fast requests can be made. The owner's password sign-ins are logged with their IP address.</li>
+</ul>
+
+<h2>Who can see it</h2>
+<p>You see your own data on <strong>My page</strong>. The server's owners and admins see the members list, stats and logs. Other members only see what Nyerk posts in Discord channels, such as party listings and boss reports. Nyerk doesn't sell or share data with anyone.</p>
+<p>Services involved: <strong>Discord</strong> (where the bot runs and you sign in), and, if this page is reached through the internet, <strong>Cloudflare</strong>, which carries the traffic. Their own privacy policies apply to them.</p>
+
+<h2>How long it's kept</h2>
+<p>Your choices stay until you change them or an admin removes them. Activity logs are deleted after 14 days. Boss timers and party listings end on their own; past parties stay for the stats. Nightly backups of everything are kept for 14 days by default. Session cookies expire after 12 hours or when you sign out.</p>
+
+<h2>Your choices</h2>
+<ul>
+  <li>Remove your roles, quiet hours and timers yourself on <strong>My page</strong>, or with the buttons in Discord.</li>
+  <li>Ask this server's admins to see, correct or delete what Nyerk has about you. They can erase all of it in one step (<strong>Members → Forget this member</strong>): your choices, registrations and party seats are deleted, and your name is removed from boss timers, past parties and the logs. Backups age out after 14 days by default, and if one is restored before then, Nyerk erases you again automatically. To do that it keeps only your Discord user ID and the date on a short "forgotten" list, which is deleted after the same 14 days.</li>
+</ul>
+
+<h2>Changes and contact</h2>
+<p>This policy may change; the date above shows when. For this server, contact its admins in Discord. For the software, open an issue on <a href="{{ REPO_URL }}/issues" rel="noopener">GitHub</a> or visit <a href="https://kotone.dev" rel="noopener">kotone.dev</a>.</p>
+<p>See also the <a href="/terms">terms of use</a>.</p>
+</article>
+{% endblock %}

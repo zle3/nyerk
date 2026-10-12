@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import db, shugo
+from . import db, forgotten, logbus, shugo
 from .config import Config
 from .db import get_settings, get_state
 from .logbus import bus
@@ -74,6 +74,9 @@ async def loop(cfg: Config) -> None:
                 bus.info("backup", f"Nightly backup written: {path.name}", discord=False)
             if time.time() - last_import > IMPORT_EVERY:
                 await run_import_check()
+            forgotten.reapply(cfg)  # also drops entries older than the backups
+            logbus.prune_old_rows(cfg.log_keep_days)
+            logbus.prune_old_files(cfg.log_file, cfg.log_keep_days)
         except Exception as exc:
             log.exception("housekeeping failed")
             bus.error("error", f"Housekeeping failed: {exc!r}")

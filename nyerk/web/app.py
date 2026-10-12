@@ -3,6 +3,7 @@ nudges the bot to refresh."""
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import secrets
 import time
@@ -24,7 +25,7 @@ from . import auth
 from . import search as websearch
 from . import security as websecurity
 
-from .. import db, engine, history, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
+from .. import db, engine, forgotten, history, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus
@@ -43,6 +44,11 @@ COMMON_TZ = ["America/New_York", "UTC", "America/Chicago", "America/Los_Angeles"
 MAX_FAILS, LOCKOUT = 5, 60
 
 templates = Jinja2Templates(directory=str(HERE / "templates"))
+REPO_URL = "https://github.com/zle3/nyerk"
+LEGAL_UPDATED = "October 11, 2026"
+# Set at image build time (Dockerfile); "dev" when run from source.
+VERSION = os.environ.get("NYERK_VERSION") or "dev"
+VERSION = VERSION[:7] if re.fullmatch(r"[0-9a-f]{40}", VERSION) else VERSION[:20]
 _TS = re.compile(r"&lt;t:(\d+):([tTdDfFR])&gt;")
 
 
@@ -292,6 +298,8 @@ def create_app(cfg, bot=None) -> FastAPI:
             request=request, csrf=request.session["csrf"], flashes=request.session.pop("flash", []),
             nav=name.split(".")[0], pending_changes=len((pending or {}).get("changes", [])),
             bot_status=app.state.bot.status() if app.state.bot else None,
+            REPO_URL=REPO_URL, LEGAL_UPDATED=LEGAL_UPDATED, version=VERSION,
+            year=datetime.now(timezone.utc).year,
         )
         return templates.TemplateResponse(request, name, ctx)
 
@@ -428,6 +436,16 @@ def create_app(cfg, bot=None) -> FastAPI:
         with db.session() as s:
             return websearch.search(s, search_index, websearch.clean_query(q), visible,
                                     owner=auth.allows(user.get("level"), "owner"), limit=limit)
+
+    # -- public: terms and privacy (linked from the footer and Discord's developer portal) --
+
+    @app.get("/terms", response_class=HTMLResponse)
+    async def terms_page(request: Request):
+        return render(request, "terms.html")
+
+    @app.get("/privacy", response_class=HTMLResponse)
+    async def privacy_page(request: Request):
+        return render(request, "privacy.html")
 
     @app.get("/search", response_class=HTMLResponse)
     async def search_page(request: Request, q: str = ""):
@@ -707,9 +725,41 @@ def create_app(cfg, bot=None) -> FastAPI:
         with db.session() as s:
             gear = party.gear_of(s, uid)
             info["gear_id"], info["brackets"] = (gear.id if gear else 0), party.brackets(s)
-        return render(request, "member.html", uid=uid, live=live is not None, held=held,
+        return render(request, "member.html", uid=uid, live=live is not None, held=held, backup_days=cfg.backup_keep,
                       options=options, zones=quiet.ZONES, default_tz=default_tz,
                       hours=[(h, quiet.hour_label(h)) for h in range(24)], **info)
+
+    @app.post("/members/{uid}/forget")
+    async def member_forget(request: Request, uid: int):
+        """Privacy request: erase what Nyerk keeps about one member."""
+        data = await form(request)
+        notes = []
+        bot = _bot_ready()
+        if data.get("remove_roles"):
+            live = await bot.fetch_member(uid) if bot else None
+            if bot is None:
+                notes.append("the bot isn't connected, so their Discord roles were left alone")
+            elif live is not None:
+                with db.session() as s:
+                    doomed = members.managed_role_ids(s) & live[1]
+                errors = await bot.admin_apply_roles(uid, set(), doomed)
+                notes += errors
+                if doomed and not errors:
+                    notes.append(f"removed {len(doomed)} Discord role(s)")
+        with db.session() as s:
+            res = members.forget(s, uid, int(time.time()))
+            forgotten.record(cfg, s, uid, int(time.time()))  # so a restored backup can't bring them back
+        websearch.forget_data()  # gone from search suggestions right away
+        who = res.name or f"User {uid}"
+        what = ", ".join(f"{n} {k}" for k, n in res.removed.items()) or "nothing was stored"
+        if res.left_party:
+            what += f"; left {res.left_party}"
+        user = current(request) or {}
+        # The log line names nobody: the point is to forget them.
+        bus.warn("admin", f"{user.get('name')} used Forget member ({what}).")
+        refresh()
+        flash(request, f"Forgot {who}: {what}." + (" Note: " + "; ".join(notes) + "." if notes else ""))
+        return back("/members")
 
     @app.post("/members/{uid}/roles")
     async def member_roles(request: Request, uid: int):
@@ -842,7 +892,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         require(request)
         with db.session() as s:
             logs = list(s.scalars(select(LogEntry).order_by(LogEntry.id.desc()).limit(500)))
-        return render(request, "logs.html", logs=logs)
+        return render(request, "logs.html", logs=logs, log_days=cfg.log_keep_days)
 
     # -- events ---------------------------------------------------------------------
 

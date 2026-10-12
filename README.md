@@ -133,3 +133,7 @@ Click **Update** in Dockge, or run `docker compose pull && docker compose up -d`
 | [Discord permissions](https://github.com/zle3/nyerk/wiki/Discord-permissions) | [Public access](https://github.com/zle3/nyerk/wiki/Public-access) (your own domain) | [How Nyerk behaves](https://github.com/zle3/nyerk/wiki/How-Nyerk-behaves) |
 | [Settings export and import](https://github.com/zle3/nyerk/wiki/Settings-export-and-import) | [Access levels](https://github.com/zle3/nyerk/wiki/Access-levels) | [Development](https://github.com/zle3/nyerk/wiki/Development) |
 | | [Security updates](https://github.com/zle3/nyerk/wiki/Security-updates) | |
+
+## License
+
+[MIT](LICENSE) © 2026 [kotone.dev](https://kotone.dev). Nyerk is a fan-made tool, not affiliated with NCSOFT or Discord.

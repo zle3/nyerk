@@ -209,3 +209,23 @@ def test_logs_queue_is_bounded():
             bus.warn("test", f"line {i}")
         return bus.queue.qsize(), bus.take_dropped(), bus.take_dropped()
     assert asyncio.run(run()) == (logbus.QUEUE_MAX, 50, 0)
+
+
+def test_logs_are_deleted_after_keep_days(s, tmp_path):
+    import os
+    from nyerk import logbus
+    from nyerk.models import LogEntry
+    now = 2_000_000_000
+    s.add_all([LogEntry(at=now - 20 * 86400, level="INFO", kind="t", text="old"),
+               LogEntry(at=now - 3600, level="INFO", kind="t", text="new")])
+    s.commit()
+    assert logbus.prune_old_rows(14, now) == 1
+    assert [r.text for r in s.scalars(select(LogEntry))] == ["new"]
+    log = tmp_path / "nyerk.log"
+    for name, age in (("nyerk.log.2026-09-01", 20), ("nyerk.log.3", 30), ("nyerk.log.2026-10-10", 1)):
+        f = tmp_path / name
+        f.write_text("x")
+        os.utime(f, (now - age * 86400, now - age * 86400))
+    log.write_text("current")
+    assert logbus.prune_old_files(log, 14, now) == 2
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["nyerk.log", "nyerk.log.2026-10-10"]
