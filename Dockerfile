@@ -1,10 +1,12 @@
-# Exact base image, bumped by Dependabot. The weekly rebuild (see
-# .github/workflows/docker.yml) also applies Debian security updates.
-FROM python:3.12.15-slim-trixie
+# Exact base image, bumped by Dependabot. Alpine rather than Debian slim: it
+# has a fraction of the system packages (no login, PAM, perl, systemd or
+# ncurses), so far less for a scanner to find and an attacker to use. The
+# weekly rebuild (see .github/workflows/docker.yml) also applies Alpine
+# security updates. setpriv drops root in docker-entrypoint.sh.
+FROM python:3.12.15-alpine3.24
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 NYERK_DATA_DIR=/data HOME=/tmp
-RUN apt-get update && apt-get upgrade -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk upgrade --no-cache && apk add --no-cache setpriv
 
 WORKDIR /app
 COPY requirements.txt .
