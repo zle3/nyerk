@@ -180,7 +180,7 @@ On first start Nyerk already has the ten launch events, six ping categories, eig
 
 **Party finder channel**
 - **Register** to say you're free for certain dungeons for a while; Nyerk pings you when a matching party opens, and you can join from the ping.
-- **Create party** for 5 or 20 players (open to any class, a standard 1 tank / 1 support / 3 DPS, or a custom makeup). Members join with one click; the leader can kick, extend or close it, and gets a private note whenever someone joins or leaves (a hidden message in the channel if they clicked something there in the last 15 minutes, otherwise a DM). Full parties move to the **Party status** message.
+- **Create party** for 5 or 20 players (open to any class, a standard 1 tank / 1 support / 3 DPS, or a custom makeup). Members join with one click; the leader can kick, extend or close it, and gets a hidden note when someone joins or leaves, as long as they clicked something in the channel in the last 15 minutes (Discord's limit for hidden messages). Nyerk never sends DMs. Full parties move to the **Party status** message.
 - **Chat** in the channel to plan runs. Messages are deleted after 15 minutes, and the **Party status** message says so. Admins change the time (or turn it off) on the web page under **Party finder → Member chat**; pinned messages stay.
 
 **Web page** (with public access): **My page** lets members do all of the above from a browser after signing in with Discord.

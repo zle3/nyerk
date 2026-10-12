@@ -244,26 +244,20 @@ class PartyFinder:
     async def tell_leader(self, leader_id: int, text: str) -> None:
         """A private note to a party leader. Discord only allows a hidden
         ("only you can see this") message as a follow-up to that person's own
-        click, within 15 minutes of it; so the note goes there when the
-        leader clicked something in the party channel recently, and to their
-        DMs otherwise."""
+        click, within 15 minutes of it; so the note is sent only when the
+        leader clicked something in the party channel recently. Nyerk never
+        DMs anyone; otherwise the listing shows who is in."""
         with db.session() as s:
             channel_id = get_settings(s).party_channel_id
         click = self._last_click.get(leader_id)
         if click and time.monotonic() - click[1] < 14 * 60 and click[0].channel_id == channel_id:
             try:
                 await click[0].followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
-                return
             except discord.HTTPException:
-                pass
-        try:
-            user = self.bot.get_user(leader_id) or await self.bot.fetch_user(leader_id)
-            await user.send(text, allowed_mentions=NO_MENTIONS)
-        except discord.HTTPException:
-            pass  # DMs closed: the listing still shows who is in
+                pass  # the click expired early: skip it
 
     def notify_leader(self, leader_id: int, text: str, actor_id: int = 0) -> None:
-        """Fire and forget, so a slow DM never holds up the click that caused it."""
+        """Fire and forget, so the note never holds up the click that caused it."""
         if leader_id and leader_id != actor_id:
             asyncio.create_task(self.tell_leader(leader_id, text))
 

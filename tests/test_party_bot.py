@@ -222,30 +222,22 @@ class Click:
         self.followup = Followup()
 
 
-class DMUser:
-    def __init__(self):
-        self.dms = []
-
-    async def send(self, text, allowed_mentions=None):
-        self.dms.append(text)
-
-
-def test_leader_gets_hidden_note_after_recent_click_else_dm(s):
+def test_leader_gets_hidden_note_only_after_recent_click(s):
     setup(s)
     s.commit()
-    dm = DMUser()
     bot = StubBot(FakeChannel())
-    bot.get_user = lambda uid: dm
+    bot.get_user = bot.fetch_user = lambda uid: (_ for _ in ()).throw(AssertionError("no DMs"))
     finder = party_bot.PartyFinder(bot)
     finder.seen(Click(1, 1))
     asyncio.run(finder.tell_leader(1, "hi"))
-    assert finder._last_click[1][0].sent == [("hi", True)] and dm.dms == []
-    finder.seen(Click(1, 999))                  # last click was in another channel: DM
+    assert finder._last_click[1][0].sent == [("hi", True)]
+    other = Click(1, 999)                       # last click was in another channel: nothing
+    finder.seen(other)
     asyncio.run(finder.tell_leader(1, "two"))
-    finder.seen(Click(1, 1, fail=True))         # click token expired: DM
+    assert other.sent == []
+    finder.seen(Click(1, 1, fail=True))         # click token expired: nothing, no error
     asyncio.run(finder.tell_leader(1, "three"))
-    asyncio.run(finder.tell_leader(2, "four"))  # never clicked: DM
-    assert dm.dms == ["two", "three", "four"]
+    asyncio.run(finder.tell_leader(2, "four"))  # never clicked: nothing
 
 
 class OwnMessage:
