@@ -180,7 +180,7 @@ On first start Nyerk already has the ten launch events, six ping categories, eig
 
 **Party finder channel**
 - **Register** to say you're free for certain dungeons for a while; Nyerk pings you when a matching party opens, and you can join from the ping.
-- **Create party** for 5 or 20 players (open to any class, a standard 1 tank / 1 support / 3 DPS, or a custom makeup). Members join with one click; the leader can kick, extend or close it. Full parties move to the **Party status** message.
+- **Create party** for 5 or 20 players (open to any class, a standard 1 tank / 1 support / 3 DPS, or a custom makeup). Members join with one click; the leader can kick, extend or close it, and gets a private note whenever someone joins or leaves (a hidden message in the channel if they clicked something there in the last 15 minutes, otherwise a DM). Full parties move to the **Party status** message.
 - **Chat** in the channel to plan runs. Messages are deleted after 15 minutes, and the **Party status** message says so. Admins change the time (or turn it off) on the web page under **Party finder → Member chat**; pinned messages stay.
 
 **Web page** (with public access): **My page** lets members do all of the above from a browser after signing in with Discord.
@@ -258,6 +258,7 @@ Check: the stack shows a `nyerk-tunnel` container, the **nyerk** log says *Tunne
 | Problem | Fix |
 |---|---|
 | No `nyerk-tunnel` container | `COMPOSE_PROFILES=tunnel` missing, or an old `compose.yaml`; paste the current one |
+| `nyerk-tunnel` warns *Group ID 65532 is not between ping group* / *ICMP proxy feature is disabled* | Harmless (it only affects ping through the tunnel, not the website). The current `compose.yaml` silences it; paste it and redeploy |
 | 502 Bad Gateway, log says *connection refused* | `PUBLIC_URL` not set, or an old `compose.yaml` that doesn't pass it to Nyerk |
 | Error 1033 | The tunnel container isn't running, or the token is incomplete |
 | Discord: *Invalid OAuth2 redirect_uri* | The redirect and `PUBLIC_URL` must match exactly, including `https://` |
@@ -305,6 +306,7 @@ Mostly automatic:
 ### Behaviour notes
 
 - **Restarts:** alerts whose send time passed while Nyerk was down are skipped and listed in #logs, not sent late. A sent-alerts ledger prevents double posts after a restart.
+- **Parties during an update:** on stop, Nyerk finishes the Discord update it is in the middle of before exiting. Party and registration deadlines are paused while it is offline, so nobody loses time they couldn't use, and any party message left half-recorded is cleaned up on start. Buttons clicked while it restarts show "This interaction failed"; they work again as soon as Nyerk is back, usually within a minute.
 - **Kill reports:** a report with no time assumes the kill happened 1 minute ago (Settings → **Report offset**). A "respawns in" report uses the time left exactly as given. Warnings already in the past when a timer is reported are skipped.
 - **Alert cleanup:** alert messages are deleted 2 hours after their event starts or the boss spawns (Settings → **Delete alerts after**); alerts under an hour old are always kept.
 - **Time zones:** each event stores its own time zone. Game events keep their New York hour, while resets and maintenance stay pinned to UTC, so their New York time moves an hour earlier on November 1.

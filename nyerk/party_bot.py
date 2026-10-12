@@ -36,6 +36,9 @@ def now() -> int:
 
 def who_of(interaction: discord.Interaction) -> Who:
     user = interaction.user
+    finder = getattr(interaction.client, "pf", None)
+    if finder is not None:
+        finder.seen(interaction)
     roles = {r.id for r in getattr(user, "roles", [])} or set(getattr(user, "_roles", []))
     return Who(user.id, user.display_name, set(roles))
 
@@ -231,6 +234,47 @@ class PartyFinder:
         self.bot = bot
         self._sync_lock = asyncio.Lock()
         self._chat_warned = False
+        self._swept = False
+        # user ID -> their latest party finder click, for private notes (see tell_leader)
+        self._last_click: dict[int, tuple[discord.Interaction, float]] = {}
+
+    def seen(self, interaction: discord.Interaction) -> None:
+        self._last_click[interaction.user.id] = (interaction, time.monotonic())
+
+    async def tell_leader(self, leader_id: int, text: str) -> None:
+        """A private note to a party leader. Discord only allows a hidden
+        ("only you can see this") message as a follow-up to that person's own
+        click, within 15 minutes of it; so the note goes there when the
+        leader clicked something in the party channel recently, and to their
+        DMs otherwise."""
+        with db.session() as s:
+            channel_id = get_settings(s).party_channel_id
+        click = self._last_click.get(leader_id)
+        if click and time.monotonic() - click[1] < 14 * 60 and click[0].channel_id == channel_id:
+            try:
+                await click[0].followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
+                return
+            except discord.HTTPException:
+                pass
+        try:
+            user = self.bot.get_user(leader_id) or await self.bot.fetch_user(leader_id)
+            await user.send(text, allowed_mentions=NO_MENTIONS)
+        except discord.HTTPException:
+            pass  # DMs closed: the listing still shows who is in
+
+    def notify_leader(self, leader_id: int, text: str, actor_id: int = 0) -> None:
+        """Fire and forget, so a slow DM never holds up the click that caused it."""
+        if leader_id and leader_id != actor_id:
+            asyncio.create_task(self.tell_leader(leader_id, text))
+
+    async def drain(self, timeout: float = 10) -> None:
+        """On shutdown: wait for a Discord update in progress to finish."""
+        try:
+            async with asyncio.timeout(timeout):
+                async with self._sync_lock:
+                    pass
+        except TimeoutError:
+            log.warning("party finder still busy at shutdown")
 
     async def _channel(self):
         with db.session() as s:
@@ -343,6 +387,7 @@ class PartyFinder:
     async def on_party_action(self, interaction, what: str, pid: int) -> None:
         who = who_of(interaction)
         t = now()
+        note: tuple[int, str] | None = None
         if what == "pass":
             await reply(interaction, "No problem. You stay registered for other parties.")
             return
@@ -354,10 +399,14 @@ class PartyFinder:
                 title = party.party_title(p)
                 if what == "join":
                     filled = party.join(s, p, who, t)
+                    note = (p.leader_id, party.leader_note(p, who.user_id, who.user_name, "joined"))
                     msg = f"You joined {title}." + (" The party is now full!" if filled else "")
                     log_line = f"{who.user_name} joined party #{pid} ({title})." + (" Party is full." if filled else "")
                 elif what == "leave":
                     res = party.remove_member(s, p, who.user_id, t)
+                    if not res.closed:
+                        note = (p.leader_id, party.leader_note(p, who.user_id, who.user_name, "left",
+                                                               became_leader=bool(res.new_leader)))
                     msg = f"You left {title}."
                     log_line = f"{who.user_name} left party #{pid} ({title})." + _leave_note(res)
                 elif what == "close":
@@ -384,6 +433,8 @@ class PartyFinder:
             return
         await reply(interaction, msg)
         bus.info("party", log_line)
+        if note:
+            self.notify_leader(*note, actor_id=who.user_id)
         await self.sync()
 
     async def on_kick(self, interaction, pid: int, user_id: int) -> None:
@@ -460,7 +511,13 @@ class PartyFinder:
 
     # -- reconciler ---------------------------------------------------------------
 
-    async def tick(self) -> None:
+    async def tick(self, downtime: int = 0) -> None:
+        if downtime > 0:
+            with db.session() as s:
+                moved = party.pause_clocks(s, downtime, now())
+            if moved:
+                bus.info("party", f"Nyerk was offline for {downtime // 60} min {downtime % 60} s: "
+                                  f"{moved} party and registration deadline(s) moved back by that much.")
         with db.session() as s:
             res = party.tick(s, now())
         for name in res.expired:
@@ -514,9 +571,39 @@ class PartyFinder:
             channel = await self._channel()
             if channel is None:
                 return
+            if not self._swept:
+                self._swept = True
+                await self._sweep_orphans(channel)
             await self._sync_parties(channel)
             await self._sync_panel(channel, "interest")
             await self._sync_panel(channel, "status")
+
+    async def _sweep_orphans(self, channel) -> None:
+        """Once after start: delete Nyerk's own messages in the party channel
+        that the database doesn't know about. They are left when Nyerk was
+        stopped right after posting something and before recording it, and
+        would otherwise sit there with dead buttons."""
+        me = getattr(self.bot, "user", None)
+        with db.session() as s:
+            st, state = get_settings(s), get_state(s)
+            if me is None or st.party_channel_id in (st.timer_channel_id, st.roles_channel_id, st.log_channel_id):
+                return  # shared channel: other messages of ours live there too
+            known = {state.class_panel_message_id, state.gear_panel_message_id, state.interest_panel_message_id,
+                     state.party_panel_message_id, state.party_status_message_id}
+            for p in s.scalars(select(PfParty).where(
+                    (PfParty.listing_message_id != 0) | (PfParty.ping_message_id != 0)
+                    | (PfParty.warning_message_id != 0) | (PfParty.ready_message_id != 0))):
+                known |= {p.listing_message_id, p.ping_message_id, p.warning_message_id, p.ready_message_id}
+        try:
+            stray = [m async for m in channel.history(limit=100)
+                     if m.author.id == me.id and m.id not in known and not m.pinned]
+            for m in stray:
+                await m.delete()
+        except discord.HTTPException as exc:
+            log.warning("orphan sweep failed: %r", exc)
+            return
+        if stray:
+            bus.info("party", f"Removed {len(stray)} leftover party message(s) from before the restart.")
 
     async def _sync_panel(self, channel, kind: str) -> None:
         with db.session() as s:

@@ -183,3 +183,113 @@ def test_chat_cleanup_off_and_status_note(s, monkeypatch):
     bot.user = type("U", (), {"id": 99})()
     asyncio.run(party_bot.PartyFinder(bot).clean_chat())
     assert ch.before is None
+
+
+def test_downtime_pauses_party_and_registration_clocks(s, monkeypatch):
+    cid = setup(s)
+    p = party.create(s, who(s, 1, "Templar"), cid, 5, "none", "", "", T)
+    p.warned_at = T + 3000
+    s.commit()
+    before = p.expires_at
+    moved = party.pause_clocks(s, 600, T + 3100)
+    assert moved == 1 and p.expires_at == before + 600
+    assert p.warned_at is None                 # warning comes back when due again
+
+
+def test_leader_notes(s):
+    cid = setup(s)
+    p = party.create(s, who(s, 1, "Templar"), cid, 5, "none", "", "", T)
+    party.join(s, p, who(s, 2, "Cleric"), T)
+    s.flush()
+    assert party.leader_note(p, 2, "user2", "joined").startswith("🟢 user2 (Cleric")
+    assert "2/5" in party.leader_note(p, 2, "user2", "joined")
+    assert party.leader_note(p, 2, "user2", "left", became_leader=True).endswith("You're the leader now.")
+    assert "was removed from" in party.leader_note(p, 2, "user2", "removed")
+
+
+class Click:
+    def __init__(self, uid, channel_id, fail=False):
+        self.user = type("U", (), {"id": uid})()
+        self.channel_id, self.fail, self.sent = channel_id, fail, []
+        click = self
+
+        class Followup:
+            async def send(self, text, ephemeral, allowed_mentions):
+                if click.fail:
+                    import discord
+                    raise discord.NotFound(type("R", (), {"status": 404, "reason": "x"})(), "expired")
+                click.sent.append((text, ephemeral))
+        self.followup = Followup()
+
+
+class DMUser:
+    def __init__(self):
+        self.dms = []
+
+    async def send(self, text, allowed_mentions=None):
+        self.dms.append(text)
+
+
+def test_leader_gets_hidden_note_after_recent_click_else_dm(s):
+    setup(s)
+    s.commit()
+    dm = DMUser()
+    bot = StubBot(FakeChannel())
+    bot.get_user = lambda uid: dm
+    finder = party_bot.PartyFinder(bot)
+    finder.seen(Click(1, 1))
+    asyncio.run(finder.tell_leader(1, "hi"))
+    assert finder._last_click[1][0].sent == [("hi", True)] and dm.dms == []
+    finder.seen(Click(1, 999))                  # last click was in another channel: DM
+    asyncio.run(finder.tell_leader(1, "two"))
+    finder.seen(Click(1, 1, fail=True))         # click token expired: DM
+    asyncio.run(finder.tell_leader(1, "three"))
+    asyncio.run(finder.tell_leader(2, "four"))  # never clicked: DM
+    assert dm.dms == ["two", "three", "four"]
+
+
+class OwnMessage:
+    def __init__(self, ch, mid, author_id):
+        self.ch, self.id, self.pinned = ch, mid, False
+        self.author = type("A", (), {"id": author_id})()
+
+    async def delete(self):
+        self.ch.deleted.append(self.id)
+
+
+def test_restart_sweeps_unrecorded_party_messages(s):
+    setup(s)
+    get_state(s).party_status_message_id = 50
+    s.commit()
+    ch = FakeChannel()
+    msgs = [OwnMessage(ch, 50, 99), OwnMessage(ch, 51, 99), OwnMessage(ch, 52, 7)]
+
+    def history(limit):
+        async def gen():
+            for m in msgs:
+                yield m
+        return gen()
+    ch.history = history
+    bot = StubBot(ch)
+    bot.user = type("U", (), {"id": 99})()
+    asyncio.run(party_bot.PartyFinder(bot)._sweep_orphans(ch))
+    assert ch.deleted == [51]                    # ours and unknown; the panel and the member's message stay
+
+
+def test_drain_waits_for_sync(s):
+    finder = party_bot.PartyFinder(StubBot(FakeChannel()))
+
+    async def run():
+        order = []
+
+        async def busy():
+            async with finder._sync_lock:
+                await asyncio.sleep(0.05)
+                order.append("sync done")
+        task = asyncio.create_task(busy())
+        await asyncio.sleep(0)
+        await finder.drain(timeout=2)
+        order.append("drained")
+        await task
+        return order
+    assert asyncio.run(run()) == ["sync done", "drained"]

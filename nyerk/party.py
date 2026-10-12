@@ -440,6 +440,40 @@ class TickResult:
     interests_expired: int
 
 
+def pause_clocks(s: Session, seconds: int, now: int) -> int:
+    """Nyerk was down (an update or restart) for `seconds`. Push back every
+    live party's and registration's deadline by that much, so nobody loses
+    time they couldn't use: leaders could not extend, members could not join.
+    Returns how many deadlines moved."""
+    warn = get_settings(s).party_warn_min * 60
+    moved = 0
+    for p in live_parties(s):
+        if p.status == "open":
+            p.expires_at += seconds
+            if p.warned_at is not None and now < p.expires_at - warn:
+                p.warned_at = None  # the warning comes back when it is due again
+        elif p.filled_at:
+            p.filled_at += seconds
+        moved += 1
+    for r in s.scalars(select(PfInterest).where(PfInterest.status == "active")):
+        r.expires_at += seconds
+        moved += 1
+    return moved
+
+
+def leader_note(p: PfParty, user_id: int, name: str, what: str, became_leader: bool = False) -> str:
+    """The private note a leader gets when someone joins (`what` = "joined"),
+    leaves ("left") or is removed ("removed") from their party."""
+    title, count = party_title(p), f"{len(p.members)}/{p.size}"
+    if what == "joined":
+        m = next((m for m in p.members if m.user_id == user_id), None)
+        text = f"🟢 {_who(m) if m else escape_md(name)} joined your **{title}** party. {count}"
+        return text + (", full and ready!" if p.status == "full" else "")
+    verb = "was removed from" if what == "removed" else "left"
+    text = f"🔴 {escape_md(name)} {verb} your **{title}** party. {count}"
+    return text + (". You're the leader now." if became_leader else "")
+
+
 def tick(s: Session, now: int) -> TickResult:
     settings = get_settings(s)
     res = TickResult([], [], 0)

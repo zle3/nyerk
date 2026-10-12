@@ -513,7 +513,8 @@ class NyerkBot(discord.Client):
             log.exception("quiet hours failed")
             bus.error("roles", f"Quiet hours update failed: {exc!r}")
         try:
-            await self.pf.tick()
+            # Offline longer than a missed tick or two: an update or restart.
+            await self.pf.tick(downtime=max(0, t - last - TICK_SECONDS) if t - last > 3 * TICK_SECONDS else 0)
         except Exception as exc:  # the party finder must never stop timer alerts
             log.exception("party finder tick failed")
             bus.error("party", f"Party finder tick failed: {exc!r}")

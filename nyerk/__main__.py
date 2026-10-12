@@ -3,9 +3,11 @@ process and one event loop, sharing one SQLite database."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import secrets
+import signal
 import sys
 
 import uvicorn
@@ -64,9 +66,9 @@ async def amain(cfg: Config) -> None:
     if cfg.is_public and cfg.tunnel_port and cfg.tunnel_port != cfg.web_port:
         # For cloudflared on the stack network: plain HTTP, never published.
         # Cloudflare provides HTTPS to visitors.
+        # lifespan="off": the app's startup and shutdown run once, in the main server.
         tunnel_server = uvicorn.Server(uvicorn.Config(
-            app, host="0.0.0.0", port=cfg.tunnel_port, log_level="warning", proxy_headers=False))
-        tunnel_server.install_signal_handlers = lambda: None  # the main server owns Ctrl-C/SIGTERM
+            app, host="0.0.0.0", port=cfg.tunnel_port, log_level="warning", proxy_headers=False, lifespan="off"))
         servers.append(tunnel_server)
         bus.info("startup", f"Tunnel listener on http://nyerk:{cfg.tunnel_port} (stack network only)", discord=False)
 
@@ -81,21 +83,43 @@ async def amain(cfg: Config) -> None:
                                  "the rest of Nyerk keeps running.")
             await asyncio.Event().wait()
 
-    tasks = [asyncio.create_task(servers[0].serve(), name="web")]
+    # Nyerk handles SIGTERM/Ctrl-C itself, below. uvicorn would otherwise stop
+    # only its own server and then re-raise the signal, killing the process
+    # before the party finder and Discord are shut down cleanly.
+    for srv in servers:
+        srv.capture_signals = contextlib.nullcontext
+    stop = asyncio.Event()
+    with contextlib.suppress(NotImplementedError):  # Windows: Ctrl-C arrives as KeyboardInterrupt
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            asyncio.get_running_loop().add_signal_handler(sig, stop.set)
+
+    tasks = [asyncio.create_task(stop.wait(), name="signal")]
+    tasks.append(asyncio.create_task(servers[0].serve(), name="web"))
     tasks += [asyncio.create_task(optional(s), name="tunnel-web") for s in servers[1:]]
     tasks.append(asyncio.create_task(housekeeping.loop(cfg), name="housekeeping"))
     if bot is not None:
         tasks.append(asyncio.create_task(bot.start(cfg.discord_token), name="discord"))
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    if stop.is_set():
+        log.info("Stopping...")
     for t in done:
-        if t.exception():
+        if not t.cancelled() and t.exception():
             log.error("%s stopped: %r", t.get_name(), t.exception())
-    if bot is not None and not bot.is_closed():
-        await bot.close()
+    # Graceful stop (docker stop / an update): let the party finder finish the
+    # Discord update it is in the middle of, so no message is posted without
+    # being recorded, then stop the web servers and close Discord cleanly.
+    if bot is not None:
+        await bot.pf.drain(timeout=10)
     for s in servers:
         s.should_exit = True
+    servers_left = [t for t in pending if t.get_name() in ("web", "tunnel-web")]
+    if servers_left:
+        await asyncio.wait(servers_left, timeout=10)
+    if bot is not None and not bot.is_closed():
+        await bot.close()
     for t in pending:
-        t.cancel()
+        if not t.done():
+            t.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
     log.info("Nyerk stopped.")
 

@@ -192,6 +192,11 @@ def create_app(cfg, bot=None) -> FastAPI:
     def current(request: Request) -> dict | None:
         return request.session.get("user")
 
+    def tell_leader(note: tuple[int, str] | None, actor_id: int) -> None:
+        bot = app.state.bot
+        if note and bot is not None and bot.is_ready():
+            bot.pf.notify_leader(*note, actor_id=actor_id)
+
     def grants() -> frozenset[str]:
         with db.session() as s:
             return auth.parse_grants(get_settings(s).admin_grants)
@@ -592,11 +597,14 @@ def create_app(cfg, bot=None) -> FastAPI:
                 if p is None:
                     raise party.PartyError("You're not in a party.")
                 title = party.party_title(p)
-                party.remove_member(s, p, user["uid"], int(time.time()))
+                res = party.remove_member(s, p, user["uid"], int(time.time()))
+                note = None if res.closed else (p.leader_id, party.leader_note(
+                    p, user["uid"], user["name"], "left", became_leader=bool(res.new_leader)))
         except party.PartyError as exc:
             flash(request, str(exc), "err")
             return back("/me#activity")
         bus.info("party", f"{user['name']} left party {title} (web).")
+        tell_leader(note, user["uid"])
         refresh()
         flash(request, f"You left {title}.")
         return back("/me#activity")
@@ -743,11 +751,14 @@ def create_app(cfg, bot=None) -> FastAPI:
                     raise party.PartyError("Not in a party.")
                 title = party.party_title(p)
                 name = next((m.user_name for m in p.members if m.user_id == uid), str(uid))
-                party.remove_member(s, p, uid, int(time.time()))
+                res = party.remove_member(s, p, uid, int(time.time()))
+                note = None if res.closed else (p.leader_id, party.leader_note(
+                    p, uid, name, "removed", became_leader=bool(res.new_leader)))
         except party.PartyError as exc:
             flash(request, str(exc), "err")
             return back(f"/members/{uid}#activity")
         bus.info("party", f"{name} removed from {title} by admin.")
+        tell_leader(note, uid)
         refresh()
         flash(request, f"Removed from {title}. The listing updates within 30 seconds.")
         return back(f"/members/{uid}#activity")

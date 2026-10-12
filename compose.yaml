@@ -5,6 +5,8 @@ services:
     image: ${NYERK_IMAGE:-ghcr.io/zle3/nyerk:latest}
     container_name: nyerk
     restart: unless-stopped
+    # Time to finish what it is doing (a party update, a backup) on stop or update.
+    stop_grace_period: 30s
     # Values come from the stack's .env (Dockge's env editor). Listing them
     # here instead of env_file works on every Compose version, with or
     # without a .env file.
@@ -66,6 +68,10 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
+    # Lets cloudflared's own group (65532) send ping packets, so it doesn't
+    # warn that its ICMP proxy is off. Applies inside this container only.
+    sysctls:
+      net.ipv4.ping_group_range: "65532 65532"
     depends_on:
       - nyerk
 
