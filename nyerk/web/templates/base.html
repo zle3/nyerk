@@ -30,20 +30,31 @@
             title="{% if bot_status is none %}Discord disabled{% elif bot_status.connected %}Connected{% else %}Disconnected{% endif %}"></span>
       Nyerk
     </a>
+    {% set groups = [
+      ("Timers", [("/events", "Events", ("events", "event_edit")), ("/timers", "Boss timers", ("timers",)),
+                  ("/maintenance", "Maintenance", ("maintenance",)), ("/defaults", "Defaults", ("defaults",))]),
+      ("Community", [("/categories", "Roles", ("categories",)), ("/party", "Party finder", ("party",)),
+                     ("/members", "Members", ("members", "member"))]),
+      ("Insights", [("/stats", "Stats", ("stats",)), ("/logs", "Logs", ("logs",))]),
+      ("Admin", ([("/settings", "Settings", ("settings", "import_preview"))] if can.settings or is_owner else [])
+                + ([("/access", "Access and security", ("access",))] if is_owner else [])
+                + ([("/history", "Change history", ("history",))] if can.history or is_owner else [])),
+    ] %}
     <nav class="nav" aria-label="Sections">
       {% if is_admin %}
       <a href="/" class="{{ 'active' if nav == 'overview' }}">Overview</a>
-      <a href="/events" class="{{ 'active' if nav in ('events', 'event_edit') }}">Events</a>
-      <a href="/timers" class="{{ 'active' if nav == 'timers' }}">Boss timers</a>
-      <a href="/maintenance" class="{{ 'active' if nav == 'maintenance' }}">Maintenance</a>
-      <a href="/categories" class="{{ 'active' if nav == 'categories' }}">Roles</a>
-      <a href="/party" class="{{ 'active' if nav == 'party' }}">Party finder</a>
-      <a href="/defaults" class="{{ 'active' if nav == 'defaults' }}">Defaults{% if pending_changes %}<span class="badge">{{ pending_changes }}</span>{% endif %}</a>
-      <a href="/members" class="{{ 'active' if nav in ('members', 'member') }}">Members</a>
-      <a href="/stats" class="{{ 'active' if nav == 'stats' }}">Stats</a>
-      {% if can.settings or is_owner %}<a href="/settings" class="{{ 'active' if nav == 'settings' }}">Settings</a>{% endif %}
-      <a href="/logs" class="{{ 'active' if nav == 'logs' }}">Logs</a>
-      <a href="/search" class="{{ 'active' if nav == 'search' }}" aria-label="Search settings">Search</a>
+      {% for title, links in groups if links %}
+      {% set ns = namespace(here=false) %}{% for l in links %}{% if nav in l[2] %}{% set ns.here = true %}{% endif %}{% endfor %}
+      <details class="menu">
+        <summary class="{{ 'active' if ns.here }}">{{ title }}{% if title == 'Timers' and pending_changes %}<span class="badge">{{ pending_changes }}</span>{% endif %}</summary>
+        <div class="menu-list">
+          {% for href, label, pages in links %}
+          <a href="{{ href }}" class="{{ 'active' if nav in pages }}">{{ label }}{% if href == '/defaults' and pending_changes %}<span class="badge">{{ pending_changes }}</span>{% endif %}</a>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
+      <a href="/search" class="{{ 'active' if nav == 'search' }}">Search</a>
       {% endif %}
       {% if user %}<a href="/me" class="{{ 'active' if nav == 'me' }}">My page</a>{% endif %}
     </nav>

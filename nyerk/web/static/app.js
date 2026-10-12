@@ -64,3 +64,18 @@
     sync();
   });
 })();
+
+// Grouped navigation: one menu open at a time; click outside or Escape closes it.
+(function () {
+  "use strict";
+  const menus = Array.from(document.querySelectorAll("details.menu"));
+  if (!menus.length) return;
+  const closeAll = (except) => menus.forEach((m) => { if (m !== except) m.open = false; });
+  menus.forEach((m) => m.addEventListener("toggle", () => { if (m.open) closeAll(m); }));
+  document.addEventListener("click", (e) => { if (!e.target.closest("details.menu")) closeAll(null); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const open = menus.find((m) => m.open);
+    if (open) { open.open = false; open.querySelector("summary").focus(); }
+  });
+})();
