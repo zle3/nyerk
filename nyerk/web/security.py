@@ -41,6 +41,31 @@ def client_ip(request: Request) -> str:
         return request.headers["cf-connecting-ip"].strip()
     return request.client.host if request.client else "?"
 
+# Per signed-in person (owners exempt), on top of the per-IP limits above, so
+# one compromised admin or member account can't wear Nyerk down from many IPs.
+# (path prefix, method or "" for any, requests, per seconds). All matches apply.
+USER_LIMITS = [
+    ("", "", 120, 60),
+    ("/search", "GET", 30, 60),
+    ("/stats", "GET", 20, 60),
+    ("/settings/export", "GET", 10, 600),
+    ("/me", "", 30, 60),          # /me reads and changes roles through Discord
+]
+# Actions that post or delete many Discord messages, create roles or fetch
+# shugo.gg: at most once per this many seconds, shared by everyone but the
+# owner, so nobody can use them to run Nyerk into Discord's rate limits.
+COOLDOWNS = {
+    "/dashboard/repost": 60,
+    "/categories/repost-roles": 120,
+    "/party-panels": 60,
+    "/party/content/create-roles": 60,
+    "/defaults/check": 300,
+}
+
+
+def under(path: str, prefix: str) -> bool:
+    return not prefix or path == prefix or path.startswith(prefix.rstrip("/") + "/")
+
 
 class RateLimiter:
     def __init__(self) -> None:

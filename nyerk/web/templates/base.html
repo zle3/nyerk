@@ -43,6 +43,7 @@
       <a href="/stats" class="{{ 'active' if nav == 'stats' }}">Stats</a>
       {% if can.settings or is_owner %}<a href="/settings" class="{{ 'active' if nav == 'settings' }}">Settings</a>{% endif %}
       <a href="/logs" class="{{ 'active' if nav == 'logs' }}">Logs</a>
+      <a href="/search" class="{{ 'active' if nav == 'search' }}" aria-label="Search settings">Search</a>
       {% endif %}
       {% if user %}<a href="/me" class="{{ 'active' if nav == 'me' }}">My page</a>{% endif %}
     </nav>

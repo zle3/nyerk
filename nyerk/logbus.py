@@ -15,11 +15,13 @@ from .models import LogEntry
 
 logger = logging.getLogger("nyerk")
 KEEP_DB_ROWS = 500
+QUEUE_MAX = 200  # lines waiting for #logs
 
 
 class LogBus:
     def __init__(self) -> None:
         self.queue: asyncio.Queue[str] | None = None
+        self.dropped = 0
 
     def setup(self, log_file: Path) -> None:
         log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -36,7 +38,9 @@ class LogBus:
         logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
     def attach_queue(self) -> asyncio.Queue[str]:
-        self.queue = asyncio.Queue()
+        # Bounded: a flood of log lines can't grow memory or keep the bot
+        # posting to #logs for hours. Extra lines still reach the Logs page.
+        self.queue = asyncio.Queue(maxsize=QUEUE_MAX)
         return self.queue
 
     def _emit(self, level: str, kind: str, text: str, discord: bool) -> None:
@@ -52,7 +56,10 @@ class LogBus:
             logger.exception("could not store log entry")
         if discord and self.queue is not None:
             prefix = {"INFO": "", "WARNING": "⚠️ ", "ERROR": "❌ "}.get(level, "")
-            self.queue.put_nowait(f"{prefix}**{kind}** {text}")
+            try:
+                self.queue.put_nowait(f"{prefix}**{kind}** {text}")
+            except asyncio.QueueFull:
+                self.dropped += 1
 
     def info(self, kind: str, text: str, discord: bool = True) -> None:
         self._emit("INFO", kind, text, discord)
@@ -62,6 +69,11 @@ class LogBus:
 
     def error(self, kind: str, text: str, discord: bool = True) -> None:
         self._emit("ERROR", kind, text, discord)
+
+
+    def take_dropped(self) -> int:
+        n, self.dropped = self.dropped, 0
+        return n
 
 
 bus = LogBus()

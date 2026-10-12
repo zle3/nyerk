@@ -360,3 +360,58 @@ def test_import_cannot_change_access_controls(app, monkeypatch):
         data["settings"].update(admin_grants="settings,wording,roles,history", admin_locked=True)
         transfer.apply_import(s, data)
         assert get_settings(s).admin_grants == "" and not get_settings(s).admin_locked
+
+
+def test_search_finds_settings_the_viewer_may_open(app, monkeypatch):
+    admin = sign_in(app, ADMIN, monkeypatch)
+    page = admin.get("/search?q=listing+lifetime").text
+    assert "Listing lifetime" not in page                  # Settings is owner-only by default
+    assert 'href="/party#party_chat_delete_min"' in admin.get("/search?q=chat").text
+    assert "Shugo Festival" in admin.get("/search?q=shugo").text   # events by name
+    owner = sign_in(app, OWNER, monkeypatch)
+    assert 'href="/settings#party_lifetime_min"' in owner.get("/search?q=LIFETIME").text
+    assert "Admin password" in owner.get("/search?q=password").text
+    owner.post("/access/grants", data={"csrf": csrf(owner, "/access"), "area_settings": "1"})
+    page = admin.get("/search?q=lifetime").text
+    assert "Listing lifetime" in page
+    assert "Admin password" not in admin.get("/search?q=password").text  # never opened to admins
+    member = sign_in(app, MEMBER, monkeypatch)
+    assert member.get("/search?q=x").status_code == 403
+
+
+def test_search_caps_the_query(app, monkeypatch):
+    from nyerk.web import search
+    assert search.clean_query("a " * 500) == ["a"] * search.MAX_WORDS
+    assert len("".join(search.clean_query("x" * 10_000))) == search.MAX_QUERY
+    admin = sign_in(app, ADMIN, monkeypatch)
+    assert admin.get("/search?q=" + "z" * 5000).status_code == 200
+
+
+def test_one_account_cannot_flood(app, monkeypatch):
+    admin = sign_in(app, ADMIN, monkeypatch)
+    codes = [admin.get("/search?q=role").status_code for _ in range(35)]
+    assert codes[:30] == [200] * 30 and codes[-1] == 429
+    # The limit is per account: another IP doesn't help.
+    other = sign_in(app, ADMIN, monkeypatch, peer=("198.51.100.9", 1))
+    assert other.get("/search?q=role").status_code == 429
+    owner = sign_in(app, OWNER, monkeypatch)
+    assert all(owner.get("/search?q=role").status_code == 200 for _ in range(35))  # owners exempt
+
+
+def test_discord_heavy_actions_have_a_cooldown(app, monkeypatch):
+    admin = sign_in(app, ADMIN, monkeypatch)
+    tok = csrf(admin, "/categories")
+    assert admin.post("/categories/repost-roles", data={"csrf": tok}).status_code == 200
+    assert admin.post("/categories/repost-roles", data={"csrf": tok}).status_code == 429
+    owner = sign_in(app, OWNER, monkeypatch)
+    assert owner.post("/categories/repost-roles", data={"csrf": csrf(owner, "/categories")}).status_code == 200
+
+
+def test_limit_warnings_do_not_flood_logs(app, monkeypatch):
+    from nyerk.models import LogEntry
+    admin = sign_in(app, ADMIN, monkeypatch)
+    for _ in range(40):
+        admin.get("/search?q=role")
+    with db.session() as s:
+        hits = s.scalars(select(LogEntry).where(LogEntry.text.like("%hit the request limit%"))).all()
+    assert len(hits) == 1

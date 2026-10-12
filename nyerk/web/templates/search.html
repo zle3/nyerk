@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Search settings</h1>
+    <p class="lede">Find any setting, section, event, ping role, dungeon or class, and jump straight to it.</p>
+  </div>
+</div>
+<form method="get" action="/search" class="card inline">
+  <input type="search" name="q" value="{{ q }}" maxlength="{{ max_query }}" placeholder="For example: lifetime, quiet hours, Fire Temple" aria-label="Search settings" autofocus>
+  <button class="btn" type="submit">Search</button>
+  {% if q %}<a class="btn plain" href="/search">Clear</a>{% endif %}
+</form>
+{% if q and not results %}
+<div class="card"><p class="muted">Nothing matches “{{ q }}”. Try one word, like <em>alert</em>, <em>role</em> or <em>party</em>.</p></div>
+{% elif results %}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Setting</th><th>Where</th></tr></thead>
+  <tbody>
+  {% for r in results %}
+    <tr>
+      <td><a href="{{ r.url }}"><strong>{{ r.label }}</strong></a>{% if r.detail and r.detail != 'Section' %}<br><span class="small muted">{{ r.detail }}</span>{% endif %}</td>
+      <td class="small">{{ r.page }}{% if r.detail == 'Section' %} · section{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if results | length >= max_results %}<p class="small muted">Showing the first {{ max_results }}. Add a word to narrow it down.</p>{% endif %}
+{% endif %}
+{% endblock %}

@@ -197,3 +197,15 @@ def test_scheduled_alerts_skip_discord_log_channel(s, monkeypatch):
     assert not any("Sent Dimensional Invasion" in x for x in discord_lines)
     s.expire_all()
     assert s.scalar(select(LogEntry).where(LogEntry.text.like("Sent Dimensional Invasion%")))  # web Logs page
+
+
+def test_logs_queue_is_bounded():
+    from nyerk import logbus
+    bus = logbus.LogBus()
+
+    async def run():
+        bus.attach_queue()
+        for i in range(logbus.QUEUE_MAX + 50):
+            bus.warn("test", f"line {i}")
+        return bus.queue.qsize(), bus.take_dropped(), bus.take_dropped()
+    assert asyncio.run(run()) == (logbus.QUEUE_MAX, 50, 0)

@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import auth
+from . import search as websearch
 from . import security as websecurity
 
 from .. import db, engine, history, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
@@ -81,6 +82,10 @@ class Forbidden(Exception):
     pass
 
 
+class TooMany(Exception):
+    pass
+
+
 class BlockedText(Exception):
     pass
 
@@ -108,7 +113,8 @@ def create_app(cfg, bot=None) -> FastAPI:
             return await call_next(request)
         if user["level"] == "admin" and not app.state.limiter.allow(
                 str(user["uid"]), "admin-changes", ADMIN_CHANGES_PER_HOUR, 3600):
-            bus.warn("admin", f"{user['name']} hit the admin change limit ({ADMIN_CHANGES_PER_HOUR}/hour).")
+            if app.state.limiter.allow(str(user["uid"]), "limit-warn", 1, 600):
+                bus.warn("admin", f"{user['name']} hit the admin change limit ({ADMIN_CHANGES_PER_HOUR}/hour).")
             from starlette.responses import PlainTextResponse
             return PlainTextResponse("Too many changes this hour. Ask the owner if you need more.", status_code=429)
         with db.session() as s:
@@ -176,6 +182,11 @@ def create_app(cfg, bot=None) -> FastAPI:
         target = urlsplit(ref).path or "/"
         return RedirectResponse(target if target.startswith("/") else "/", status_code=303)
 
+    @app.exception_handler(TooMany)
+    async def _too_many(request: Request, exc: TooMany):
+        from starlette.responses import PlainTextResponse
+        return PlainTextResponse(str(exc), status_code=429, headers={"Retry-After": "60"})
+
     @app.exception_handler(Forbidden)
     async def _forbidden(request: Request, exc: Forbidden):
         user = request.session.get("user") or {}
@@ -218,7 +229,28 @@ def create_app(cfg, bot=None) -> FastAPI:
         if need == "owner" and request.method == "POST" and time.time() - user["issued"] > auth.FRESH_SECONDS:
             request.session["after_login"] = str(request.headers.get("referer") or "/")
             raise Login()  # sensitive change: sign in again first
+        if user.get("level") != "owner" and not getattr(request.state, "limited", False):
+            request.state.limited = True  # count each request once, however often require() runs
+            limit_user(request, user)
         return user
+
+    def limit_user(request: Request, user: dict) -> None:
+        limiter, key = app.state.limiter, str(user.get("uid"))
+        path, method = request.url.path, request.method
+        for prefix, verb, n, window in websecurity.USER_LIMITS:
+            if websecurity.under(path, prefix) and verb in ("", method) \
+                    and not limiter.allow(key, f"user:{prefix}:{verb}", n, window):
+                warn_limit(user, f"the request limit for {prefix or 'all pages'}")
+                raise TooMany("Too many requests. Slow down and try again in a minute.")
+        cooldown = websecurity.COOLDOWNS.get(path)
+        if method == "POST" and cooldown and not limiter.allow("everyone", f"cooldown:{path}", 1, cooldown):
+            raise TooMany(f"This was done less than {cooldown} seconds ago. Try again in a moment.")
+
+    def warn_limit(user: dict, what: str) -> None:
+        """At most one #logs line per person per 10 minutes, so hitting a
+        limit over and over can't flood #logs either."""
+        if app.state.limiter.allow(str(user.get("uid")), "limit-warn", 1, 600):
+            bus.warn("admin", f"{user.get('name')} ({user.get('level')}) hit {what}.")
 
     async def form(request: Request) -> dict[str, Any]:
         require(request)
@@ -380,6 +412,24 @@ def create_app(cfg, bot=None) -> FastAPI:
         return back("/")
 
     # -- owner: change history and access ---------------------------------------------------
+
+    search_index = websearch.build_index(HERE / "templates")
+
+    @app.get("/search", response_class=HTMLResponse)
+    async def search_page(request: Request, q: str = ""):
+        user = require(request)
+        q = q[:websearch.MAX_QUERY]
+        g = grants()
+
+        def visible(url: str) -> bool:
+            path = url.split("#", 1)[0]
+            return auth.may_use(user.get("level"), auth.needed_level(path, "GET"), path, "GET", g)
+
+        with db.session() as s:
+            results = websearch.search(s, search_index, websearch.clean_query(q), visible,
+                                       owner=auth.allows(user.get("level"), "owner"))
+        return render(request, "search.html", q=q.strip(), results=results, max_query=websearch.MAX_QUERY,
+                      max_results=websearch.MAX_RESULTS)
 
     @app.get("/history", response_class=HTMLResponse)
     async def history_page(request: Request):

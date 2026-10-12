@@ -362,6 +362,8 @@ class NyerkBot(discord.Client):
             await asyncio.sleep(1.0)  # batch bursts into one message
             while not bus.queue.empty() and sum(len(x) + 1 for x in lines) < 1700:
                 lines.append(bus.queue.get_nowait())
+            if dropped := bus.take_dropped():
+                lines.append(f"⚠️ **logs** {dropped} more line(s) skipped here; see the Logs page.")
             with db.session() as s:
                 channel_id = get_settings(s).log_channel_id
             ch = await self._channel(channel_id) if self.is_ready() else None
