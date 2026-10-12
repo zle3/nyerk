@@ -20,7 +20,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    # Stay on Python 3.12; take its patch releases and Debian refreshes.
+    # Stay on Python 3.12; take its patch releases and Alpine refreshes.
     ignore:
       - dependency-name: python
         update-types: [version-update:semver-major, version-update:semver-minor]
