@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from . import schedules
-from .models import AlertSlot, Event, SentMessage, Settings, UserTimer
+from .models import AlertSlot, Event, Game, SentMessage, UserTimer
 
 GRACE_SECONDS = 120          # a slot later than this is "missed" and skipped
 MAX_CATCHUP_SECONDS = 2 * 86400
@@ -59,14 +59,12 @@ class DueSlot:
 # Occurrences
 
 
-def load_events(s: Session) -> list[Event]:
-    return list(
-        s.scalars(
-            select(Event)
-            .options(selectinload(Event.slots), selectinload(Event.category))
-            .order_by(Event.sort_order, Event.name)
-        )
-    )
+def load_events(s: Session, game_id: int | None = None) -> list[Event]:
+    """One game's events; None = every game's."""
+    q = select(Event).options(selectinload(Event.slots), selectinload(Event.category))
+    if game_id is not None:
+        q = q.where(Event.game_id == game_id)
+    return list(s.scalars(q.order_by(Event.sort_order, Event.name)))
 
 
 def _overrides(events: list[Event]) -> dict[int, list[Event]]:
@@ -134,7 +132,8 @@ def due_slots(s: Session, now: int, last_tick: int) -> list[DueSlot]:
     """Slots whose send time falls in (last_tick, now], minus ones already in
     the sent ledger. Slots older than GRACE_SECONDS are marked skip."""
     last_tick = max(last_tick, now - MAX_CATCHUP_SECONDS)
-    events = load_events(s)
+    live = set(s.scalars(select(Game.id).where(Game.enabled.is_(True))))
+    events = [e for e in load_events(s) if e.game_id in live]  # a switched-off game sends nothing
     overrides = _overrides(events)
     timers = list(s.scalars(select(UserTimer).where(UserTimer.status == "active")))
     out: list[DueSlot] = []
@@ -256,13 +255,14 @@ def _label(event: Event, active: bool) -> str:
     return tmpl.replace("{name}", event.name)
 
 
-def _line(label: str, at: int, now: int, settings: Settings) -> str:
+def _line(label: str, at: int, now: int, settings: Game) -> str:
     style = settings.time_style_near if at - now <= 86400 else settings.time_style_far
     return f"{label} {ts(at, 'R')} at {ts(at, style)}"
 
 
-def build_dashboard(s: Session, settings: Settings, now: int) -> Dashboard:
-    events = load_events(s)
+def build_dashboard(s: Session, settings: Game, now: int) -> Dashboard:
+    """The dashboard for one game (`settings` is the game: its wording and events)."""
+    events = load_events(s, settings.id)
     overrides = _overrides(events)
     top: list[str] = []
     main: list[tuple[int, str]] = []
@@ -292,7 +292,8 @@ def build_dashboard(s: Session, settings: Settings, now: int) -> Dashboard:
             main.append((nxt.at, _line(_label(e, False), nxt.at, now, settings)))
 
     timers = s.scalars(
-        select(UserTimer).where(UserTimer.status == "active", UserTimer.fire_at > now).order_by(UserTimer.fire_at)
+        select(UserTimer).join(Event).where(UserTimer.status == "active", UserTimer.fire_at > now,
+                                            Event.game_id == settings.id).order_by(UserTimer.fire_at)
     )
     for t in timers:
         oneoffs.append((t.fire_at, _line(_label(t.event, False), t.fire_at, now, settings)))
@@ -351,14 +352,16 @@ def build_dashboard(s: Session, settings: Settings, now: int) -> Dashboard:
 CLEANUP_MIN_AGE = 3600  # never clean up an alert younger than this
 
 
-def messages_to_delete(s: Session, retention_min: int, now: int) -> list[SentMessage]:
+def messages_to_delete(s: Session, retention_min: int, now: int, game_id: int | None = None) -> list[SentMessage]:
     """Alert messages whose event is more than `retention_min` minutes in
-    the past (scheduled events: the start time; boss timers: the spawn time).
-    Alerts sent within the last hour are never returned, as a safety net."""
+    the past (scheduled events: the start time; boss timers: the spawn time),
+    for one game's events (None = all). Alerts sent within the last hour are
+    never returned, as a safety net."""
     cutoff = now - max(1, retention_min) * 60
-    return list(s.scalars(
-        select(SentMessage).where(
-            SentMessage.message_id.is_not(None), SentMessage.deleted.is_(False),
-            SentMessage.occurrence_at <= cutoff, SentMessage.sent_at <= now - CLEANUP_MIN_AGE,
-        )
-    ))
+    q = select(SentMessage).where(
+        SentMessage.message_id.is_not(None), SentMessage.deleted.is_(False),
+        SentMessage.occurrence_at <= cutoff, SentMessage.sent_at <= now - CLEANUP_MIN_AGE,
+    )
+    if game_id is not None:
+        q = q.where(SentMessage.event_id.in_(select(Event.id).where(Event.game_id == game_id)))
+    return list(s.scalars(q))

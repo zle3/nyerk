@@ -10,6 +10,7 @@ from nyerk.db import get_state
 from nyerk.models import Event, SentMessage
 
 from .conftest import ny
+from nyerk.games import first as G
 
 _ids = itertools.count(1000)
 
@@ -129,9 +130,9 @@ def test_dashboard_never_deletes_an_alert(s, monkeypatch):
         b, ch = make_bot(monkeypatch, clock)
         await b.tick()
         alert_id = ch.sent[0][0].id
-        get_state(s).dashboard_message_id = alert_id  # corrupt the stored dashboard ID
+        G(s).dashboard_message_id = alert_id  # corrupt the stored dashboard ID
         s.commit()
-        await b.update_dashboard(repost=True)
+        await b.update_dashboard(1, repost=True)
         return ch, alert_id
 
     ch, alert_id = asyncio.run(run())

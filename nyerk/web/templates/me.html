@@ -49,15 +49,19 @@
 </form>
 
 <p class="section-label" id="gear">Gear score</p>
+{% for g in gears %}
 <form method="post" action="/me/gear" class="card inline">
-  {{ csrf_field() }}
-  <select name="bracket" aria-label="Gear score" class="w-auto">
-    <option value="" {{ 'selected' if not gear_id }}>Not set</option>
-    {% for b in brackets %}<option value="{{ b.id }}" {{ 'selected' if b.id == gear_id }}>{{ b.label }}</option>{% endfor %}
+  {{ csrf_field() }}<input type="hidden" name="game_id" value="{{ g.game_id }}">
+  {% if gears | length > 1 %}<strong>{{ g.name }}</strong>{% endif %}
+  <select name="bracket" aria-label="{{ g.name }} gear score" class="w-auto">
+    <option value="" {{ 'selected' if not g.gear_id }}>Not set</option>
+    {% for b in g.brackets %}<option value="{{ b.id }}" {{ 'selected' if b.id == g.gear_id }}>{{ b.label }}</option>{% endfor %}
   </select>
   <button class="btn secondary" type="submit">Save gear score</button>
   <span class="small muted">Shown on party listings; decides which dungeon pings reach you.</span>
 </form>
+{% else %}<div class="card"><span class="muted">No gear scores are set up.</span></div>
+{% endfor %}
 
 <p class="section-label" id="quiet">Quiet hours</p>
 <form method="post" action="/me/quiet" class="card">
@@ -74,14 +78,14 @@
 
 <p class="section-label" id="activity">Party finder</p>
 <div class="list">
-  {% if registration %}
-  <div class="row"><div class="grow"><div class="title">Looking for a group</div><div class="sub">{{ registration_text }} · until <time data-ts="{{ registration.expires_at }}" data-style="t"></time></div></div>
-    <form method="post" action="/me/registration/cancel" class="inline-form">{{ csrf_field() }}<button class="btn small secondary" type="submit">Cancel</button></form></div>
-  {% endif %}
-  {% if party %}
-  <div class="row"><div class="grow"><div class="title">In {{ party_title }}</div><div class="sub">{{ party.status }} · leader {{ party.leader_name }} · {{ party.members | length }}/{{ party.size }}</div></div>
-    <form method="post" action="/me/party/leave" class="inline-form" data-confirm="Leave {{ party_title }}?">{{ csrf_field() }}<button class="btn small danger" type="submit">Leave party</button></form></div>
-  {% endif %}
-  {% if not registration and not party %}<div class="row"><span class="muted">Not registered or in a party. Use the panels in the party finder channel.</span></div>{% endif %}
+  {% for reg, text in registrations %}
+  <div class="row"><div class="grow"><div class="title">Looking for a group</div><div class="sub">{{ text }} · until <time data-ts="{{ reg.expires_at }}" data-style="t"></time></div></div>
+    <form method="post" action="/me/registration/cancel" class="inline-form">{{ csrf_field() }}<input type="hidden" name="game_id" value="{{ reg.game_id }}"><button class="btn small secondary" type="submit">Cancel</button></form></div>
+  {% endfor %}
+  {% for p, title in parties %}
+  <div class="row"><div class="grow"><div class="title">In {{ title }}</div><div class="sub">{{ p.status }} · leader {{ p.leader_name }} · {{ p.members | length }}/{{ p.size }}</div></div>
+    <form method="post" action="/me/party/leave" class="inline-form" data-confirm="Leave {{ title }}?">{{ csrf_field() }}<input type="hidden" name="party_id" value="{{ p.id }}"><button class="btn small danger" type="submit">Leave party</button></form></div>
+  {% endfor %}
+  {% if not registrations and not parties %}<div class="row"><span class="muted">Not registered or in a party. Use the panels in the party finder channel.</span></div>{% endif %}
 </div>
 {% endblock %}

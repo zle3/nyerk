@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from nyerk import db, party, quiet, timers, tracking
+from nyerk import db, games, party, quiet, timers, tracking
 from nyerk.db import get_settings, get_state
 from nyerk.models import Category, Event, LogEntry, PfContent, ReactionGroup
 from nyerk.party import Who
@@ -50,25 +50,27 @@ def build(path) -> dict:
     db.init_engine(path)
     with db.session() as s:
         seed(s), seed_party_finder(s), seed_reaction_groups(s), upgrade_defaults(s)
-        st = get_settings(s)
+        st, game = get_settings(s), games.first(s)
         st.admin_password_hash = hash_password(PASSWORD)
-        for k in ("timer_channel_id", "roles_channel_id", "log_channel_id", "party_channel_id",
-                  "tank_role_id", "support_role_id", "dps_role_id"):
+        for k in ("roles_channel_id", "log_channel_id"):
             setattr(st, k, ids.next())
+        for k in ("timer_channel_id", "party_channel_id", "tank_role_id", "support_role_id", "dps_role_id"):
+            setattr(game, k, ids.next())
         for c in s.scalars(select(Category)):
             c.role_id = ids.next()
-        for c in party.classes(s):
+        for c in party.classes(s, 1):
             c.role_id = ids.next()
         for i, (name, emoji, gear) in enumerate(CONTENT):
-            s.add(PfContent(name=name, emoji=emoji, min_gear_score=gear, sort_order=i, role_id=ids.next()))
+            s.add(PfContent(game_id=game.id, name=name, emoji=emoji, min_gear_score=gear, sort_order=i,
+                            role_id=ids.next()))
         get_state(s).last_tick_at = NOW - 20
 
     # Members: classes, pings, gear, a few with quiet hours.
     with db.session() as s:
-        classes = [c.role_id for c in party.classes(s)]
+        classes = [c.role_id for c in party.classes(s, 1)]
         pings = [c.role_id for c in s.scalars(select(Category))][:3] + \
                 [c.role_id for c in s.scalars(select(PfContent))]
-        brackets = [b.id for b in party.brackets(s)]
+        brackets = [b.id for b in party.brackets(s, 1)]
     for i, name in enumerate(MEMBERS):
         tracking.set_classes(uid(i), name, set(rnd.sample(classes, rnd.choice([1, 1, 2]))))
         for r in rnd.sample(pings, rnd.randint(1, 4)):
@@ -85,8 +87,8 @@ def build(path) -> dict:
 
     # History for Stats: parties and registrations over the last month.
     with db.session() as s:
-        contents = party.contents(s)
-        windows = party.windows(s)
+        contents = party.contents(s, 1)
+        windows = party.windows(s, 1)
         for k in range(70):
             day = NOW - rnd.randint(1, 27) * 86400
             t = day - (day % 3600) + rnd.choice([0, 1, 1, 2, 2, 3, -1, -2]) * 3600
@@ -99,7 +101,7 @@ def build(path) -> dict:
             if k % 2:
                 continue
             lead = rnd.randrange(len(MEMBERS))
-            if party.live_party_for(s, uid(lead)):
+            if party.live_party_for(s, uid(lead), 1):
                 continue
             try:
                 p = party.create(s, who(s, lead), rnd.choices(contents, [5, 4, 3, 2, 1])[0].id,
@@ -120,8 +122,8 @@ def build(path) -> dict:
         bosses = {e.name: e for e in s.scalars(select(Event).where(Event.schedule_type == "kill_report"))}
         timers.report(s, bosses["Eternal Gartua"], uid(1), "Kai", NOW - 7 * 3600)
         timers.report(s, bosses["High Commander Lagta"], uid(2), "Mira", NOW - 3 * 3600, killed_at="20 min ago")
-        fire = next(c for c in party.contents(s) if c.name == "Fire Temple")
-        horn = next(c for c in party.contents(s) if c.name == "Ferocious Horn Den")
+        fire = next(c for c in party.contents(s, 1) if c.name == "Fire Temple")
+        horn = next(c for c in party.contents(s, 1) if c.name == "Ferocious Horn Den")
         for i in (7, 9, 11):
             party.register(s, who(s, i), windows[2].id, [fire.id, horn.id], NOW - 600)
         full = party.create(s, who(s, 4), horn.id, 5, "none", "", "farm run, any experience", NOW - 2400)

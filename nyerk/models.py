@@ -19,48 +19,27 @@ class Base(DeclarativeBase):
 
 
 class Settings(Base):
+    """Server-wide settings. Per-game ones (channels, dashboard, party finder)
+    are on Game."""
+
     __tablename__ = "settings"
 
+    def __setattr__(self, key, value):
+        # Catch code still writing a setting that moved to Game: it would
+        # otherwise land on a plain attribute and be silently lost.
+        if not key.startswith("_") and key not in type(self).__mapper__.attrs:
+            raise AttributeError(f"Settings has no {key!r}; per-game settings are on Game")
+        super().__setattr__(key, value)
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    timer_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
     roles_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
     log_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
     default_tz: Mapped[str] = mapped_column(String(64), default="America/New_York")
-    user_timer_limit: Mapped[int] = mapped_column(Integer, default=10)
-    report_offset_min: Mapped[int] = mapped_column(Integer, default=1)
-    keep_occurrences: Mapped[int] = mapped_column(Integer, default=2)  # no longer used
-    # Delete alert messages this long after their event's start / spawn time.
-    alert_retention_min: Mapped[int] = mapped_column(Integer, default=120)
-    # Max one-off lines on the dashboard before "+N more".
-    dashboard_max_oneoffs: Mapped[int] = mapped_column(Integer, default=20)
-    # Discord timestamp styles for dashboard lines inside / beyond 24 hours.
-    time_style_near: Mapped[str] = mapped_column(String(1), default="t")
-    time_style_far: Mapped[str] = mapped_column(String(1), default="f")
-    # Dashboard headings (Discord markdown). Blank hides that heading.
-    dashboard_title: Mapped[str] = mapped_column(String(100), default="⏱️ AION 2 Timers")
-    # Line above the title so the dashboard stands apart from the alerts.
-    # Discord has no horizontal rule in plain text, so it's characters.
-    dashboard_divider: Mapped[str] = mapped_column(String(100), default="━" * 22)
-    dashboard_top_label: Mapped[str] = mapped_column(String(64), default="Server")
-    dashboard_main_label: Mapped[str] = mapped_column(String(64), default="Upcoming events")
-    oneoff_label: Mapped[str] = mapped_column(String(64), default="World Bosses")
-    # Small note under the World Bosses heading (the usual boss route); blank hides it.
-    dashboard_boss_note: Mapped[str] = mapped_column(String(300), default="Route: Gartua (Eternal Isle) > Lagta (Laborer's Rest Stop) > Kashapa (Ancient Zumion Temple Site) > Dartan (Beast Hunter Campsite)")
-    # Dashboard buttons: "{name}" is the boss name.
-    boss_button_label: Mapped[str] = mapped_column(String(80), default="{name} died")
-    custom_button_label: Mapped[str] = mapped_column(String(80), default="Custom time")
     # Link preview (Discord, Slack, iMessage…) for the public web page.
     link_preview_title: Mapped[str] = mapped_column(String(100), default="Nyerk")
     link_preview_description: Mapped[str] = mapped_column(
         String(300), default="AION 2 boss timers, event alerts, roles and party finder. "
                              "Sign in with Discord to manage your timers, classes, pings and quiet hours.")
-    # One-line reminder about /nyerk on the dashboard; blank hides it.
-    dashboard_commands_label: Mapped[str] = mapped_column(
-        String(200), default="💡 Type `/nyerk` for more: report a kill with a custom time, and see, edit or cancel your timers.")
-    dashboard_footer: Mapped[str] = mapped_column(
-        String(200), default="Times are in your own time zone. Killed a boss? Tap its button below.")
-    shugo_url: Mapped[str] = mapped_column(String(255), default="https://shugo.gg/timers")
-    shugo_region: Mapped[str] = mapped_column(String(64), default="NA East")
     admin_password_hash: Mapped[str] = mapped_column(String(255), default="")
     # Owner switch: while on, admin-role holders get member access only.
     admin_locked: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -71,6 +50,54 @@ class Settings(Base):
     roles_header: Mapped[str] = mapped_column(
         String(500), default="# 🎭 Roles\nPick your classes and gear score, then the pings you want. Change them any time.")
 
+
+
+class Game(Base):
+    """One game Nyerk runs timers and a party finder for. A server can run
+    several (each with its own timer and party channels) or switch between
+    them. Settings fields here keep the names they had on Settings, so code
+    that reads them works with a Game."""
+
+    __tablename__ = "games"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # 0 = the server in GUILD_ID (one server per Nyerk for now).
+    guild_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    name: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(16), default="custom")  # aion2 | custom
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    timer_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    user_timer_limit: Mapped[int] = mapped_column(Integer, default=10)
+    report_offset_min: Mapped[int] = mapped_column(Integer, default=1)
+    # Delete alert messages this long after their event's start / spawn time.
+    alert_retention_min: Mapped[int] = mapped_column(Integer, default=120)
+    # Max one-off lines on the dashboard before "+N more".
+    dashboard_max_oneoffs: Mapped[int] = mapped_column(Integer, default=20)
+    # Discord timestamp styles for dashboard lines inside / beyond 24 hours.
+    time_style_near: Mapped[str] = mapped_column(String(1), default="t")
+    time_style_far: Mapped[str] = mapped_column(String(1), default="f")
+    # Dashboard headings (Discord markdown). Blank hides that heading.
+    dashboard_title: Mapped[str] = mapped_column(String(100), default="⏱️ Timers")
+    # Line above the title so the dashboard stands apart from the alerts.
+    # Discord has no horizontal rule in plain text, so it's characters.
+    dashboard_divider: Mapped[str] = mapped_column(String(100), default="━" * 22)
+    dashboard_top_label: Mapped[str] = mapped_column(String(64), default="Server")
+    dashboard_main_label: Mapped[str] = mapped_column(String(64), default="Upcoming events")
+    oneoff_label: Mapped[str] = mapped_column(String(64), default="Bosses")
+    # Small note under the World Bosses heading (the usual boss route); blank hides it.
+    dashboard_boss_note: Mapped[str] = mapped_column(String(300), default="")
+    # Dashboard buttons: "{name}" is the boss name.
+    boss_button_label: Mapped[str] = mapped_column(String(80), default="{name} died")
+    custom_button_label: Mapped[str] = mapped_column(String(80), default="Custom time")
+    # One-line reminder about /nyerk on the dashboard; blank hides it.
+    dashboard_commands_label: Mapped[str] = mapped_column(
+        String(200), default="💡 Type `/nyerk` for more: report a kill with a custom time, and see, edit or cancel your timers.")
+    dashboard_footer: Mapped[str] = mapped_column(
+        String(200), default="Times are in your own time zone.")
+    shugo_url: Mapped[str] = mapped_column(String(255), default="https://shugo.gg/timers")
+    shugo_region: Mapped[str] = mapped_column(String(64), default="NA East")
     # Party finder
     party_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
     party_lifetime_min: Mapped[int] = mapped_column(Integer, default=60)
@@ -88,6 +115,23 @@ class Settings(Base):
     party_default_support: Mapped[int] = mapped_column(Integer, default=1)
     party_default_dps: Mapped[int] = mapped_column(Integer, default=3)
 
+    # Discord messages Nyerk keeps up to date for this game.
+    dashboard_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    dashboard_hash: Mapped[str] = mapped_column(String(64), default="")
+    roles_class_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    roles_gear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    class_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    gear_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    interest_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    interest_panel_hash: Mapped[str] = mapped_column(String(64), default="")
+    party_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    party_status_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    party_status_hash: Mapped[str] = mapped_column(String(64), default="")
+    # shugo.gg suggestions (AION 2 games only)
+    last_import_at: Mapped[int] = mapped_column(BigInteger, default=0)
+    last_import_error: Mapped[str] = mapped_column(Text, default="")
+    pending_import: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
 
 class ReactionGroup(Base):
     """One reaction roles message in the roles channel (split past 20)."""
@@ -104,9 +148,11 @@ class ReactionGroup(Base):
 
 class Category(Base):
     __tablename__ = "categories"
+    __table_args__ = (UniqueConstraint("game_id", "name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(64), unique=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
     role_id: Mapped[int] = mapped_column(BigInteger, default=0)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     # Reaction emoji in the roles message; blank = next number emoji.
@@ -120,6 +166,7 @@ class Event(Base):
     __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"))
     name: Mapped[str] = mapped_column(String(100))
     location: Mapped[str] = mapped_column(String(100), default="")
@@ -200,11 +247,11 @@ class SentMessage(Base):
 
 
 class BotState(Base):
+    """Server-wide bookkeeping. Per-game Discord message IDs are on Game."""
+
     __tablename__ = "bot_state"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    dashboard_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    dashboard_hash: Mapped[str] = mapped_column(String(64), default="")
     reaction_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     # {"1️⃣": role_id, ...} as posted, so reordering in the admin page does not
     # silently change what an existing reaction grants.
@@ -214,28 +261,15 @@ class BotState(Base):
     # IDs of entries in data/forgotten.json already applied to this database
     # (see forgotten.py). A restored older copy lacks them, so they run again.
     forgets_applied: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    # Extra messages in the roles channel: class selector copy, remove-all.
+    # Extra messages in the roles channel: header, remove-all.
     roles_header_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    roles_gear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     # One-time data upgrades already applied, so deleting a seeded row sticks.
     upgrades_done: Mapped[list] = mapped_column(JSON, default=list)
     # Bumped by "Sign everyone out"; sessions from an older epoch are dropped.
     session_epoch: Mapped[int] = mapped_column(Integer, default=0)
-    roles_class_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     roles_clear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     last_tick_at: Mapped[int] = mapped_column(BigInteger, default=0)
-    last_import_at: Mapped[int] = mapped_column(BigInteger, default=0)
-    last_import_error: Mapped[str] = mapped_column(Text, default="")
-    pending_import: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_backup_day: Mapped[str] = mapped_column(String(10), default="")
-    # Party finder panels
-    class_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    gear_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    interest_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    interest_panel_hash: Mapped[str] = mapped_column(String(64), default="")
-    party_panel_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    party_status_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    party_status_hash: Mapped[str] = mapped_column(String(64), default="")
 
 
 class LogEntry(Base):
@@ -256,9 +290,11 @@ class LogEntry(Base):
 
 class PfClass(Base):
     __tablename__ = "pf_classes"
+    __table_args__ = (UniqueConstraint("game_id", "name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(64), unique=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
     emoji: Mapped[str] = mapped_column(String(64), default="")
     role_id: Mapped[int] = mapped_column(BigInteger, default=0)
     class_type: Mapped[str] = mapped_column(String(16), default="dps")  # tank | support | dps
@@ -267,9 +303,11 @@ class PfClass(Base):
 
 class PfBracket(Base):
     __tablename__ = "pf_brackets"
+    __table_args__ = (UniqueConstraint("game_id", "label"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    label: Mapped[str] = mapped_column(String(32), unique=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
+    label: Mapped[str] = mapped_column(String(32))
     min_score: Mapped[int] = mapped_column(Integer, default=0)
     max_score: Mapped[int] = mapped_column(Integer, default=0)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
@@ -277,17 +315,21 @@ class PfBracket(Base):
 
 class PfWindow(Base):
     __tablename__ = "pf_windows"
+    __table_args__ = (UniqueConstraint("game_id", "minutes"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    minutes: Mapped[int] = mapped_column(Integer, unique=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
+    minutes: Mapped[int] = mapped_column(Integer)
     label: Mapped[str] = mapped_column(String(32), default="")
 
 
 class PfContent(Base):
     __tablename__ = "pf_content"
+    __table_args__ = (UniqueConstraint("game_id", "name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(80), unique=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
     emoji: Mapped[str] = mapped_column(String(64), default="")
     min_gear_score: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -302,6 +344,7 @@ class PfInterest(Base):
     __tablename__ = "pf_interest"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[int] = mapped_column(BigInteger)
     user_name: Mapped[str] = mapped_column(String(100), default="")
     class_id: Mapped[int | None] = mapped_column(ForeignKey("pf_classes.id", ondelete="SET NULL"), nullable=True)
@@ -321,6 +364,7 @@ class PfParty(Base):
     __tablename__ = "pf_parties"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
     content_id: Mapped[int | None] = mapped_column(ForeignKey("pf_content.id", ondelete="SET NULL"), nullable=True)
     leader_id: Mapped[int] = mapped_column(BigInteger)
     leader_name: Mapped[str] = mapped_column(String(100), default="")
@@ -413,6 +457,19 @@ class MemberProfile(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, unique=True)
     user_name: Mapped[str] = mapped_column(String(100), default="")
+    updated_at: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
+
+class MemberGear(Base):
+    """A member's gear score bracket in one game."""
+
+    __tablename__ = "member_gear"
+    __table_args__ = (UniqueConstraint("user_id", "game_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
     bracket_id: Mapped[int | None] = mapped_column(ForeignKey("pf_brackets.id", ondelete="SET NULL"), nullable=True)
     updated_at: Mapped[int] = mapped_column(BigInteger, default=0)
 

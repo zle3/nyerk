@@ -4,7 +4,7 @@
 <div class="login">
   <div class="card">
     <h1 class="logo-tile"><img src="/static/logo.png" alt="Nyerk" width="191" height="109"></h1>
-    <p class="muted small">AION 2 timers, roles and party finder</p>
+    <p class="muted small">Game timers, roles and party finder for Discord</p>
     {% for kind, text in flashes %}<div class="flash {{ kind }}" role="alert">{{ text }}</div>{% endfor %}
     {% if discord_login %}
       <a class="btn discord-btn" href="/auth/discord">Sign in with Discord</a>

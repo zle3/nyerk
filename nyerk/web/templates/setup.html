@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
+{% block title %}Set up{% endblock %}
+{% block content %}
+<h1>Which game is this for?</h1>
+<p class="lede">Nyerk runs timers, roles and a party finder for a game. Pick AION 2 to start with its events, world bosses, classes and gear scores ready to go, or set up another game from scratch. You can add more games later, or switch.</p>
+<div class="choice-grid">
+  <form method="post" action="/setup" class="card">
+    {{ csrf_field() }}<input type="hidden" name="kind" value="aion2"><input type="hidden" name="name" value="AION 2">
+    <h2>AION 2</h2>
+    <p class="small muted">The ten launch events, four world bosses on the usual route, six ping categories, eight classes and gear score options. Daily shugo.gg checks suggest schedule changes.</p>
+    <button class="btn" type="submit">Set up for AION 2</button>
+  </form>
+  <form method="post" action="/setup" class="card">
+    {{ csrf_field() }}<input type="hidden" name="kind" value="custom">
+    <h2>Another game</h2>
+    <p class="small muted">Starts empty: you add the events, bosses, ping roles, classes and dungeons it needs.</p>
+    <div class="field"><label for="name">Game name</label><input id="name" name="name" type="text" maxlength="64" required placeholder="e.g. Throne and Liberty"></div>
+    <button class="btn secondary" type="submit">Set up another game</button>
+  </form>
+</div>
+{% endblock %}

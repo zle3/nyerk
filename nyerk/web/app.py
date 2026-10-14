@@ -18,20 +18,20 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import auth
 from . import search as websearch
 from . import security as websecurity
 
-from .. import db, engine, forgotten, history, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
+from .. import db, engine, forgotten, games, history, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus
 from ..models import (
-    AlertSlot, Category, Event, LogEntry, PfBracket, PfClass, PfContent, PfInterest, PfParty, PfWindow,
-    ConfigChange, QuietHours, ReactionGroup, RoleHolder, UserTimer,
+    AlertSlot, Category, ConfigChange, Event, Game, LogEntry, PfBracket, PfClass, PfContent, PfInterest, PfParty,
+    PfWindow, QuietHours, ReactionGroup, RoleHolder, UserTimer,
 )
 from ..seed import make_slots, NONE
 
@@ -90,6 +90,10 @@ class Forbidden(Exception):
 
 class TooMany(Exception):
     pass
+
+
+class NoGame(Exception):
+    """No game set up yet: the owner picks one on /setup first."""
 
 
 class BlockedText(Exception):
@@ -188,6 +192,10 @@ def create_app(cfg, bot=None) -> FastAPI:
         target = urlsplit(ref).path or "/"
         return RedirectResponse(target if target.startswith("/") else "/", status_code=303)
 
+    @app.exception_handler(NoGame)
+    async def _no_game(request: Request, exc: NoGame):
+        return RedirectResponse("/setup", status_code=303)
+
     @app.exception_handler(TooMany)
     async def _too_many(request: Request, exc: TooMany):
         from starlette.responses import PlainTextResponse
@@ -213,6 +221,25 @@ def create_app(cfg, bot=None) -> FastAPI:
         bot = app.state.bot
         if note and bot is not None and bot.is_ready():
             bot.pf.notify_leader(*note, actor_id=actor_id)
+
+    def game_of(request: Request, s) -> Game:
+        """The game this browser is looking at (remembered in the session);
+        the first game when none is picked. No game at all: go to setup."""
+        wanted = request.query_params.get("game", "")
+        if wanted.isdigit() and games.get(s, int(wanted)):  # a link to another game's page
+            request.session["game_id"] = int(wanted)
+        g = games.get(s, request.session.get("game_id"))
+        if g is None:
+            g = games.first(s)
+            if g is None:
+                raise NoGame()
+            request.session["game_id"] = g.id
+        return g
+
+    def look_at(request: Request, game_id: int) -> None:
+        """Switch the browser to a game, e.g. when opening one of its events."""
+        if request.session.get("game_id") != game_id:
+            request.session["game_id"] = game_id
 
     def grants() -> frozenset[str]:
         with db.session() as s:
@@ -282,12 +309,14 @@ def create_app(cfg, bot=None) -> FastAPI:
     def render(request: Request, name: str, **ctx) -> HTMLResponse:
         if "csrf" not in request.session:
             request.session["csrf"] = secrets.token_urlsafe(32)
-        with db.session() as s:
-            pending = get_state(s).pending_import
         user = current(request) or {}
         with db.session() as s:
             st = get_settings(s)
             preview = dict(title=st.link_preview_title or "Nyerk", description=st.link_preview_description or "")
+            game_rows = games.all_games(s)
+            cur = games.get(s, request.session.get("game_id")) or games.first(s)
+            pending = cur.pending_import if cur else None
+            game_list = [dict(id=g.id, name=g.name, enabled=g.enabled) for g in game_rows]
         base = cfg.public_url or str(request.base_url).rstrip("/")
         preview.update(url=base + "/", image=base + "/static/og.png")
         ctx.update(
@@ -298,6 +327,8 @@ def create_app(cfg, bot=None) -> FastAPI:
             request=request, csrf=request.session["csrf"], flashes=request.session.pop("flash", []),
             nav=name.split(".")[0], pending_changes=len((pending or {}).get("changes", [])),
             bot_status=app.state.bot.status() if app.state.bot else None,
+            games_list=game_list, current_game=dict(id=cur.id, name=cur.name, kind=cur.kind) if cur else None,
+            many_games=len(game_list) > 1,
             REPO_URL=REPO_URL, LEGAL_UPDATED=LEGAL_UPDATED, version=VERSION,
             year=datetime.now(timezone.utc).year,
         )
@@ -306,9 +337,9 @@ def create_app(cfg, bot=None) -> FastAPI:
     def back(url: str) -> RedirectResponse:
         return RedirectResponse(url, status_code=303)
 
-    def refresh(repost: bool = False) -> None:
+    def refresh(repost: bool = False, game_id: int | None = None) -> None:
         if app.state.bot:
-            app.state.bot.request_refresh(repost=repost)
+            app.state.bot.request_refresh(repost=repost, game_id=game_id)
 
     # -- auth ---------------------------------------------------------------------
 
@@ -408,19 +439,141 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def overview(request: Request):
         require(request)
         with db.session() as s:
-            settings, state = get_settings(s), get_state(s)
-            dash = engine.build_dashboard(s, settings, int(time.time()))
+            game, state = game_of(request, s), get_state(s)
+            dash = engine.build_dashboard(s, game, int(time.time()))
             logs = list(s.scalars(select(LogEntry).order_by(LogEntry.id.desc()).limit(25)))
-            active = s.scalar(select(func.count()).select_from(UserTimer).where(UserTimer.status == "active"))
-            ctx = dict(dash=dash, logs=logs, active=active, state=state, settings=settings)
+            active = s.scalar(select(func.count()).select_from(UserTimer).join(Event).where(
+                UserTimer.status == "active", Event.game_id == game.id))
+            ctx = dict(dash=dash, logs=logs, active=active, state=state, settings=game)
         return render(request, "overview.html", **ctx)
 
     @app.post("/dashboard/repost")
     async def repost_dashboard(request: Request):
         await form(request)
-        refresh(repost=True)
+        with db.session() as s:
+            gid = game_of(request, s).id
+        refresh(repost=True, game_id=gid)
         flash(request, "Dashboard will be reposted in a moment." if app.state.bot else "Bot is not running.")
         return back("/")
+
+    # -- games ---------------------------------------------------------------------------
+
+    def _same_site(url: str, fallback: str = "/") -> str:
+        from urllib.parse import urlsplit
+        parts = urlsplit(url or "")
+        path = parts.path or fallback
+        return path if path.startswith("/") and not path.startswith("//") else fallback
+
+    @app.post("/game/use")
+    async def game_use(request: Request):
+        """The game picker in the top bar."""
+        data = await form(request)
+        with db.session() as s:
+            g = games.get(s, _int(data, "game_id", 0, 0, 10**9)) or _404()
+            request.session["game_id"], name = g.id, g.name
+        flash(request, f"Now showing {name}.")
+        return back(_same_site(str(request.headers.get("referer") or "/")))
+
+    @app.get("/setup", response_class=HTMLResponse)
+    async def setup_page(request: Request):
+        require(request)
+        with db.session() as s:
+            if games.all_games(s):
+                return back("/")
+        return render(request, "setup.html", kinds=games.KINDS)
+
+    @app.post("/setup")
+    async def setup_save(request: Request):
+        data = await form(request)
+        kind = str(data.get("kind", ""))
+        try:
+            with db.session() as s:
+                if games.all_games(s):
+                    return back("/")
+                g = games.create(s, str(data.get("name", "")), kind)
+                request.session["game_id"], name = g.id, g.name
+        except games.GameError as exc:
+            flash(request, str(exc), "err")
+            return back("/setup")
+        bus.info("config", f"Set up for {name}.")
+        flash(request, f"Nyerk is set up for {name}. Next: paste your channel IDs below.")
+        return back("/settings")
+
+    @app.get("/games", response_class=HTMLResponse)
+    async def games_page(request: Request):
+        require(request)
+        with db.session() as s:
+            rows = []
+            for g in games.all_games(s):
+                rows.append(dict(g=g, events=s.scalar(select(func.count()).select_from(Event).where(
+                    Event.game_id == g.id, Event.overrides_event_id.is_(None))) or 0,
+                    classes=len(party.classes(s, g.id)), contents=len(party.contents(s, g.id, False))))
+        return render(request, "games.html", rows=rows, kinds=games.KINDS)
+
+    @app.post("/games/new")
+    async def game_add(request: Request):
+        data = await form(request)
+        try:
+            with db.session() as s:
+                g = games.create(s, str(data.get("name", "")), str(data.get("kind", "")))
+                request.session["game_id"], name = g.id, g.name
+        except games.GameError as exc:
+            flash(request, str(exc), "err")
+            return back("/games")
+        bus.info("config", f"Game added: {name}.")
+        flash(request, f"Added {name}. Set its timer and party channels on Settings, then post its panels.")
+        return back("/settings#game")
+
+    @app.post("/games/{game_id}")
+    async def game_save(request: Request, game_id: int):
+        data = await form(request)
+        name = " ".join(str(data.get("name", "")).split())[:64]
+        with db.session() as s:
+            g = games.get(s, game_id) or _404()
+            if not name:
+                flash(request, "Give the game a name.", "err")
+                return back("/games")
+            if any(o.id != g.id and o.name.lower() == name.lower() for o in games.all_games(s)):
+                flash(request, f"There is already a game called {name}.", "err")
+                return back("/games")
+            was_on = g.enabled
+            g.name, g.enabled = name, bool(data.get("enabled"))
+            g.sort_order = _int(data, "sort_order", g.sort_order, -100, 100)
+            on = g.enabled
+        if was_on != on:
+            bus.info("config", f"Game {name} switched {'on' if on else 'off'}.")
+        refresh(repost=True)
+        flash(request, f"Saved {name}." + ("" if on else " It's switched off: no alerts, dashboard or party finder."))
+        return back("/games")
+
+    @app.post("/games/{game_id}/delete")
+    async def game_delete(request: Request, game_id: int):
+        data = await form(request)
+        with db.session() as s:
+            g = games.get(s, game_id) or _404()
+            name = g.name
+            if str(data.get("confirm", "")).strip().lower() != name.lower():
+                flash(request, f"Type {name} to confirm. Nothing was deleted.", "err")
+                return back("/games")
+            # Nyerk's messages for this game, so the bot can take them down.
+            roles_ch = get_settings(s).roles_channel_id
+            msgs = [(g.timer_channel_id, g.dashboard_message_id), (roles_ch, g.roles_class_message_id),
+                    (roles_ch, g.roles_gear_message_id)]
+            msgs += [(g.party_channel_id, x) for x in (g.class_panel_message_id, g.gear_panel_message_id,
+                                                      g.interest_panel_message_id, g.party_panel_message_id,
+                                                      g.party_status_message_id)]
+            for p in s.scalars(select(PfParty).where(PfParty.game_id == game_id)):
+                msgs += [(g.party_channel_id, x) for x in (p.listing_message_id, p.ping_message_id,
+                                                          p.warning_message_id, p.ready_message_id)]
+            s.execute(text("DELETE FROM games WHERE id = :id"), {"id": game_id})  # the database removes the rest
+            if request.session.get("game_id") == game_id:
+                request.session.pop("game_id", None)
+        bot = _bot_ready()
+        if bot:
+            asyncio.create_task(bot.delete_messages([(c, m) for c, m in msgs if c and m]))
+        bus.warn("config", f"Game {name} deleted with its events, roles setup, party finder and history.")
+        flash(request, f"Deleted {name}.")
+        return back("/games")
 
     # -- owner: change history and access ---------------------------------------------------
 
@@ -430,7 +583,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         g = grants()
 
         def visible(url: str) -> bool:
-            path = url.split("#", 1)[0]
+            path = url.split("#", 1)[0].split("?", 1)[0]
             return auth.may_use(user.get("level"), auth.needed_level(path, "GET"), path, "GET", g)
 
         with db.session() as s:
@@ -553,9 +706,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         with db.session() as s:
             info = members.detail(s, uid)
             options = members.role_options(s)
-            gear = party.gear_of(s, uid)
-            ctx = dict(gear_id=gear.id if gear else 0, brackets=party.brackets(s),
-                       default_tz=get_settings(s).default_tz)
+            ctx = dict(gears=_gears(s, uid), default_tz=get_settings(s).default_tz)
         info.pop("name", None)
         return render(request, "me.html", uid=uid, live=live is not None,
                       held=live[1] if live else info["tracked"], options=options, zones=quiet.ZONES,
@@ -593,7 +744,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         with db.session() as s:
             try:
                 b = party.set_gear(s, user["uid"], user["name"], int(raw) if raw.isdigit() else None,
-                                   int(time.time()))
+                                   int(time.time()), _int(data, "game_id", 0, 0, 10**9) or None)
             except party.PartyError as exc:
                 flash(request, str(exc), "err")
                 return back("/me#gear")
@@ -662,10 +813,10 @@ def create_app(cfg, bot=None) -> FastAPI:
 
     @app.post("/me/registration/cancel")
     async def me_registration_cancel(request: Request):
-        await form(request)
+        data = await form(request)
         user = me(request)
         with db.session() as s:
-            row = party.cancel_registration(s, user["uid"])
+            row = party.cancel_registration(s, user["uid"], _int(data, "game_id", 0, 0, 10**9) or None)
         if row:
             refresh()
         flash(request, "Registration cancelled." if row else "You weren't registered.")
@@ -673,13 +824,13 @@ def create_app(cfg, bot=None) -> FastAPI:
 
     @app.post("/me/party/leave")
     async def me_party_leave(request: Request):
-        await form(request)
+        data = await form(request)
         user = me(request)
         try:
             with db.session() as s:
-                p = party.live_party_for(s, user["uid"])
-                if p is None:
-                    raise party.PartyError("You're not in a party.")
+                p = s.get(PfParty, _int(data, "party_id", 0, 0, 10**12))
+                if p is None or p.status not in party.LIVE or all(m.user_id != user["uid"] for m in p.members):
+                    raise party.PartyError("You're not in that party.")
                 title = party.party_title(p)
                 res = party.remove_member(s, p, user["uid"], int(time.time()))
                 note = None if res.closed else (p.leader_id, party.leader_note(
@@ -723,8 +874,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         info["member_name"] = live[0] if live else (info.pop("name") or f"User {uid}")
         info.pop("name", None)
         with db.session() as s:
-            gear = party.gear_of(s, uid)
-            info["gear_id"], info["brackets"] = (gear.id if gear else 0), party.brackets(s)
+            info["gears"] = _gears(s, uid)
         return render(request, "member.html", uid=uid, live=live is not None, held=held, backup_days=cfg.backup_keep,
                       options=options, zones=quiet.ZONES, default_tz=default_tz,
                       hours=[(h, quiet.hour_label(h)) for h in range(24)], **info)
@@ -797,7 +947,8 @@ def create_app(cfg, bot=None) -> FastAPI:
         with db.session() as s:
             name = members.detail(s, uid)["name"] or f"User {uid}"
             try:
-                b = party.set_gear(s, uid, name, int(raw) if raw.isdigit() else None, int(time.time()))
+                b = party.set_gear(s, uid, name, int(raw) if raw.isdigit() else None, int(time.time()),
+                                   _int(data, "game_id", 0, 0, 10**9) or None)
             except party.PartyError as exc:
                 flash(request, str(exc), "err")
                 return back(f"/members/{uid}#gear")
@@ -847,9 +998,9 @@ def create_app(cfg, bot=None) -> FastAPI:
 
     @app.post("/members/{uid}/registration/cancel")
     async def member_registration_cancel(request: Request, uid: int):
-        await form(request)
+        data = await form(request)
         with db.session() as s:
-            row = party.cancel_registration(s, uid)
+            row = party.cancel_registration(s, uid, _int(data, "game_id", 0, 0, 10**9) or None)
             name = row.user_name if row else ""
         if row:
             bus.info("party", f"Registration of {name} cancelled by admin.")
@@ -859,12 +1010,13 @@ def create_app(cfg, bot=None) -> FastAPI:
 
     @app.post("/members/{uid}/party/remove")
     async def member_party_remove(request: Request, uid: int):
-        await form(request)
+        data = await form(request)
         try:
             with db.session() as s:
-                p = party.live_party_for(s, uid)
-                if p is None:
-                    raise party.PartyError("Not in a party.")
+                pid = _int(data, "party_id", 0, 0, 10**12)
+                p = s.get(PfParty, pid) if pid else party.live_party_for(s, uid, None)
+                if p is None or p.status not in party.LIVE or all(m.user_id != uid for m in p.members):
+                    raise party.PartyError("Not in that party.")
                 title = party.party_title(p)
                 name = next((m.user_name for m in p.members if m.user_id == uid), str(uid))
                 res = party.remove_member(s, p, uid, int(time.time()))
@@ -883,7 +1035,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def stats_page(request: Request, range: str = "30"):
         require(request)
         with db.session() as s:
-            data = stats.compute(s, range, int(time.time()), get_settings(s).default_tz)
+            data = stats.compute(s, range, int(time.time()), get_settings(s).default_tz, game_of(request, s).id)
         return render(request, "stats.html", st=data, ranges=stats.RANGES, days=stats.DAYS,
                       heat_level=stats.heat_level)
 
@@ -901,8 +1053,9 @@ def create_app(cfg, bot=None) -> FastAPI:
         require(request)
         t = int(time.time())
         with db.session() as s:
-            evs = [e for e in engine.load_events(s) if not e.overrides_event_id]
-            overrides = engine._overrides(engine.load_events(s))
+            game = game_of(request, s)
+            evs = [e for e in engine.load_events(s, game.id) if not e.overrides_event_id]
+            overrides = engine._overrides(engine.load_events(s, game.id))
             rows = []
             for e in evs:
                 nxt = engine.next_occurrence(e, t, overrides.get(e.id))
@@ -910,8 +1063,8 @@ def create_app(cfg, bot=None) -> FastAPI:
                                  slots={sl.lead_minutes: sl for sl in e.slots}))
         return render(request, "events.html", rows=rows)
 
-    def _event_ctx(s, e: Event | None, error: str = "", values: dict | None = None):
-        cats = list(s.scalars(select(Category).order_by(Category.sort_order)))
+    def _event_ctx(s, e: Event | None, game_id: int, error: str = "", values: dict | None = None):
+        cats = list(s.scalars(select(Category).where(Category.game_id == game_id).order_by(Category.sort_order)))
         preview = []
         if e is not None and e.id and e.schedule_type != "kill_report":
             t = int(time.time())
@@ -925,7 +1078,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def event_new(request: Request):
         require(request)
         with db.session() as s:
-            ctx = _event_ctx(s, None)
+            ctx = _event_ctx(s, None, game_of(request, s).id)
         return render(request, "event_edit.html", **ctx)
 
     @app.get("/events/{event_id}", response_class=HTMLResponse)
@@ -936,7 +1089,8 @@ def create_app(cfg, bot=None) -> FastAPI:
             if e is None or e.overrides_event_id:
                 raise HTTPException(404)
             _ = e.slots, e.category
-            ctx = _event_ctx(s, e)
+            look_at(request, e.game_id)
+            ctx = _event_ctx(s, e, e.game_id)
         return render(request, "event_edit.html", **ctx)
 
     @app.post("/events/new")
@@ -950,9 +1104,11 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def _save_event(request: Request, event_id: int | None):
         data = await form(request)
         with db.session() as s:
-            e = s.get(Event, event_id) if event_id else Event(slots=make_slots(NONE), source="manual")
+            e = s.get(Event, event_id) if event_id else Event(game_id=game_of(request, s).id, slots=make_slots(NONE),
+                                                             source="manual")
             if e is None:
                 raise HTTPException(404)
+            game_id = e.game_id
             try:
                 changes = _apply_event_form(s, e, data, owner=may(request, "wording"))
             except ValueError as exc:
@@ -960,7 +1116,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                 e = s.get(Event, event_id) if event_id else None
                 if e is not None:
                     _ = e.slots, e.category
-                ctx = _event_ctx(s, e, str(exc), dict(data))
+                ctx = _event_ctx(s, e, game_id, str(exc), dict(data))
                 return render(request, "event_edit.html", **ctx)
             if not event_id:
                 s.add(e)
@@ -1000,7 +1156,9 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def categories_page(request: Request):
         require(request)
         with db.session() as s:
-            cats = list(s.scalars(select(Category).order_by(Category.sort_order, Category.id)))
+            game = game_of(request, s)
+            cats = list(s.scalars(select(Category).where(Category.game_id == game.id)
+                                  .order_by(Category.sort_order, Category.id)))
             counts = dict(s.execute(select(Event.category_id, func.count()).group_by(Event.category_id)).all())
             state = get_state(s)
             groups = reaction_roles.groups(s)
@@ -1009,12 +1167,14 @@ def create_app(cfg, bot=None) -> FastAPI:
             assign = [("category", c.id, c.name, c.role_id, c.emoji, c.group_id or default_group.get("category"))
                       for c in cats]
             assign += [("content", c.id, c.name, c.role_id, c.react_emoji, c.group_id or default_group.get("content"))
-                       for c in party.contents(s, False)]
+                       for c in party.contents(s, game.id, False)]
             previews = [text for text, _ in reaction_roles.messages(s)]
             ctx = dict(cats=cats, counts=counts, groups=groups, assign=assign, emoji_of=emoji_of,
                        roles_header=get_settings(s).roles_header,
-                       previews=previews, class_preview=party.CLASS_PANEL, clear_preview=reaction_roles.CLEAR_TEXT,
-                       gear_preview=party.GEAR_PANEL, gear_labels=[b.label for b in party.brackets(s)],
+                       previews=previews, class_preview=party.class_panel_text(game),
+                       clear_preview=reaction_roles.CLEAR_TEXT,
+                       gear_preview=party.gear_panel_text(game, len(games.all_games(s)) > 1),
+                       gear_labels=[b.label for b in party.brackets(s, game.id)],
                        posted=bool(state.reaction_messages or state.reaction_message_id))
         return render(request, "categories.html", **ctx)
 
@@ -1026,11 +1186,12 @@ def create_app(cfg, bot=None) -> FastAPI:
             flash(request, "Name is required.", "err")
             return back("/categories")
         with db.session() as s:
-            if s.scalar(select(Category).where(Category.name == name)):
+            gid = game_of(request, s).id
+            if s.scalar(select(Category).where(Category.name == name, Category.game_id == gid)):
                 flash(request, f"{name} already exists.", "err")
                 return back("/categories")
-            top = s.scalar(select(func.max(Category.sort_order))) or 0
-            s.add(Category(name=name, role_id=_role_id(data.get("role_id")), sort_order=top + 1))
+            top = s.scalar(select(func.max(Category.sort_order)).where(Category.game_id == gid)) or 0
+            s.add(Category(game_id=gid, name=name, role_id=_role_id(data.get("role_id")), sort_order=top + 1))
         bus.info("config", f"Category {name} added.")
         flash(request, f"Added {name}.")
         return back("/categories")
@@ -1165,7 +1326,9 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         step = -1 if data.get("dir") == "up" else 1
         with db.session() as s:
-            cats = list(s.scalars(select(Category).order_by(Category.sort_order, Category.id)))
+            moved = s.get(Category, cat_id) or _404()
+            cats = list(s.scalars(select(Category).where(Category.game_id == moved.game_id)
+                                  .order_by(Category.sort_order, Category.id)))
             idx = next(i for i, c in enumerate(cats) if c.id == cat_id)
             j = idx + step
             if 0 <= j < len(cats):
@@ -1193,14 +1356,16 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def timers_page(request: Request):
         require(request)
         with db.session() as s:
-            active = list(s.scalars(select(UserTimer).where(UserTimer.status == "active").order_by(UserTimer.fire_at)))
-            recent = list(s.scalars(select(UserTimer).where(UserTimer.status != "active")
+            st = game_of(request, s)
+            mine = UserTimer.event_id.in_(select(Event.id).where(Event.game_id == st.id))
+            active = list(s.scalars(select(UserTimer).where(UserTimer.status == "active", mine)
+                                    .order_by(UserTimer.fire_at)))
+            recent = list(s.scalars(select(UserTimer).where(UserTimer.status != "active", mine)
                                     .order_by(UserTimer.id.desc()).limit(30)))
             for t in active + recent:
                 _ = t.event
-            bosses = timers.boss_events(s, enabled_only=False)
-            st = get_settings(s)
-            tz = st.default_tz
+            bosses = timers.boss_events(s, enabled_only=False, game_id=st.id)
+            tz = get_settings(s).default_tz
             ctx = dict(button_label=st.boss_button_label, custom_label=st.custom_button_label)
         return render(request, "timers.html", active=active, recent=recent, bosses=bosses, tz=tz, **ctx)
 
@@ -1210,12 +1375,12 @@ def create_app(cfg, bot=None) -> FastAPI:
         label = str(data.get("boss_button_label", "")).strip()[:80] or "{name} died"
         custom = str(data.get("custom_button_label", "")).strip()[:80] or "Custom time"
         with db.session() as s:
-            bosses = timers.boss_events(s, enabled_only=False)
+            st = game_of(request, s)
+            bosses = timers.boss_events(s, enabled_only=False, game_id=st.id)
             order = sorted(bosses, key=lambda e: (_int(data, f"order_{e.id}", e.sort_order, -1000, 1000), e.name))
             for i, e in enumerate(order):
                 e.sort_order = i
                 e.enabled = bool(data.get(f"show_{e.id}"))
-            st = get_settings(s)
             if may(request, "wording"):  # button wording is owner-only unless opened to admins
                 st.boss_button_label, st.custom_button_label = label, custom
             summary = ", ".join(e.name for e in order if e.enabled)
@@ -1238,10 +1403,10 @@ def create_app(cfg, bot=None) -> FastAPI:
 
     # -- maintenance ------------------------------------------------------------------
 
-    def _maint(s) -> Event | None:
+    def _maint(s, game_id: int) -> Event | None:
         return s.scalar(
             select(Event).join(Category).where(Category.name == "Maintenance", Event.overrides_event_id.is_(None),
-                                               Event.schedule_type == "weekly").limit(1)
+                                               Event.schedule_type == "weekly", Event.game_id == game_id).limit(1)
         )
 
     @app.get("/maintenance", response_class=HTMLResponse)
@@ -1249,7 +1414,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         require(request)
         t = int(time.time())
         with db.session() as s:
-            m = _maint(s)
+            m = _maint(s, game_of(request, s).id)
             settings = get_settings(s)
             if m is None:
                 return render(request, "maintenance.html", m=None)
@@ -1278,7 +1443,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             return back("/maintenance")
         duration = (eh * 60 + em - sh * 60 - sm) % 1440 or 1440
         with db.session() as s:
-            m = _maint(s) or _404()
+            m = _maint(s, game_of(request, s).id) or _404()
             m.schedule_params, m.duration_minutes = params, duration
         bus.info("config", f"Regular maintenance set to {params['days'][0].title()} {params['time']} UTC for {duration} min.")
         refresh()
@@ -1292,7 +1457,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         action = str(data.get("action", "move"))
         tz = str(data.get("tz") or "UTC")
         with db.session() as s:
-            m = _maint(s) or _404()
+            m = _maint(s, game_of(request, s).id) or _404()
             for old in s.scalars(select(Event).where(Event.overrides_event_id == m.id)):
                 if replaces and int(old.schedule_params.get("replaces", 0)) == replaces:
                     s.delete(old)
@@ -1314,7 +1479,8 @@ def create_app(cfg, bot=None) -> FastAPI:
                 params = {**p, "replaces": replaces}
                 duration = (end - p["_ts"]) // 60
                 desc = f"{'emergency window' if not replaces else 'override'} {fmt_ts(p['_ts'])} for {duration} min"
-            s.add(Event(name=m.name, category_id=m.category_id, schedule_type="one_off", schedule_params=params,
+            s.add(Event(game_id=m.game_id, name=m.name, category_id=m.category_id, schedule_type="one_off",
+                        schedule_params=params,
                         duration_minutes=duration, overrides_event_id=m.id, enabled=True, dashboard="hidden",
                         source="manual"))
         bus.info("config", f"Maintenance: {desc}.")
@@ -1340,18 +1506,21 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def settings_page(request: Request):
         require(request)
         with db.session() as s:
-            settings = get_settings(s)
+            settings, game = get_settings(s), game_of(request, s)
             counts = transfer.summary(s)
-        return render(request, "settings.html", st=settings, export_counts=counts)
+        return render(request, "settings.html", st=settings, g=game, export_counts=counts)
 
     @app.post("/settings")
     async def settings_save(request: Request):
         data = await form(request)
         try:
             with db.session() as s:
-                st = get_settings(s)
-                for key in ("timer_channel_id", "roles_channel_id", "log_channel_id", "party_channel_id"):
+                server, st = get_settings(s), game_of(request, s)  # st: this game's settings
+                for key in ("roles_channel_id", "log_channel_id"):
+                    setattr(server, key, _snowflake(data.get(key)))
+                for key in ("timer_channel_id", "party_channel_id"):
                     setattr(st, key, _snowflake(data.get(key)))
+                games.check_channels(s, st)
                 for key, lo, hi in (("user_timer_limit", 1, 100), ("report_offset_min", 0, 120),
                                     ("alert_retention_min", 30, 10080), ("dashboard_max_oneoffs", 1, 60),
                                     ("party_lifetime_min", 5, 720), ("party_warn_min", 1, 120),
@@ -1367,7 +1536,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                 tz = str(data.get("default_tz", "")).strip()
                 if tz not in available_timezones():
                     raise ValueError(f"Unknown time zone {tz!r}")
-                st.default_tz = tz
+                server.default_tz = tz
                 st.dashboard_divider = str(data.get("dashboard_divider", "")).strip()[:100]
                 st.dashboard_title = str(data.get("dashboard_title", "")).strip()[:100]
                 st.dashboard_top_label = str(data.get("dashboard_top_label", "")).strip()[:64]
@@ -1375,15 +1544,15 @@ def create_app(cfg, bot=None) -> FastAPI:
                 st.oneoff_label = str(data.get("oneoff_label", "")).strip()[:64]
                 st.dashboard_boss_note = str(data.get("dashboard_boss_note", "")).strip()[:300]
                 st.dashboard_footer = str(data.get("dashboard_footer", "")).strip()[:200]
-                st.link_preview_title = str(data.get("link_preview_title", "")).strip()[:100] or "Nyerk"
-                st.link_preview_description = str(data.get("link_preview_description", "")).strip()[:300]
+                server.link_preview_title = str(data.get("link_preview_title", "")).strip()[:100] or "Nyerk"
+                server.link_preview_description = str(data.get("link_preview_description", "")).strip()[:300]
                 st.dashboard_commands_label = str(data.get("dashboard_commands_label", "")).strip()[:200]
                 url = str(data.get("shugo_url", "")).strip() or st.shugo_url
                 if not shugo.allowed_url(url):
                     raise ValueError("The timer page must be an https://shugo.gg address")
                 st.shugo_url = url
                 st.shugo_region = str(data.get("shugo_region", "")).strip() or st.shugo_region
-        except ValueError as exc:
+        except (ValueError, games.GameError) as exc:
             flash(request, str(exc).replace("invalid literal for int() with base 10: 'x'", "Numbers are required"), "err")
             return back("/settings")
         bus.info("config", "Settings updated.")
@@ -1414,15 +1583,21 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def defaults_page(request: Request):
         require(request)
         with db.session() as s:
-            state, settings = get_state(s), get_settings(s)
-            ctx = dict(pending=state.pending_import, last=state.last_import_at, error=state.last_import_error,
-                       settings=settings)
+            game = game_of(request, s)
+            ctx = dict(pending=game.pending_import, last=game.last_import_at, error=game.last_import_error,
+                       settings=game)
         return render(request, "defaults.html", **ctx)
 
     @app.post("/defaults/check")
     async def defaults_check(request: Request):
         await form(request)
-        error = await run_import_check()
+        with db.session() as s:
+            game = game_of(request, s)
+            gid, aion = game.id, game.kind == "aion2"
+        if not aion:
+            flash(request, "shugo.gg only has AION 2 timers.", "err")
+            return back("/defaults")
+        error = await run_import_check(gid)
         flash(request, f"Check failed, last good values kept: {error}" if error else "Checked shugo.gg.",
               "err" if error else "ok")
         return back("/defaults")
@@ -1432,11 +1607,11 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         keys = set(data.getlist("change"))
         with db.session() as s:
-            state = get_state(s)
-            pending = state.pending_import or {}
-            applied = shugo.apply(s, pending, keys)
+            game = game_of(request, s)
+            pending = game.pending_import or {}
+            applied = shugo.apply(s, pending, keys, game.id)
             remaining = [c for c in pending.get("changes", []) if c["key"] not in keys]
-            state.pending_import = {**pending, "changes": remaining} if remaining else None
+            game.pending_import = {**pending, "changes": remaining} if remaining else None
         if applied:
             bus.info("defaults", f"Applied from shugo.gg: {', '.join(applied)}.")
             refresh()
@@ -1447,7 +1622,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def defaults_dismiss(request: Request):
         await form(request)
         with db.session() as s:
-            get_state(s).pending_import = None
+            game_of(request, s).pending_import = None
         flash(request, "Review dismissed.")
         return back("/defaults")
 
@@ -1484,7 +1659,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         try:
             parsed = json.loads(raw)
             with db.session() as s:
-                changes = transfer.apply_import(s, parsed)
+                changes = transfer.apply_import(s, parsed, game_id=game_of(request, s).id)
                 s.rollback()  # preview only
         except (json.JSONDecodeError, transfer.ImportError_) as exc:
             flash(request, f"Can't import: {exc}", "err")
@@ -1498,7 +1673,8 @@ def create_app(cfg, bot=None) -> FastAPI:
 
         try:
             with db.session() as s:
-                changes = transfer.apply_import(s, json.loads(str(data.get("raw", ""))))
+                changes = transfer.apply_import(s, json.loads(str(data.get("raw", ""))),
+                                                game_id=game_of(request, s).id)
         except (json.JSONDecodeError, transfer.ImportError_) as exc:
             flash(request, f"Can't import: {exc}", "err")
             return back("/settings")
@@ -1545,10 +1721,11 @@ def create_app(cfg, bot=None) -> FastAPI:
         require(request)
         t = int(time.time())
         with db.session() as s:
-            settings, state = get_settings(s), get_state(s)
-            parties = party.live_parties(s)
+            settings = game_of(request, s)
+            gid = settings.id
+            parties = party.live_parties(s, gid)
             interests = list(s.scalars(select(PfInterest).where(PfInterest.status == "active",
-                                                               PfInterest.expires_at > t)
+                                                               PfInterest.expires_at > t, PfInterest.game_id == gid)
                                        .order_by(PfInterest.expires_at)))
             for r in interests:
                 _ = r.pf_class, r.bracket
@@ -1557,10 +1734,10 @@ def create_app(cfg, bot=None) -> FastAPI:
                 paused = s.scalar(select(func.count()).select_from(RoleHolder).where(
                     RoleHolder.user_id == q.user_id, RoleHolder.suspended.is_(True))) or 0
                 quiet_rows.append((q, quiet.window_text(q), paused))
-            ctx = dict(st=settings, state=state, classes=party.classes(s), brackets=party.brackets(s),
+            ctx = dict(st=settings, state=settings, classes=party.classes(s, gid), brackets=party.brackets(s, gid),
                        quiet_rows=quiet_rows,
-                       windows=party.windows(s), contents=party.contents(s, False), parties=parties,
-                       interests=interests, content_names={c.id: c.name for c in party.contents(s, False)},
+                       windows=party.windows(s, gid), contents=party.contents(s, gid, False), parties=parties,
+                       interests=interests, content_names={c.id: c.name for c in party.contents(s, gid, False)},
                        TYPE_LABEL=party.TYPE_LABEL)
         return render(request, "party.html", **ctx)
 
@@ -1569,7 +1746,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         try:
             with db.session() as s:
-                st = get_settings(s)
+                st = game_of(request, s)
                 for key in ("tank_role_id", "support_role_id", "dps_role_id"):
                     setattr(st, key, _role_id(data.get(key)))
                 for key in ("party_default_tank", "party_default_support", "party_default_dps"):
@@ -1588,7 +1765,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         try:
             with db.session() as s:
-                rows = party.classes(s)
+                rows = party.classes(s, game_of(request, s).id)
                 updates = {}
                 for c in rows:
                     sub = {k: data.get(f"{k}_{c.id}", "") for k in ("name", "emoji", "role_id", "class_type",
@@ -1623,7 +1800,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         try:
             with db.session() as s:
-                rows = party.contents(s, False)
+                rows = party.contents(s, game_of(request, s).id, False)
                 owner = may(request, "roles")
                 updates = {c.id: _pf_values("content", {k: data.get(f"{k}_{c.id}", "") for k in (
                     "name", "emoji", "role_id", "min_gear_score", "sort_order")}
@@ -1655,7 +1832,8 @@ def create_app(cfg, bot=None) -> FastAPI:
             return back("/party#content")
         with db.session() as s:
             only = str(data.get("content_id", "")).strip()
-            ids = [c.id for c in party.contents(s, False) if not c.role_id and (not only or str(c.id) == only)]
+            ids = [c.id for c in party.contents(s, game_of(request, s).id, False)
+                   if not c.role_id and (not only or str(c.id) == only)]
         if not ids:
             flash(request, "Every dungeon already has a role.")
             return back("/party#content")
@@ -1678,7 +1856,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         try:
             values = _pf_values(kind, data)
             with db.session() as s:
-                s.add(model(**values))
+                s.add(model(game_id=game_of(request, s).id, **values))
         except ValueError as exc:
             flash(request, str(exc), "err")
             return back(f"/party#{kind}")
@@ -1735,7 +1913,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             flash(request, str(exc), "err")
             return back("/party#chat")
         with db.session() as s:
-            get_settings(s).party_chat_delete_min = minutes
+            game_of(request, s).party_chat_delete_min = minutes
         bus.info("config", f"Party channel chat: deleted after {minutes} minutes." if minutes
                  else "Party channel chat: kept.")
         flash(request, "Saved. Party status shows the new time within 30 seconds.")
@@ -1751,15 +1929,17 @@ def create_app(cfg, bot=None) -> FastAPI:
         if not bot or not bot.is_ready():
             flash(request, "Bot is not connected.", "err")
             return back("/party")
+        with db.session() as s:
+            gid = game_of(request, s).id
 
         async def _run():
             try:
-                await bot.pf.post_panels(which)
+                await bot.pf.post_panels(gid, which)
             except Exception as exc:
                 bus.error("party", f"Panel post failed: {exc!r}")
 
         asyncio.create_task(_run())
-        flash(request, "Posting panels. Check #aion-2-party-finder in a moment.")
+        flash(request, "Posting panels. Check the party channel in a moment.")
         return back("/party")
 
     @app.post("/party-parties/{pid}/close")
@@ -1838,6 +2018,17 @@ def _role_id(raw) -> int:
     return safety.check_role(_snowflake(raw))
 
 
+def _gears(s, uid: int) -> list[dict]:
+    """A member's gear score in each game that has gear score options."""
+    out = []
+    for g in games.all_games(s, enabled_only=True):
+        brackets = party.brackets(s, g.id)
+        if brackets:
+            gear = party.gear_of(s, uid, g.id)
+            out.append(dict(game_id=g.id, name=g.name, brackets=brackets, gear_id=gear.id if gear else 0))
+    return out
+
+
 def _int(data, key: str, default: int = 0, lo: int = 0, hi: int = 10**6) -> int:
     raw = str(data.get(key, "")).strip()
     if not raw:
@@ -1889,7 +2080,11 @@ def _apply_event_form(s, e: Event, data, owner: bool = True) -> list[str]:
         if data.get(f"unlock_{f}"):
             edited.discard(f)
 
-    cat_id = _int(data, "category_id", 0)
+    cat_id = _int(data, "category_id", 0, 0, 10**9)
+    if cat_id:
+        cat = s.get(Category, cat_id)
+        if cat is None or cat.game_id != e.game_id:
+            raise ValueError("Pick one of this game's categories")
     e.name = name[:100]
     e.category_id = cat_id or None
     e.location = str(data.get("location", "")).strip()[:100]

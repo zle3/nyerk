@@ -9,6 +9,7 @@ from nyerk.models import PfClass, PfContent, PfParty
 
 from .test_bot import FakeChannel
 from .test_party import T, reg, who
+from nyerk.games import first as G
 
 
 class StubBot:
@@ -20,10 +21,10 @@ class StubBot:
 
 
 def setup(s):
-    for i, c in enumerate(party.classes(s)):
+    for i, c in enumerate(party.classes(s, 1)):
         c.role_id = 1001 + i
-    get_settings(s).party_channel_id = 1
-    s.add(PfContent(name="Fire Temple", min_gear_score=1600))
+    G(s).party_channel_id = 1
+    s.add(PfContent(game_id=1, name="Fire Temple", min_gear_score=1600))
     s.flush()
     return s.scalar(select(PfContent)).id
 
@@ -35,8 +36,8 @@ def contents(ch):
 def test_listing_ping_fill_ready_reopen(s, monkeypatch):
     cid = setup(s)
     monkeypatch.setattr(party_bot, "now", lambda: T + 5)
-    b = {x.label: x.id for x in party.brackets(s)}
-    reg(s, who(s, 11, "Cleric"), b["1600-1899"], party.windows(s)[0].id, [cid], T)
+    b = {x.label: x.id for x in party.brackets(s, 1)}
+    reg(s, who(s, 11, "Cleric"), b["1600-1899"], party.windows(s, 1)[0].id, [cid], T)
     p = party.create(s, who(s, 1, "Templar"), cid, 5, "default", "", "", T)
     pid = p.id
     s.commit()
@@ -92,13 +93,13 @@ def test_post_panels_in_order(s, monkeypatch):
     setup(s)
     s.commit()
     ch = FakeChannel()
-    asyncio.run(party_bot.PartyFinder(StubBot(ch)).post_panels("all"))
+    asyncio.run(party_bot.PartyFinder(StubBot(ch)).post_panels(1, "all"))
     texts = contents(ch)
     assert [t.splitlines()[0] for t in texts] == [
         "## AION 2 Classes", "## Gear score", "## Looking for a group?", "## Start a party", "## Party status"]
     class_ids = [c.custom_id for c in ch.sent[0][0].view.children]
-    assert len(class_ids) == 10 and class_ids[-2:] == ["nyerk:pf:class:mine", "nyerk:pf:class:clear"]
-    st = get_state(s)
+    assert len(class_ids) == 10 and class_ids[-2:] == ["nyerk:pf:class:mine", "nyerk:pf:class:clear-1"]
+    st = G(s)
     s.refresh(st)
     assert st.class_panel_message_id == ch.sent[0][0].id and st.party_status_message_id == ch.sent[4][0].id
 
@@ -167,21 +168,21 @@ def test_chat_cleanup_deletes_old_member_messages_only(s, monkeypatch):
     bot = StubBot(ch)
     bot.user = type("U", (), {"id": 99})()
     monkeypatch.setattr(party_bot, "now", lambda: T)
-    asyncio.run(party_bot.PartyFinder(bot).clean_chat())
+    asyncio.run(party_bot.PartyFinder(bot).clean_chat(1))
     assert ch.bulk == [5000 + 20 * 60] and ch.single == [7000 + 20 * 86400]
     assert ch.before.timestamp() == T - 15 * 60
 
 
 def test_chat_cleanup_off_and_status_note(s, monkeypatch):
     setup(s)
-    assert "deleted after 15 minutes" in party.status_text([], get_settings(s).party_chat_delete_min)
-    get_settings(s).party_chat_delete_min = 0
+    assert "deleted after 15 minutes" in party.status_text([], G(s).party_chat_delete_min)
+    G(s).party_chat_delete_min = 0
     s.commit()
     assert "Chat below" not in party.status_text([], 0)
     ch = ChatChannel([])
     bot = StubBot(ch)
     bot.user = type("U", (), {"id": 99})()
-    asyncio.run(party_bot.PartyFinder(bot).clean_chat())
+    asyncio.run(party_bot.PartyFinder(bot).clean_chat(1))
     assert ch.before is None
 
 
@@ -251,7 +252,7 @@ class OwnMessage:
 
 def test_restart_sweeps_unrecorded_party_messages(s):
     setup(s)
-    get_state(s).party_status_message_id = 50
+    G(s).party_status_message_id = 50
     s.commit()
     ch = FakeChannel()
     msgs = [OwnMessage(ch, 50, 99), OwnMessage(ch, 51, 99), OwnMessage(ch, 52, 7)]
@@ -264,7 +265,7 @@ def test_restart_sweeps_unrecorded_party_messages(s):
     ch.history = history
     bot = StubBot(ch)
     bot.user = type("U", (), {"id": 99})()
-    asyncio.run(party_bot.PartyFinder(bot)._sweep_orphans(ch))
+    asyncio.run(party_bot.PartyFinder(bot)._sweep_orphans(ch, 1))
     assert ch.deleted == [51]                    # ours and unknown; the panel and the member's message stay
 
 

@@ -20,7 +20,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from .. import party
-from ..models import Category, Event, MemberProfile, RoleHolder
+from ..models import Category, Event, Game, MemberProfile, RoleHolder
 
 MAX_QUERY = 80      # characters
 MAX_WORDS = 8
@@ -60,6 +60,7 @@ NAV = [
     ("Stats", "/stats", "statistics activity charts"), ("Logs", "/logs", "activity"),
     ("Settings", "/settings", "channels"), ("Access and security", "/access", "admins owner permissions"),
     ("Change history", "/history", "undo restore"), ("My page", "/me", "my roles timers"),
+    ("Games", "/games", "add switch delete game aion other"),
 ]
 
 # template -> (page title, URL). Pages with one form per row (events) link
@@ -74,6 +75,7 @@ PAGES = {
     "defaults.html": ("Defaults", "/defaults"),
     "events.html": ("Events", "/events"),
     "event_edit.html": ("Events › any event", "/events"),
+    "games.html": ("Games", "/games"),
 }
 
 _JINJA = re.compile(r"\{%.*?%\}|\{\{.*?\}\}|\{#.*?#\}", re.S)
@@ -141,14 +143,26 @@ def _data_entries(s) -> list[Entry]:
     if time.monotonic() - _cache[0] < DATA_TTL:
         return _cache[1]
     out = []
-    for e in s.scalars(select(Event).order_by(Event.name)):
-        out.append(Entry("Event", f"/events/{e.id}", e.name, "", f"{e.name} event".lower()))
+    names = {g.id: g.name for g in s.scalars(select(Game))}
+    many = len(names) > 1
+
+    def page(kind, game_id):  # "Event" or "AION 2 event" when there are several games
+        return f"{names.get(game_id, '?')} {kind.lower()}" if many else kind
+
+    for g in s.scalars(select(Game).order_by(Game.sort_order, Game.id)):
+        out.append(Entry("Game", f"/settings?game={g.id}#game", g.name, "", f"{g.name} game".lower()))
+    for e in s.scalars(select(Event).where(Event.overrides_event_id.is_(None)).order_by(Event.name)):
+        out.append(Entry(page("Event", e.game_id), f"/events/{e.id}", e.name, "",
+                         f"{e.name} event {names.get(e.game_id, '')}".lower()))
     for c in s.scalars(select(Category).order_by(Category.name)):
-        out.append(Entry("Ping role", "/categories", c.name, "", f"{c.name} ping role category".lower()))
-    for c in party.contents(s, False):
-        out.append(Entry("Dungeon", "/party#content", c.name, "", f"{c.name} dungeon content".lower()))
-    for c in party.classes(s):
-        out.append(Entry("Class", "/party#classes", c.name, "", f"{c.name} class".lower()))
+        out.append(Entry(page("Ping role", c.game_id), f"/categories?game={c.game_id}", c.name, "",
+                         f"{c.name} ping role category {names.get(c.game_id, '')}".lower()))
+    for c in party.contents(s, None, False):
+        out.append(Entry(page("Dungeon", c.game_id), f"/party?game={c.game_id}#content", c.name, "",
+                         f"{c.name} dungeon content {names.get(c.game_id, '')}".lower()))
+    for c in party.classes(s, None):
+        out.append(Entry(page("Class", c.game_id), f"/party?game={c.game_id}#classes", c.name, "",
+                         f"{c.name} class {names.get(c.game_id, '')}".lower()))
     people: dict[int, str] = {}
     for model in (MemberProfile, RoleHolder):
         for uid, name in s.execute(select(model.user_id, model.user_name).limit(MAX_MEMBERS)):

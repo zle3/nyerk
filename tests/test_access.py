@@ -15,6 +15,7 @@ from nyerk.seed import seed, seed_party_finder, seed_reaction_groups
 from nyerk.web import app as webapp
 from nyerk.web import auth
 from nyerk.web.app import create_app, hash_password
+from nyerk.games import first as G
 
 OWNER, ADMIN, MEMBER, OUTSIDER = 11, 22, 33, 44
 ADMIN_ROLE = 555
@@ -30,7 +31,7 @@ class Bot:
     def status(self):
         return {"connected": True, "user": "Nyerk", "guild": "g", "latency_ms": 1, "last_tick": 0}
 
-    def request_refresh(self, repost=False):
+    def request_refresh(self, repost=False, game_id=None):
         pass
 
     async def fetch_member(self, uid):
@@ -302,10 +303,10 @@ def test_admin_sets_party_chat_delete_time(app, monkeypatch):
     assert 'name="party_chat_delete_min"' in admin.get("/party").text
     admin.post("/party-chat", data={"csrf": csrf(admin, "/party"), "party_chat_delete_min": "30"})
     with db.session() as s:
-        assert get_settings(s).party_chat_delete_min == 30
+        assert G(s).party_chat_delete_min == 30
     admin.post("/party-chat", data={"csrf": csrf(admin, "/party"), "party_chat_delete_min": "5000"})
     with db.session() as s:
-        assert get_settings(s).party_chat_delete_min == 30  # out of range: refused
+        assert G(s).party_chat_delete_min == 30  # out of range: refused
 
 
 def test_owner_opens_areas_to_admins(app, monkeypatch):

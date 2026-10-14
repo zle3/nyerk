@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from nyerk.games import first as G
 from nyerk import db, members, party, quiet, tracking
 from nyerk.config import Config
 from nyerk.db import get_settings
@@ -17,12 +18,12 @@ SHUGO, FIRE = 800, 900
 
 
 def setup_roles(s):
-    for i, c in enumerate(party.classes(s)):
+    for i, c in enumerate(party.classes(s, 1)):
         c.role_id = 1001 + i  # Gladiator 1001 … Ranger 1004 … Cleric 1007
-    st = get_settings(s)
+    st = G(s)
     st.tank_role_id, st.support_role_id, st.dps_role_id = 2001, SUPPORT, DPS
     s.scalar(select(Category).where(Category.name == "Shugo")).role_id = SHUGO
-    s.add(PfContent(name="Fire Temple", role_id=FIRE))
+    s.add(PfContent(game_id=1, name="Fire Temple", role_id=FIRE))
     s.flush()
 
 
@@ -68,7 +69,7 @@ class FakeBot:
     def status(self):
         return {"connected": True, "user": "Nyerk", "guild": "g", "latency_ms": 1, "last_tick": 0}
 
-    def request_refresh(self, repost=False):
+    def request_refresh(self, repost=False, game_id=None):
         pass
 
     async def fetch_member(self, uid):
@@ -147,15 +148,15 @@ def test_forget_member_erases_their_data(s):
     from nyerk.models import LogEntry, MemberProfile, PfParty, PfPartyMember
     from .test_party import T, who
     m = members
-    s.add(PfContent(name="Fire Temple", min_gear_score=0))
+    s.add(PfContent(game_id=1, name="Fire Temple", min_gear_score=0))
     s.flush()
     cid = s.scalar(select(PfContent)).id
-    for i, c in enumerate(party.classes(s)):
+    for i, c in enumerate(party.classes(s, 1)):
         c.role_id = 1001 + i
     s.flush()
     tracking.add_ping(5, "Raelin", 777)
     quiet.set_hours(s, 5, "Raelin", 23, 7, "America/New_York", set())
-    party.set_gear(s, 5, "Raelin", party.brackets(s)[0].id, T)
+    party.set_gear(s, 5, "Raelin", party.brackets(s, 1)[0].id, T)
     old = party.create(s, who(s, 5, "Templar"), cid, 5, "none", "", "", T - 9000)
     party.end(old, "done", T - 5000)
     live = party.create(s, who(s, 6, "Cleric"), cid, 5, "none", "", "", T)

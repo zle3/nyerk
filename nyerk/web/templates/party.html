@@ -11,7 +11,7 @@
 
 <p class="section-label">Panels</p>
 <div class="card">
-  <p class="small muted">Class roles stay here as buttons. Dungeon ping roles are offered as reactions in the roles channel; pick their message and emoji on the Roles page. Panels post in this order: class selector, gear score, interest list, create party, party status. Posting all puts them at the bottom of the channel, so do it before parties open. Delete the old "AION 2 Classes" message by hand afterwards.</p>
+  <p class="small muted">Class roles stay here as buttons. Dungeon ping roles are offered as reactions in the roles channel; pick their message and emoji on the Roles page. Panels post in this order: class selector, gear score, interest list, create party, party status. Posting all puts them at the bottom of the channel, so do it before parties open. Delete any older class panel message by hand afterwards.</p>
   <div class="actions">
     {% for which, label in (('all', 'Post all panels'), ('class', 'Class selector'), ('gear', 'Gear score'), ('interest', 'Interest list'), ('create', 'Create party'), ('status', 'Party status')) %}
     <form method="post" action="/party-panels" class="inline-form" {% if which == 'all' %}data-confirm="Delete and repost all four panels?"{% endif %}>
