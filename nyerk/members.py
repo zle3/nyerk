@@ -13,7 +13,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import party, quiet
@@ -40,6 +40,22 @@ def _game_ids(s: Session, guild_id: int):
     return select(Game.id).where(Game.guild_id == guild_id)
 
 
+def _pf_names(s: Session, guild_id: int) -> dict[int, str]:
+    """Party finder game -> the name of the game showing it in this server
+    (a linked game's party finder is another server's game)."""
+    return {party.pf_id(g): g.name for g in s.scalars(select(Game).where(Game.guild_id == guild_id))}
+
+
+def _here(model, in_server):
+    """Registrations, parties and seats made from this server's games (in a
+    linked party finder, other servers' members share the same rows)."""
+    return func.coalesce(model.origin_game_id, model.game_id).in_(in_server)
+
+
+def _seat_here(in_server):
+    return PfPartyMember.origin_game_id.in_(in_server)
+
+
 def known(s: Session, guild_id: int, query: str = "") -> list[Summary]:
     people: dict[int, Summary] = {}
 
@@ -62,21 +78,24 @@ def known(s: Session, guild_id: int, query: str = "") -> list[Summary]:
         elif h.kind == "ping":
             m.pings += 1
     names = {p.user_id: p.user_name for p in s.scalars(select(MemberProfile).where(MemberProfile.guild_id == guild_id))}
-    for g in s.scalars(select(MemberGear).where(MemberGear.bracket_id.is_not(None), MemberGear.game_id.in_(in_server))
-                       .order_by(MemberGear.game_id)):
+    pf_names = _pf_names(s, guild_id)
+    profiles = select(MemberProfile.user_id).where(MemberProfile.guild_id == guild_id)
+    for g in s.scalars(select(MemberGear).where(MemberGear.bracket_id.is_not(None),
+                                                MemberGear.game_id.in_(list(pf_names)),
+                                                MemberGear.user_id.in_(profiles)).order_by(MemberGear.game_id)):
         if g.bracket:
             m = touch(g.user_id, names.get(g.user_id, ""))
-            label = f"{games.get(g.game_id, '?')}: {g.bracket.label}" if many else g.bracket.label
+            label = f"{pf_names.get(g.game_id, '?')}: {g.bracket.label}" if many else g.bracket.label
             m.gear = f"{m.gear}, {label}" if m.gear else label
     for q in s.scalars(select(QuietHours).where(QuietHours.enabled.is_(True), QuietHours.guild_id == guild_id)):
         touch(q.user_id, q.user_name).quiet = "quiet now" if q.state == "quiet" else "on"
     timers_here = select(UserTimer).join(Event).where(Event.game_id.in_(in_server))
     for t in s.scalars(timers_here.where(UserTimer.status == "active")):
         touch(t.user_id, t.user_name).timers += 1
-    for r in s.scalars(select(PfInterest).where(PfInterest.status == "active", PfInterest.game_id.in_(in_server))):
+    for r in s.scalars(select(PfInterest).where(PfInterest.status == "active", _here(PfInterest, in_server))):
         touch(r.user_id, r.user_name).registered = True
     for m, p in s.execute(select(PfPartyMember, PfParty).join(PfParty).where(
-            PfParty.status.in_(party.LIVE), PfParty.game_id.in_(in_server))):
+            PfParty.status.in_(party.LIVE), _seat_here(in_server))):
         row = touch(m.user_id, m.user_name)
         row.in_party = f"{row.in_party}, {party.party_title(p)}" if row.in_party else party.party_title(p)
     # Names seen anywhere else (finished timers) fill gaps.
@@ -192,12 +211,12 @@ def detail(s: Session, guild_id: int, user_id: int) -> dict:
         .order_by(UserTimer.fire_at)))
     for t in timers:
         _ = t.event
-    games = {g.id: g.name for g in s.scalars(select(Game).where(Game.guild_id == guild_id))}
+    games = _pf_names(s, guild_id)
     many = len(games) > 1
     titles = {c.id: party.party_title_for(c) for c in party.server_contents(s, guild_id, False)}
     registrations = []
     for reg in s.scalars(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active",
-                                                  PfInterest.game_id.in_(in_server)).order_by(PfInterest.game_id)):
+                                                  _here(PfInterest, in_server)).order_by(PfInterest.game_id)):
         text = f"{', '.join(titles.get(i, '?') for i in reg.content_ids or [])} as " \
                f"{reg.pf_class.name if reg.pf_class else '?'}"
         registrations.append((reg, f"{games.get(reg.game_id, '?')}: {text}" if many else text))
@@ -238,16 +257,16 @@ def forget(s: Session, guild_id: int, user_id: int, now: int) -> Forgotten:
         left.append(party.party_title(p))
         party.remove_member(s, p, user_id, now)
     out.left_party = ", ".join(left)
-    parties_here = select(PfParty.id).where(PfParty.game_id.in_(in_server))
+    pf_ids = list(_pf_names(s, guild_id))
     for label, query in (
             ("roles", select(RoleHolder).where(RoleHolder.guild_id == guild_id, RoleHolder.user_id == user_id)),
-            ("gear score", select(MemberGear).where(MemberGear.game_id.in_(in_server), MemberGear.user_id == user_id)),
+            ("gear score", select(MemberGear).where(MemberGear.game_id.in_(pf_ids), MemberGear.user_id == user_id)),
             ("profile", select(MemberProfile).where(MemberProfile.guild_id == guild_id,
                                                     MemberProfile.user_id == user_id)),
             ("quiet hours", select(QuietHours).where(QuietHours.guild_id == guild_id, QuietHours.user_id == user_id)),
-            ("registrations", select(PfInterest).where(PfInterest.game_id.in_(in_server),
+            ("registrations", select(PfInterest).where(_here(PfInterest, in_server),
                                                        PfInterest.user_id == user_id)),
-            ("party seats", select(PfPartyMember).where(PfPartyMember.party_id.in_(parties_here),
+            ("party seats", select(PfPartyMember).where(_seat_here(in_server),
                                                         PfPartyMember.user_id == user_id))):
         rows = list(s.scalars(query))
         for r in rows:
@@ -260,7 +279,7 @@ def forget(s: Session, guild_id: int, user_id: int, now: int) -> Forgotten:
         t.user_id, t.user_name = 0, FORMER
     if timers:
         out.removed["boss timers (kept, name removed)"] = len(timers)
-    led = list(s.scalars(select(PfParty).where(PfParty.leader_id == user_id, PfParty.game_id.in_(in_server))))
+    led = list(s.scalars(select(PfParty).where(PfParty.leader_id == user_id, _here(PfParty, in_server))))
     for p in led:
         p.leader_id, p.leader_name = 0, FORMER
     if led:

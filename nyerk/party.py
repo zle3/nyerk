@@ -10,12 +10,13 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from .engine import escape_md, ts
 from .models import (
-    Game, MemberGear, MemberProfile, PfBracket, PfClass, PfContent, PfInterest, PfParty, PfPartyMember, PfWindow,
+    Game, LinkedRole, MemberGear, MemberProfile, PfBracket, PfClass, PfContent, PfInterest, PfParty,
+    PfPartyMember, PfWindow,
 )
 
 TYPES = ("tank", "support", "dps")
@@ -33,6 +34,9 @@ class Who:
     user_id: int
     user_name: str
     role_ids: set[int]
+    # The game (so the server) the click came from; its roles are the ones
+    # the member holds. 0 = the party finder's own game.
+    game_id: int = 0
 
 
 def digest(text: str) -> str:
@@ -50,25 +54,73 @@ def game(s: Session, game_id: int) -> Game:
     return g
 
 
+def pf_id(g: Game) -> int:
+    """The game whose party finder a game shows: its own, or the home's when linked."""
+    return g.link_home_id or g.id
+
+
+class Seen:
+    """A shared class or dungeon as a linked server sees it: the home's row,
+    with this server's role and this game's id."""
+
+    def __init__(self, row, role_id: int, game_id: int) -> None:
+        self._row, self.role_id, self.game_id = row, role_id, game_id
+
+    def __getattr__(self, name):
+        return getattr(self._row, name)
+
+    def __eq__(self, other):
+        return isinstance(other, (Seen, type(self._row))) and other.id == self.id
+
+    def __hash__(self):
+        return hash((type(self._row), self.id))
+
+
+def _linked_roles(s: Session, game_id: int, kind: str) -> dict[int, int]:
+    return {r.ref_id: r.role_id for r in s.scalars(select(LinkedRole).where(LinkedRole.game_id == game_id,
+                                                                          LinkedRole.kind == kind))}
+
+
+def classes_for(s: Session, g: Game | int) -> list[PfClass]:
+    """The classes a game's server picks from: its own, or the home's with
+    this server's roles when it's linked."""
+    g = g if isinstance(g, Game) else game(s, g)
+    rows = classes(s, pf_id(g))
+    if not g.link_home_id:
+        return rows
+    roles = _linked_roles(s, g.id, "class")
+    return [Seen(c, roles.get(c.id, 0), g.id) for c in rows]
+
+
+def contents_for(s: Session, g: Game | int, active_only: bool = True) -> list[PfContent]:
+    """A game's dungeons as its server sees them (see classes_for)."""
+    g = g if isinstance(g, Game) else game(s, g)
+    rows = contents(s, pf_id(g), active_only)
+    if not g.link_home_id:
+        return rows
+    roles = _linked_roles(s, g.id, "content")
+    return [Seen(c, roles.get(c.id, 0), g.id) for c in rows]
+
+
 def classes(s: Session, game_id: int | None) -> list[PfClass]:
     """A game's classes; None = every game's (for role bookkeeping)."""
     q = select(PfClass).order_by(PfClass.sort_order, PfClass.id)
     return list(s.scalars(q if game_id is None else q.where(PfClass.game_id == game_id)))
 
 
+def _server_games(s: Session, guild_id: int) -> list[Game]:
+    return list(s.scalars(select(Game).where(Game.guild_id == guild_id).order_by(Game.sort_order, Game.id)))
+
+
 def server_classes(s: Session, guild_id: int) -> list[PfClass]:
-    """Every game's classes in one Discord server."""
-    return list(s.scalars(select(PfClass).join(Game, PfClass.game_id == Game.id).where(Game.guild_id == guild_id)
-                          .order_by(Game.sort_order, PfClass.sort_order, PfClass.id)))
+    """Every game's classes in one Discord server, with this server's roles
+    (a linked game's shared classes carry the roles mapped here)."""
+    return [c for g in _server_games(s, guild_id) for c in classes_for(s, g)]
 
 
 def server_contents(s: Session, guild_id: int, active_only: bool = True) -> list[PfContent]:
-    """Every game's dungeons in one Discord server."""
-    q = select(PfContent).join(Game, PfContent.game_id == Game.id).where(Game.guild_id == guild_id) \
-        .order_by(Game.sort_order, PfContent.sort_order, PfContent.name)
-    if active_only:
-        q = q.where(PfContent.active.is_(True))
-    return list(s.scalars(q))
+    """Every game's dungeons in one Discord server (see server_classes)."""
+    return [c for g in _server_games(s, guild_id) for c in contents_for(s, g, active_only)]
 
 
 def brackets(s: Session, game_id: int) -> list[PfBracket]:
@@ -92,8 +144,9 @@ def contents(s: Session, game_id: int | None, active_only: bool = True) -> list[
 
 def member_classes(s: Session, game_id: int, role_ids: set[int]) -> list[PfClass]:
     """A member's classes in a game come from their roles on every click;
-    they can hold several."""
-    return [c for c in classes(s, game_id) if c.role_id and c.role_id in role_ids]
+    they can hold several. game_id is the game in the member's server: a
+    linked game's classes are the home's, held through this server's roles."""
+    return [c for c in classes_for(s, game_id) if c.role_id and c.role_id in role_ids]
 
 
 def member_class(s: Session, game_id: int, role_ids: set[int]) -> PfClass | None:
@@ -102,7 +155,7 @@ def member_class(s: Session, game_id: int, role_ids: set[int]) -> PfClass | None
 
 
 def require_classes(s: Session, game_id: int, who: Who) -> list[PfClass]:
-    held = member_classes(s, game_id, who.role_ids)
+    held = member_classes(s, who.game_id or game_id, who.role_ids)
     if not held:
         raise PartyError("Pick at least one class on the class panel first.")
     return held
@@ -135,9 +188,12 @@ def live_party_for(s: Session, user_id: int, game_id: int | None) -> PfParty | N
 
 
 def live_parties_for(s: Session, user_id: int, guild_id: int) -> list[PfParty]:
-    """The member's open or full parties in every game of one server."""
-    return list(s.scalars(select(PfParty).join(PfPartyMember).join(Game, PfParty.game_id == Game.id).where(
-        PfPartyMember.user_id == user_id, PfParty.status.in_(LIVE), Game.guild_id == guild_id).order_by(PfParty.id)))
+    """The member's open or full parties, joined from one server (in a
+    linked party finder, the party may be listed in another server too)."""
+    here = select(Game.id).where(Game.guild_id == guild_id)
+    return list(s.scalars(select(PfParty).join(PfPartyMember).where(
+        PfPartyMember.user_id == user_id, PfParty.status.in_(LIVE),
+        func.coalesce(PfPartyMember.origin_game_id, PfParty.game_id).in_(here)).order_by(PfParty.id)))
 
 
 def active_interest(s: Session, user_id: int, game_id: int | None) -> PfInterest | None:
@@ -164,26 +220,31 @@ def class_change(s: Session, who: Who, class_id: int | None,
                  game_id: int | None = None) -> tuple[set[int], set[int], str, list[PfClass]]:
     """Toggle one class (or clear all of a game's with class_id None). Members
     can hold several classes; each type role stays while any held class in
-    that game has that type. Returns roles to add, roles to remove, the
-    private reply, and the game's classes held afterwards."""
+    that game has that type. game_id is the game in the member's server
+    (needed for a linked game, whose classes are the home's). Returns roles
+    to add, roles to remove, the private reply, and the game's classes held
+    afterwards."""
     c = s.get(PfClass, class_id) if class_id is not None else None
     if class_id is not None and c is None:
         raise PartyError("That class no longer exists.")
-    g = game(s, c.game_id if c else game_id)
-    all_classes = [x for x in classes(s, g.id) if x.role_id]
+    g = game(s, game_id if game_id is not None else c.game_id)
+    if c is not None and c.game_id != pf_id(g):
+        raise PartyError("That class isn't part of this game.")
+    all_classes = [x for x in classes_for(s, g) if x.role_id]
     type_roles = type_role_ids(g)
     all_type = {r for r in type_roles.values() if r}
     held = [x for x in all_classes if x.role_id in who.role_ids]
     if c is None:
         owned = ({x.role_id for x in all_classes} | all_type) & who.role_ids
         return set(), owned, f"All your {g.name} classes have been cleared.", []
-    if not c.role_id:
+    mine = next((x for x in classes_for(s, g) if x.id == c.id), c)
+    if not mine.role_id:
         raise PartyError(f"{c.name} has no role set up yet. Ask an admin.")
-    if c in held:
-        held.remove(c)
+    if any(x.id == c.id for x in held):
+        held = [x for x in held if x.id != c.id]
         verb = f"Removed {c.name}."
     else:
-        held.append(c)
+        held.append(mine)
         verb = f"Added {c.name}."
     want_types = {type_roles.get(x.class_type, 0) for x in held} - {0}
     want = {x.role_id for x in held} | want_types
@@ -206,16 +267,18 @@ def gear_of(s: Session, user_id: int, game_id: int) -> PfBracket | None:
 
 
 def set_gear(s: Session, user_id: int, user_name: str, bracket_id: int | None, now: int,
-             game_id: int | None = None) -> PfBracket | None:
-    """One gear score per member per game; picking another replaces it.
-    bracket_id None clears it in game_id."""
+             game_id: int | None = None, guild_id: int | None = None) -> PfBracket | None:
+    """One gear score per member per party finder; picking another replaces
+    it. bracket_id None clears it in game_id (the party finder's game).
+    guild_id is the member's server (a linked game's members are in another
+    server than the brackets' game)."""
     bracket = s.get(PfBracket, bracket_id) if bracket_id else None
     if bracket_id and bracket is None:
         raise PartyError("That gear score option no longer exists.")
     gid = bracket.game_id if bracket else game_id
     if gid is None:
         raise PartyError("Which game's gear score?")
-    guild_id = game(s, gid).guild_id
+    guild_id = game(s, gid).guild_id if guild_id is None else guild_id
     p = s.scalar(select(MemberProfile).where(MemberProfile.guild_id == guild_id, MemberProfile.user_id == user_id))
     if p is None:
         p = MemberProfile(guild_id=guild_id, user_id=user_id)
@@ -264,7 +327,7 @@ def register(s: Session, who: Who, window_id: int, content_ids: list[int], now: 
     if old:
         old.status = "cancelled"  # registering again replaces, never stacks
     row = PfInterest(
-        game_id=gid, user_id=who.user_id, user_name=who.user_name, class_id=c.id, class_type=c.class_type,
+        game_id=gid, origin_game_id=who.game_id or gid, user_id=who.user_id, user_name=who.user_name, class_id=c.id, class_type=c.class_type,
         bracket_id=bracket.id if bracket else None, content_ids=[x.id for x in chosen], created_at=now,
         expires_at=now + window.minutes * 60, last_pinged_at=old.last_pinged_at if old else 0,
     )
@@ -338,7 +401,8 @@ def _member(s: Session, party: PfParty, who: Who, c: PfClass, slot: str, now: in
     if reg:
         reg.status = "joined"  # joining ends the registration
     m = PfPartyMember(user_id=who.user_id, user_name=who.user_name, class_id=c.id, class_name=c.name,
-                      class_type=c.class_type, slot_type=slot, bracket_label=bracket, joined_at=now)
+                      class_type=c.class_type, slot_type=slot, bracket_label=bracket, joined_at=now,
+                      origin_game_id=who.game_id or party.game_id)
     party.members.append(m)
     return m
 
@@ -354,7 +418,7 @@ def create(s: Session, who: Who, content_id: int, size: int, requirement: str, c
         raise PartyError("You are already in a party. Leave it before starting another.")
     makeup = parse_makeup(settings, size, requirement, custom)
     party = PfParty(
-        game_id=settings.id, content_id=content.id, leader_id=who.user_id, leader_name=who.user_name, size=size,
+        game_id=settings.id, origin_game_id=who.game_id or settings.id, content_id=content.id, leader_id=who.user_id, leader_name=who.user_name, size=size,
         requirement=requirement, makeup=makeup, description=(description or "").strip()[:100],
         status="open", created_at=now, expires_at=now + settings.party_lifetime_min * 60,
         ping_pending=True, members=[],
@@ -395,7 +459,8 @@ def mark_full(party: PfParty, now: int) -> None:
     party.filled_at = now
     party.remaining_s = max(60, party.expires_at - now)
     party.ping_pending = False
-    party.ready_pinged = False
+    for post in party.posts:
+        post.ready_pinged = False
 
 
 def reopen(party: PfParty, now: int) -> None:
@@ -404,8 +469,8 @@ def reopen(party: PfParty, now: int) -> None:
     party.status = "open"
     party.expires_at = now + max(60, party.remaining_s)
     party.filled_at = None
-    party.listing_message_id = 0  # reconciler posts a fresh listing below everything
-    party.listing_hash = ""
+    for post in party.posts:  # the reconciler posts a fresh listing below everything
+        post.listing_message_id, post.listing_hash = 0, ""
     party.warned_at = None
 
 
@@ -461,9 +526,10 @@ def extend(s: Session, party: PfParty, now: int) -> None:
     party.warned_at = None  # restart the warning
 
 
-def ping_targets(s: Session, party: PfParty, now: int) -> list[PfInterest]:
+def ping_targets(s: Session, party: PfParty, now: int, origin: int | None = None) -> list[PfInterest]:
     """Registrants for this content with an open slot for their type, whose
-    bracket reaches the minimum, outside the ping cooldown, not in a party."""
+    bracket reaches the minimum, outside the ping cooldown, not in a party.
+    origin: only those who registered from that game (one server's channel)."""
     settings = game(s, party.game_id)
     gap = settings.party_ping_gap_min * 60
     minimum = party.content.min_gear_score if party.content else 0
@@ -472,6 +538,8 @@ def ping_targets(s: Session, party: PfParty, now: int) -> list[PfInterest]:
                                               PfInterest.game_id == party.game_id))
     for r in rows:
         if party.content_id not in (r.content_ids or []) or r.user_id == party.leader_id:
+            continue
+        if origin is not None and (r.origin_game_id or r.game_id) != origin:
             continue
         gear = gear_of(s, r.user_id, party.game_id) or r.bracket
         if gear and gear.max_score < minimum:
@@ -560,12 +628,14 @@ def party_title(p: PfParty) -> str:
     return f"{p.content.emoji} {name}".strip() if p.content and p.content.emoji else name
 
 
-def _who(m: PfPartyMember) -> str:
+def _who(m: PfPartyMember, tags: dict[int, str] | None = None) -> str:
+    """tags: server names by game, in a linked party finder (see linking.tags)."""
     bits = [m.class_name] + ([m.bracket_label] if m.bracket_label else [])
-    return f"{escape_md(m.user_name)} ({', '.join(bits)})"
+    tag = (tags or {}).get(m.origin_game_id or 0)
+    return f"{escape_md(m.user_name)}{f' [{escape_md(tag)}]' if tag else ''} ({', '.join(bits)})"
 
 
-def listing_text(p: PfParty) -> str:
+def listing_text(p: PfParty, tags: dict[int, str] | None = None) -> str:
     minimum = p.content.min_gear_score if p.content else 0
     head = f"**[Party] {party_title(p)}** | {p.size} players"
     if minimum:
@@ -582,7 +652,7 @@ def listing_text(p: PfParty) -> str:
         if not cap:
             continue
         who = by_slot.get(slot, [])
-        names = ", ".join(_who(m) for m in who) or "open"
+        names = ", ".join(_who(m, tags) for m in who) or "open"
         label = "Players" if p.requirement == "none" else TYPE_LABEL[slot]
         lines.append(f"{label} {len(who)}/{cap}: {names}")
     lines.append(f"Closes {ts(p.expires_at, 'R')}")
@@ -603,8 +673,9 @@ def warning_text(p: PfParty, settings: Game) -> str:
     return f"<@{p.leader_id}> your **{party_title(p)}** party closes {ts(p.expires_at, 'R')}. {ext}"
 
 
-def ready_text(p: PfParty) -> str:
-    mentions = " ".join(f"<@{m.user_id}>" for m in p.members)
+def ready_text(p: PfParty, user_ids: list[int] | None = None) -> str:
+    """user_ids: who to mention (in a linked party finder, this server's members)."""
+    mentions = " ".join(f"<@{u}>" for u in (user_ids if user_ids is not None else [m.user_id for m in p.members]))
     return f"{mentions}\nYour **{party_title(p)}** party is full and ready. Leader: {escape_md(p.leader_name)}."[:LIMIT]
 
 
@@ -631,7 +702,7 @@ CREATE_PANEL = (
 )
 
 
-def interest_panel_text(s: Session, game_id: int, now: int) -> str:
+def interest_panel_text(s: Session, game_id: int, now: int, tags: dict[int, str] | None = None) -> str:
     head = (
         "## Looking for a group?\n"
         "Register below and Nyerk will @mention you when a party opens for content you picked.\n"
@@ -654,7 +725,9 @@ def interest_panel_text(s: Session, game_id: int, now: int) -> str:
             cls = r.pf_class.name if r.pf_class else "?"
             gear = gear_of(s, r.user_id, game_id) or r.bracket
             bracket = gear.label if gear else "?"
-            body.append(f"{escape_md(r.user_name)} · {cls} ({TYPE_LABEL.get(r.class_type, '?')}) · {bracket}"
+            tag = (tags or {}).get(r.origin_game_id or 0)
+            name = escape_md(r.user_name) + (f" [{escape_md(tag)}]" if tag else "")
+            body.append(f"{name} · {cls} ({TYPE_LABEL.get(r.class_type, '?')}) · {bracket}"
                         f" · until {ts(r.expires_at, 'R')}")
     text = head + "\n" + "\n".join(body)
     while len(text) > LIMIT:
@@ -673,14 +746,14 @@ def chat_note(minutes: int) -> str:
     return f"💬 **Chat below to plan your runs.** Messages here are deleted after {minutes} minutes."
 
 
-def status_text(parties: list[PfParty], chat_minutes: int = 0) -> str:
+def status_text(parties: list[PfParty], chat_minutes: int = 0, tags: dict[int, str] | None = None) -> str:
     lines = ["## Party status"]
     if not parties:
         lines.append("-# No full parties right now. Full parties show here until the leader presses Done.")
     for p in parties:
         lines.append(f"**{party_title(p)}** | {len(p.members)}/{p.size} | leader {escape_md(p.leader_name)}"
                      f" | ready {ts(p.filled_at or 0, 'R')}")
-        lines.append(", ".join(_who(m) for m in p.members))
+        lines.append(", ".join(_who(m, tags) for m in p.members))
     note = chat_note(chat_minutes)
     text = "\n".join(lines)
     while len(text) + len(note) + 2 > LIMIT:

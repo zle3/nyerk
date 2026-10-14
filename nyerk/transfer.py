@@ -42,7 +42,9 @@ SKIP_SETTINGS = {"id", "admin_locked", "admin_grants", "admin_role_ids", "sessio
 SKIP_GAME = {"id", "guild_id", "name", "kind", "enabled", "sort_order", "dashboard_message_id", "dashboard_hash",
              "roles_class_message_id", "roles_gear_message_id", "class_panel_message_id", "gear_panel_message_id",
              "interest_panel_message_id", "interest_panel_hash", "party_panel_message_id",
-             "party_status_message_id", "party_status_hash", "last_import_at", "last_import_error", "pending_import"}
+             "party_status_message_id", "party_status_hash", "last_import_at", "last_import_error", "pending_import",
+             # links to other servers are made with a code, never by import
+             "link_home_id", "link_code", "link_code_expires"}
 GAME_SETTINGS = tuple(c.name for c in Game.__table__.columns if c.name not in SKIP_GAME)
 CLASS_TYPES = ("tank", "support", "dps")
 

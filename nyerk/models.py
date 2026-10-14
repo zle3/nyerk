@@ -87,6 +87,13 @@ class Game(Base):
     kind: Mapped[str] = mapped_column(String(16), default="custom")  # aion2 | custom
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Linked party finder: this game uses another server's game's party finder
+    # (its classes, dungeons, gear scores, windows, parties and sign-ups), with
+    # this server's own roles mapped in LinkedRole. None = its own.
+    link_home_id: Mapped[int | None] = mapped_column(ForeignKey("games.id", ondelete="SET NULL"), nullable=True)
+    # A code another server's owner pastes to join this game's party finder.
+    link_code: Mapped[str] = mapped_column(String(32), default="")
+    link_code_expires: Mapped[int] = mapped_column(BigInteger, default=0)
 
     timer_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
     user_timer_limit: Mapped[int] = mapped_column(Integer, default=10)
@@ -367,6 +374,9 @@ class PfInterest(Base):
     class_type: Mapped[str] = mapped_column(String(16), default="")
     bracket_id: Mapped[int | None] = mapped_column(ForeignKey("pf_brackets.id", ondelete="SET NULL"), nullable=True)
     content_ids: Mapped[list] = mapped_column(JSON, default=list)
+    # The game (so the server and channel) they registered from: in a linked
+    # party finder, pings reach them there.
+    origin_game_id: Mapped[int | None] = mapped_column(ForeignKey("games.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[int] = mapped_column(BigInteger)
     expires_at: Mapped[int] = mapped_column(BigInteger)
     last_pinged_at: Mapped[int] = mapped_column(BigInteger, default=0)
@@ -389,6 +399,8 @@ class PfParty(Base):
     # {"tank": n, "support": n, "dps": n, "any": n}
     makeup: Mapped[dict] = mapped_column(JSON, default=dict)
     description: Mapped[str] = mapped_column(String(100), default="")
+    # The game (server) the leader started it from: the closing warning goes there.
+    origin_game_id: Mapped[int | None] = mapped_column(ForeignKey("games.id", ondelete="SET NULL"), nullable=True)
     # open | full | closed | expired | done
     status: Mapped[str] = mapped_column(String(16), default="open")
     created_at: Mapped[int] = mapped_column(BigInteger)
@@ -399,16 +411,11 @@ class PfParty(Base):
     # Seconds left on the listing when it filled; restored if it reopens.
     remaining_s: Mapped[int] = mapped_column(Integer, default=0)
     ended_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    # Discord messages. The reconciler posts/edits/deletes to match status.
-    listing_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    listing_hash: Mapped[str] = mapped_column(String(64), default="")
-    ping_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    ping_pending: Mapped[bool] = mapped_column(Boolean, default=False)
-    warning_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    ready_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    ready_pinged: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Discord messages live in PartyPost, one per party channel showing it.
+    ping_pending: Mapped[bool] = mapped_column(Boolean, default=False)  # new: each channel pings once
 
     content: Mapped[PfContent | None] = relationship()
+    posts: Mapped[list["PartyPost"]] = relationship(cascade="all, delete-orphan", passive_deletes=True)
     members: Mapped[list["PfPartyMember"]] = relationship(
         back_populates="party", cascade="all, delete-orphan", order_by="PfPartyMember.joined_at"
     )
@@ -429,7 +436,45 @@ class PfPartyMember(Base):
     bracket_label: Mapped[str] = mapped_column(String(32), default="")
     joined_at: Mapped[int] = mapped_column(BigInteger)
 
+    # The game (server) they joined from: the ready ping mentions them there.
+    origin_game_id: Mapped[int | None] = mapped_column(ForeignKey("games.id", ondelete="SET NULL"), nullable=True)
+
     party: Mapped[PfParty] = relationship(back_populates="members")
+
+
+class PartyPost(Base):
+    """A party's messages in one party channel. A linked party finder shows
+    each party in every linked server's channel, each with its own messages."""
+
+    __tablename__ = "party_posts"
+    __table_args__ = (UniqueConstraint("party_id", "game_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    party_id: Mapped[int] = mapped_column(ForeignKey("pf_parties.id", ondelete="CASCADE"), index=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
+    listing_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    listing_hash: Mapped[str] = mapped_column(String(64), default="")
+    ping_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    pinged: Mapped[bool] = mapped_column(Boolean, default=False)
+    warning_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    ready_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    ready_pinged: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class LinkedRole(Base):
+    """In a game linked to another server's party finder: this server's role
+    for one of the shared classes or dungeons."""
+
+    __tablename__ = "linked_roles"
+    __table_args__ = (UniqueConstraint("game_id", "kind", "ref_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(8))  # class | content
+    ref_id: Mapped[int] = mapped_column(Integer)  # the shared PfClass or PfContent
+    role_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    react_emoji: Mapped[str] = mapped_column(String(64), default="")
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("reaction_groups.id", ondelete="SET NULL"), nullable=True)
 
 
 class RoleHolder(Base):

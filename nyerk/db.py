@@ -70,7 +70,7 @@ def _migrate(engine: Engine, db_path: Path | str) -> None:
     with engine.connect() as conn:
         version = conn.exec_driver_sql("PRAGMA user_version").scalar() or 0
         has_data = conn.exec_driver_sql("SELECT COUNT(*) FROM settings").scalar()
-    for target, step in ((1, _migrate_games), (2, _migrate_servers)):
+    for target, step in ((1, _migrate_games), (2, _migrate_servers), (3, _migrate_links)):
         if version >= target:
             continue
         if has_data:
@@ -197,6 +197,45 @@ def _migrate_servers(engine: Engine) -> None:
                 conn.execute(text(f"UPDATE settings SET {sets} WHERE guild_id = 0"),
                              {k: json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in moved.items()})
         conn.exec_driver_sql("PRAGMA user_version = 2")
+        conn.commit()
+        conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+        conn.commit()
+
+
+def _migrate_links(engine: Engine) -> None:
+    """Version 3: linked party finders. A party's Discord message IDs move
+    to party_posts (one row per channel showing it), and every registration,
+    party and party member records the game they came from: their own.
+    pf_parties is rebuilt without its old message columns."""
+    with engine.connect() as conn:
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        conn.commit()
+        for table in ("pf_interest", "pf_party_members"):
+            if "origin_game_id" not in _columns(conn, table):
+                conn.exec_driver_sql(f'ALTER TABLE {table} ADD COLUMN origin_game_id INTEGER '
+                                     'REFERENCES games (id) ON DELETE SET NULL')
+        cols = _columns(conn, "pf_parties")
+        if "listing_message_id" in cols:
+            conn.exec_driver_sql(
+                "INSERT OR IGNORE INTO party_posts (party_id, game_id, listing_message_id, listing_hash, "
+                "ping_message_id, pinged, warning_message_id, ready_message_id, ready_pinged) "
+                "SELECT id, game_id, listing_message_id, listing_hash, ping_message_id, 1, warning_message_id, "
+                "ready_message_id, ready_pinged FROM pf_parties WHERE listing_message_id != 0 OR "
+                "ping_message_id != 0 OR warning_message_id != 0 OR ready_message_id != 0 "
+                "OR status IN ('open', 'full')")
+            _rebuild(conn, Base.metadata.tables["pf_parties"], extra={"origin_game_id": "game_id"})
+        elif "origin_game_id" not in cols:
+            conn.exec_driver_sql('ALTER TABLE pf_parties ADD COLUMN origin_game_id INTEGER '
+                                 'REFERENCES games (id) ON DELETE SET NULL')
+        conn.exec_driver_sql("UPDATE pf_interest SET origin_game_id = game_id WHERE origin_game_id IS NULL")
+        conn.exec_driver_sql("UPDATE pf_parties SET origin_game_id = game_id WHERE origin_game_id IS NULL")
+        conn.exec_driver_sql("UPDATE pf_party_members SET origin_game_id = (SELECT game_id FROM pf_parties "
+                             "WHERE pf_parties.id = pf_party_members.party_id) WHERE origin_game_id IS NULL")
+        bad = conn.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+        if bad:
+            conn.rollback()
+            raise RuntimeError(f"Database upgrade to linked party finders failed a foreign key check: {bad[:5]}")
+        conn.exec_driver_sql("PRAGMA user_version = 3")
         conn.commit()
         conn.exec_driver_sql("PRAGMA foreign_keys=ON")
         conn.commit()

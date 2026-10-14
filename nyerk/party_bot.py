@@ -17,10 +17,10 @@ from typing import TYPE_CHECKING
 import discord
 from sqlalchemy import select
 
-from . import db, games, party, safety, servers, tracking
+from . import db, games, linking, party, safety, servers, tracking
 from .db import get_settings
 from .logbus import bus, current_guild, for_guild
-from .models import Game, PfClass, PfContent, PfInterest, PfParty, PfWindow
+from .models import Game, PartyPost, PfClass, PfContent, PfInterest, PfParty, PfWindow
 from .party import PartyError, Who
 
 if TYPE_CHECKING:
@@ -57,11 +57,13 @@ def game_here(s, interaction: discord.Interaction) -> Game | None:
         games.first(s, interaction.guild_id)
 
 
-def check_here(s, interaction: discord.Interaction, game_id: int | None) -> None:
-    """A click may only touch its own server's games."""
-    g = s.get(Game, game_id) if game_id else None
-    if g is None or g.guild_id != interaction.guild_id or not servers.is_approved(s, g.guild_id):
+def check_here(s, interaction: discord.Interaction, game_id: int | None) -> Game:
+    """A click may only touch its own server's games, or a party finder one
+    of them is linked to. Returns the game in this server."""
+    g = linking.view_in_guild(s, game_id, interaction.guild_id) if game_id else None
+    if g is None or not servers.is_approved(s, interaction.guild_id):
         raise PartyError("That isn't part of this server's party finder.")
+    return g
 
 
 async def reply(interaction: discord.Interaction, text: str) -> None:
@@ -189,8 +191,8 @@ ITEMS = (ClassButton, PanelButton, PartyButton, KickSelect, GearButton)
 
 def gear_view(s, game_id: int) -> discord.ui.View | None:
     """A game's gear score buttons (None when it has no brackets); used in
-    the party finder and roles channels."""
-    brackets = party.brackets(s, game_id)
+    the party finder and roles channels. A linked game shows the home's."""
+    brackets = party.brackets(s, party.pf_id(party.game(s, game_id)))
     if not brackets:
         return None
     view = discord.ui.View(timeout=None)
@@ -333,10 +335,10 @@ class PartyFinder:
                 elif game_id is None:
                     g = game_here(s, interaction)
                     game_id = g.id if g else None
-                check_here(s, interaction, game_id)
-                add, remove, text, held = party.class_change(s, who, class_id, game_id)
+                g = check_here(s, interaction, game_id)
+                add, remove, text, held = party.class_change(s, who, class_id, g.id)
                 held_roles = {c.role_id for c in held}
-                game_roles = {c.role_id for c in party.classes(s, game_id) if c.role_id}
+                game_roles = {c.role_id for c in party.classes_for(s, g) if c.role_id}
         except PartyError as exc:
             await reply(interaction, str(exc))
             return
@@ -363,9 +365,10 @@ class PartyFinder:
             held = party.member_classes(s, g.id, who_of(interaction).role_ids)
             has_class = bool(held)
             cls = [(f"{x.name} ({party.TYPE_LABEL[x.class_type]})", str(x.id)) for x in held] if len(held) > 1 else None
-            has_gear = party.gear_of(s, interaction.user.id, g.id) is not None or not party.brackets(s, g.id)
-            w = [(x.label or f"{x.minutes} min", str(x.id)) for x in party.windows(s, g.id)]
-            c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s, g.id)]
+            hid = party.pf_id(g)
+            has_gear = party.gear_of(s, interaction.user.id, hid) is not None or not party.brackets(s, hid)
+            w = [(x.label or f"{x.minutes} min", str(x.id)) for x in party.windows(s, hid)]
+            c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s, hid)]
         if not has_class:
             await reply(interaction, "Pick at least one class on the class panel first.")
         elif not has_gear:
@@ -380,7 +383,7 @@ class PartyFinder:
         try:
             with db.session() as s:
                 w = s.get(PfWindow, window_id)
-                check_here(s, interaction, w.game_id if w else None)
+                who.game_id = check_here(s, interaction, w.game_id if w else None).id
                 row = party.register(s, who, window_id, content_ids, now(), class_id)
                 names = ", ".join(party.party_title_for(x) for x in party.contents(s, row.game_id, False)
                                   if x.id in row.content_ids)
@@ -396,7 +399,7 @@ class PartyFinder:
         who = who_of(interaction)
         with db.session() as s:
             g = game_here(s, interaction)
-            row = party.cancel_registration(s, who.user_id, g.id if g else None)
+            row = party.cancel_registration(s, who.user_id, party.pf_id(g)) if g else None
         await reply(interaction, "Your registration is cancelled." if row else "You weren't registered.")
         if row:
             bus.info("party", f"{who.user_name} cancelled their registration.")
@@ -410,8 +413,8 @@ class PartyFinder:
                 await reply(interaction, "The party finder isn't set up yet.")
                 return
             has_class = party.member_class(s, g.id, who.role_ids) is not None
-            busy = party.live_party_for(s, who.user_id, g.id) is not None
-            c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s, g.id)]
+            busy = party.live_party_for(s, who.user_id, party.pf_id(g)) is not None
+            c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s, party.pf_id(g))]
         if not has_class:
             await reply(interaction, "Pick at least one class on the class panel first.")
         elif busy:
@@ -426,7 +429,7 @@ class PartyFinder:
         try:
             with db.session() as s:
                 c = s.get(PfContent, content_id)
-                check_here(s, interaction, c.game_id if c else None)
+                who.game_id = check_here(s, interaction, c.game_id if c else None).id
                 p = party.create(s, who, content_id, size, requirement, custom, description, now())
                 title, pid = party.party_title(p), p.id
         except PartyError as exc:
@@ -448,7 +451,7 @@ class PartyFinder:
                 p = s.get(PfParty, pid)
                 if p is None:
                     raise PartyError("That party no longer exists.")
-                check_here(s, interaction, p.game_id)
+                who.game_id = check_here(s, interaction, p.game_id).id
                 title = party.party_title(p)
                 if what == "join":
                     filled = party.join(s, p, who, t)
@@ -514,7 +517,7 @@ class PartyFinder:
     # -- panels -------------------------------------------------------------------
 
     def _class_view(self, s, game_id: int) -> discord.ui.View:
-        items = [ClassButton(str(c.id), c.name, c.emoji) for c in party.classes(s, game_id) if c.role_id][:23]
+        items = [ClassButton(str(c.id), c.name, c.emoji) for c in party.classes_for(s, game_id) if c.role_id][:23]
         return _view(*items, ClassButton("mine", "My roles", "📋"), ClassButton(f"clear-{game_id}", "Clear classes"))
 
     async def post_panels(self, game_id: int, which: str = "all") -> str:
@@ -540,10 +543,11 @@ class PartyFinder:
                     elif kind == "gear":
                         text, view = party.GEAR_PANEL, gear_view(s, game_id)
                     elif kind == "interest":
-                        text = party.interest_panel_text(s, game_id, now())
+                        hid = party.pf_id(game)
+                        text = party.interest_panel_text(s, hid, now(), linking.tags(s, hid))
                         view = _view(PanelButton("reg"), PanelButton("unreg"))
                     elif kind == "create":
-                        text = party.CREATE_PANEL.format(lifetime=game.party_lifetime_min)
+                        text = party.CREATE_PANEL.format(lifetime=party.game(s, party.pf_id(game)).party_lifetime_min)
                         view = _view(PanelButton("create"))
                     else:
                         text, view = self._status(s, game)
@@ -563,14 +567,15 @@ class PartyFinder:
                     if kind == "interest":
                         game.interest_panel_hash = party.digest(text)
                     if kind == "status":
-                        game.party_status_hash = party.digest(text + _status_key(s, game_id))
+                        game.party_status_hash = party.digest(text + _status_key(s, party.pf_id(game)))
         bus.info("party", f"Party finder panel(s) posted: {', '.join(posted)}.")
         return f"Posted {', '.join(posted)}."
 
     def _status(self, s, game: Game):
-        full = party.live_parties(s, game.id, "full")
+        hid = party.pf_id(game)
+        full = party.live_parties(s, hid, "full")
         buttons = [PartyButton("done", p.id, f"Done: {party.party_title(p)} ({p.leader_name})"[:80]) for p in full[:25]]
-        return party.status_text(full, game.party_chat_delete_min), _view(*buttons)
+        return party.status_text(full, game.party_chat_delete_min, linking.tags(s, hid)), _view(*buttons)
 
     # -- reconciler ---------------------------------------------------------------
 
@@ -639,6 +644,8 @@ class PartyFinder:
         async with self._sync_lock:
             with db.session() as s:
                 ids = [(g.id, g.guild_id) for g in games.all_games(s, None, enabled_only=True) if g.party_channel_id]
+                # New parties ping once in each channel they're first shown in, this round.
+                pending = list(s.scalars(select(PfParty.id).where(PfParty.ping_pending.is_(True))))
             sweep = not self._swept
             self._swept = True
             for game_id, guild_id in ids:
@@ -651,6 +658,10 @@ class PartyFinder:
                     await self._sync_parties(channel, game_id)
                     await self._sync_panel(channel, game_id, "interest")
                     await self._sync_panel(channel, game_id, "status")
+            if pending:
+                with db.session() as s:
+                    for p in s.scalars(select(PfParty).where(PfParty.id.in_(pending))):
+                        p.ping_pending = False
 
     async def _sweep_orphans(self, channel, game_id: int) -> None:
         """Once after start: delete Nyerk's own messages in a game's party
@@ -669,9 +680,7 @@ class PartyFinder:
                 return  # shared channel: other messages of ours live there too
             known = {g.class_panel_message_id, g.gear_panel_message_id, g.interest_panel_message_id,
                      g.party_panel_message_id, g.party_status_message_id}
-            for p in s.scalars(select(PfParty).where(PfParty.game_id == game_id, (
-                    (PfParty.listing_message_id != 0) | (PfParty.ping_message_id != 0)
-                    | (PfParty.warning_message_id != 0) | (PfParty.ready_message_id != 0)))):
+            for p in s.scalars(select(PartyPost).where(PartyPost.game_id == game_id)):
                 known |= {p.listing_message_id, p.ping_message_id, p.warning_message_id, p.ready_message_id}
         try:
             stray = [m async for m in channel.history(limit=100)
@@ -687,15 +696,16 @@ class PartyFinder:
     async def _sync_panel(self, channel, game_id: int, kind: str) -> None:
         with db.session() as s:
             game = s.get(Game, game_id)
+            hid = party.pf_id(game)
             if kind == "interest":
                 mid, old_hash = game.interest_panel_message_id, game.interest_panel_hash
-                text = party.interest_panel_text(s, game_id, now())
+                text = party.interest_panel_text(s, hid, now(), linking.tags(s, hid))
                 view = _view(PanelButton("reg"), PanelButton("unreg"))
                 key = party.digest(text)
             else:
                 mid, old_hash = game.party_status_message_id, game.party_status_hash
                 text, view = self._status(s, game)
-                key = party.digest(text + _status_key(s, game_id))
+                key = party.digest(text + _status_key(s, hid))
         try:
             if not mid or key == old_hash:
                 return  # panel not posted yet (admin posts it) or nothing changed
@@ -717,35 +727,52 @@ class PartyFinder:
                 game.party_status_message_id, game.party_status_hash = mid, key
 
     async def _sync_parties(self, channel, game_id: int) -> None:
+        """One game's channel: the parties of the party finder it shows (its
+        own or, linked, the home's), and leftovers of parties it showed."""
         with db.session() as s:
-            settings = s.get(Game, game_id)
-            rows = list(s.scalars(select(PfParty).where(PfParty.game_id == game_id, (
-                (PfParty.status.in_(party.LIVE)) | (PfParty.listing_message_id != 0) | (PfParty.ping_message_id != 0)
-                | (PfParty.warning_message_id != 0) | (PfParty.ready_message_id != 0))
-            ).order_by(PfParty.created_at)))
-            ids = [p.id for p in rows]
+            hid = party.pf_id(s.get(Game, game_id))
+            mine = select(PartyPost.party_id).where(PartyPost.game_id == game_id)
+            ids = list(s.scalars(select(PfParty.id).where(
+                ((PfParty.game_id == hid) & PfParty.status.in_(party.LIVE)) | PfParty.id.in_(mine))
+                .order_by(PfParty.created_at)))
         for pid in ids:
-            await self._sync_party(channel, pid, settings)
+            await self._sync_party(channel, pid, game_id)
 
-    async def _sync_party(self, channel, pid: int, settings) -> None:
+    async def _sync_party(self, channel, pid: int, game_id: int) -> None:
+        """Make one party's messages in one game's channel match the
+        database. Pings and mentions there only reach that server's members."""
         with db.session() as s:
             p = s.get(PfParty, pid)
+            g = s.get(Game, game_id)
             _ = p.members, p.content
-            status = p.status
-            listing_text = party.listing_text(p) if status == "open" else ""
+            hid = party.pf_id(g)
+            settings = party.game(s, p.game_id)  # the party finder's own game sets the timings
+            post = s.scalar(select(PartyPost).where(PartyPost.party_id == pid, PartyPost.game_id == game_id))
+            status = p.status if p.game_id == hid else "gone"  # unlinked since: clear this channel
+            tags = linking.tags(s, hid) if status in party.LIVE else {}
+            listing_text = party.listing_text(p, tags) if status == "open" else ""
             listing_key = party.digest(listing_text + "|" + ",".join(str(m.user_id) for m in p.members))
             kick = [(m.user_id, m.user_name) for m in p.members if m.user_id != p.leader_id]
-            targets = party.ping_targets(s, p, now()) if status == "open" and p.ping_pending else []
-            ping_role = safety.pingable(p.content.role_id) if p.content and status == "open" and p.ping_pending else 0
+            ping_now = status == "open" and p.ping_pending and not (post and post.pinged)
+            targets = party.ping_targets(s, p, now(), origin=game_id) if ping_now else []
+            role = next((c.role_id for c in party.contents_for(s, g, False) if c.id == p.content_id), 0)
+            ping_role = safety.pingable(role) if ping_now else 0
             ping_text = party.ping_text(p, targets, ping_role) if targets or ping_role else ""
             target_ids = [t.user_id for t in targets]
-            warn = status == "open" and p.warned_at is not None
+            shown = {x.id for x in linking.members(s, settings)}
+            leader_from = next((m.origin_game_id for m in p.members if m.user_id == p.leader_id), None) \
+                or p.origin_game_id or p.game_id
+            if leader_from not in shown:
+                leader_from = p.game_id  # their server isn't linked any more: warn in the home channel
+            warn = status == "open" and p.warned_at is not None and leader_from == game_id
             warn_text = party.warning_text(p, settings) if warn else ""
-            ready_text = party.ready_text(p) if status == "full" and not p.ready_pinged else ""
-            member_ids = [m.user_id for m in p.members]
+            here = [m.user_id for m in p.members if (m.origin_game_id or p.game_id) == game_id]
+            ready_due = status == "full" and not (post and post.ready_pinged)
+            ready_text = party.ready_text(p, here) if ready_due and here else ""
             leader_id = p.leader_id
-            snap = dict(listing=p.listing_message_id, hash=p.listing_hash, ping=p.ping_message_id,
-                        pending=p.ping_pending, warning=p.warning_message_id, ready=p.ready_message_id)
+            snap = dict(listing=post.listing_message_id if post else 0, hash=post.listing_hash if post else "",
+                        ping=post.ping_message_id if post else 0, warning=post.warning_message_id if post else 0,
+                        ready=post.ready_message_id if post else 0)
         upd: dict = {}
 
         # Listing: exists only while open; reposted at the bottom when reopened.
@@ -776,8 +803,8 @@ class PartyFinder:
             finally:
                 view.stop()
             # Interest ping, once, right under a new listing.
-            if snap["pending"]:
-                upd["ping_pending"] = False
+            if ping_now:
+                upd["pinged"] = True
                 if ping_text:
                     view = _view(PartyButton("join", pid), PartyButton("pass", pid))
                     try:
@@ -790,7 +817,7 @@ class PartyFinder:
                         bus.error("party", f"Interest ping for party #{pid} failed: {exc!r}")
                     finally:
                         view.stop()
-            # Leader warning.
+            # Leader warning, in the leader's own server.
             if warn and not snap["warning"]:
                 view = _view(PartyButton("extend", pid), PartyButton("close", pid))
                 try:
@@ -805,29 +832,40 @@ class PartyFinder:
                 await self._delete(channel, snap["warning"])
                 upd["warning_message_id"] = 0
 
-        # Ready ping while full; removed when the party leaves the status list.
-        if status == "full" and ready_text:
-            try:
-                msg = await channel.send(ready_text, allowed_mentions=discord.AllowedMentions(
-                    everyone=False, roles=False, users=[discord.Object(u) for u in member_ids]))
-                upd.update(ready_message_id=msg.id, ready_pinged=True)
-            except discord.HTTPException as exc:
-                bus.error("party", f"Ready ping for party #{pid} failed: {exc!r}")
+        # Ready ping while full, to this server's members; removed when the
+        # party leaves the status list.
+        if ready_due:
+            upd["ready_pinged"] = True
+            if ready_text:
+                try:
+                    msg = await channel.send(ready_text, allowed_mentions=discord.AllowedMentions(
+                        everyone=False, roles=False, users=[discord.Object(u) for u in here]))
+                    upd["ready_message_id"] = msg.id
+                except discord.HTTPException as exc:
+                    bus.error("party", f"Ready ping for party #{pid} failed: {exc!r}")
         elif status != "full" and snap["ready"]:
             await self._delete(channel, snap["ready"])
             upd["ready_message_id"] = 0
 
-        if upd:
+        live = status in party.LIVE
+        if upd or not live:
             pinged = upd.pop("_pinged", [])
             with db.session() as s:
-                p = s.get(PfParty, pid)
-                for k, v in upd.items():
-                    setattr(p, k, v)
+                post = s.scalar(select(PartyPost).where(PartyPost.party_id == pid, PartyPost.game_id == game_id))
+                if post is None and live:
+                    post = PartyPost(party_id=pid, game_id=game_id)
+                    s.add(post)
+                if post is not None:
+                    for k, v in upd.items():
+                        setattr(post, k, v)
+                    if not live and not (post.listing_message_id or post.ping_message_id
+                                         or post.warning_message_id or post.ready_message_id):
+                        s.delete(post)  # nothing left in this channel
                 if pinged:
                     t = now()
                     for r in s.scalars(select(PfInterest).where(PfInterest.user_id.in_(pinged),
                                                                 PfInterest.status == "active",
-                                                                PfInterest.game_id == p.game_id)):
+                                                                PfInterest.game_id == hid)):
                         r.last_pinged_at = t
 
 

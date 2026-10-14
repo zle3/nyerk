@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Category, Game, PfContent, ReactionGroup
+from . import party
+from .models import Category, Game, LinkedRole, PfContent, ReactionGroup
 
 NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 LETTERS = [chr(0x1F1E6 + i) for i in range(26)]  # 🇦 … 🇿
@@ -28,7 +29,7 @@ CLEAR_TEXT = ("## Ping settings\n"
 
 @dataclass
 class Entry:
-    kind: str       # category | content
+    kind: str       # category | content | linked (a LinkedRole)
     ref_id: int
     label: str
     role_id: int
@@ -58,6 +59,8 @@ def build(s: Session, guild_id: int, skip: set[int] | None = None) -> list[Group
     rows = groups(s, guild_id)
     live = {g.id: g.name for g in s.scalars(select(Game).where(Game.enabled.is_(True), Game.guild_id == guild_id))}
     many = len(live) > 1
+    # Games using another server's party finder: their own dungeons sit unused.
+    linked = set(s.scalars(select(Game.id).where(Game.guild_id == guild_id, Game.link_home_id.is_not(None))))
 
     def label(game_id, name):
         return f"{live[game_id]}: {name}" if many else name
@@ -77,9 +80,21 @@ def build(s: Session, guild_id: int, skip: set[int] | None = None) -> list[Group
     for c in s.scalars(select(PfContent).where(PfContent.role_id != 0, PfContent.active.is_(True))
                        .order_by(PfContent.sort_order, PfContent.name)):
         gid = place(c.group_id, "content")
-        if gid is not None and c.role_id not in skip and c.game_id in live:
+        if gid is not None and c.role_id not in skip and c.game_id in live and c.game_id not in linked:
             by_id[gid].entries.append(Entry("content", c.id, label(c.game_id, c.name), c.role_id,
                                             (c.react_emoji or "").strip()))
+    # A linked game's dungeons are another server's: this server's roles for them.
+    for g in s.scalars(select(Game).where(Game.id.in_(live), Game.link_home_id.is_not(None))):
+        mapped = {r.ref_id: r for r in s.scalars(select(LinkedRole).where(LinkedRole.game_id == g.id,
+                                                                          LinkedRole.kind == "content"))}
+        for c in party.contents(s, g.link_home_id):
+            r = mapped.get(c.id)
+            if r is None or not r.role_id or r.role_id in skip:
+                continue
+            gid = place(r.group_id, "content")
+            if gid is not None:
+                by_id[gid].entries.append(Entry("linked", r.id, label(g.id, c.name), r.role_id,
+                                                (r.react_emoji or "").strip()))
 
     out = []
     for g in (by_id[r.id] for r in rows):
@@ -123,6 +138,5 @@ def entries(s: Session, guild_id: int) -> list[Entry]:
 def ping_role_ids(s: Session, guild_id: int) -> set[int]:
     games = select(Game.id).where(Game.guild_id == guild_id)
     ids = {c.role_id for c in s.scalars(select(Category).where(Category.role_id != 0, Category.game_id.in_(games)))}
-    ids |= {c.role_id for c in s.scalars(select(PfContent).where(PfContent.role_id != 0,
-                                                                 PfContent.game_id.in_(games)))}
+    ids |= {c.role_id for c in party.server_contents(s, guild_id, False) if c.role_id}
     return ids

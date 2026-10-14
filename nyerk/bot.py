@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from sqlalchemy import select
 
-from . import db, engine, games, party, party_bot, quiet, reaction_roles, safety, servers, timers, tracking
+from . import db, engine, games, linking, party, party_bot, quiet, reaction_roles, safety, servers, timers, tracking
 from .db import get_settings, get_state
 from .logbus import bus, current_guild, for_guild
 from .models import Event, Game, PfBracket, PfContent, SentMessage, UserTimer
@@ -721,7 +721,7 @@ class NyerkBot(discord.Client):
             # Each game's class and gear score selectors, when it has classes with roles.
             panels = [(g.id, party.class_panel_text(g), self.pf._class_view(s, g.id),
                        party.gear_panel_text(g, many), party_bot.gear_view(s, g.id)) for g in live
-                      if party.classes(s, g.id)]
+                      if party.classes_for(s, g)]
             header = (settings.roles_header or "").strip()
             channel_id = settings.roles_channel_id
             old_ids = {int(k) for k in (state.reaction_messages or {})} | {
@@ -842,8 +842,10 @@ class NyerkBot(discord.Client):
             except discord.HTTPException:
                 pass
 
-    async def create_content_roles(self, guild_id: int, content_ids: list[int]) -> list[str]:
-        """Create a mentionable role for each of a server's dungeons without one."""
+    async def create_content_roles(self, guild_id: int, content_ids: list[int], game_id: int | None = None) -> list[str]:
+        """Create a mentionable role for each of a server's dungeons without
+        one. game_id: a linked game, whose dungeons are another server's;
+        the new roles are this server's roles for them."""
         guild = self._guild(guild_id)
         if guild is None:
             raise RuntimeError("Not connected to a server")
@@ -851,14 +853,23 @@ class NyerkBot(discord.Client):
         for cid in content_ids:
             with db.session() as s:
                 c = s.get(PfContent, cid)
-                if c is None or c.role_id or s.get(Game, c.game_id).guild_id != guild_id:
+                g = s.get(Game, game_id) if game_id else None
+                if c is None:
+                    continue
+                if g is not None:
+                    if g.guild_id != guild_id or g.link_home_id != c.game_id or \
+                            any(x.id == cid and x.role_id for x in party.contents_for(s, g, False)):
+                        continue
+                elif c.role_id or s.get(Game, c.game_id).guild_id != guild_id:
                     continue
                 name = c.name
             role = await guild.create_role(name=name[:100], mentionable=True,
                                            reason="Nyerk dungeon ping role (party finder)")
             with db.session() as s:
                 c = s.get(PfContent, cid)
-                if c is not None:
+                if game_id:
+                    linking.set_role(s, s.get(Game, game_id), "content", cid, role.id)
+                elif c is not None:
                     c.role_id = role.id
             made.append(name)
             bus.info("roles", f"Created dungeon role {name} ({role.id}).")
@@ -917,10 +928,11 @@ class NyerkBot(discord.Client):
             with db.session() as s:
                 b = s.get(PfBracket, bracket_id) if bracket_id else None
                 gid = b.game_id if b else game_id
-                g = s.get(Game, gid) if gid else None
-                if g is None or g.guild_id != interaction.guild_id:
+                g = linking.view_in_guild(s, gid, interaction.guild_id) if gid else None
+                if g is None:
                     raise party.PartyError("That gear score option isn't part of this server.")
-                bracket = party.set_gear(s, member.id, member.display_name, bracket_id, now(), game_id)
+                bracket = party.set_gear(s, member.id, member.display_name, bracket_id, now(), party.pf_id(g),
+                                         guild_id=interaction.guild_id)
                 label = bracket.label if bracket else ""
         except party.PartyError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
@@ -1101,14 +1113,15 @@ def my_roles_text(s, guild_id: int, user_id: int, held: set[int], t: int) -> str
         classes = party.member_classes(s, g.id, held)
         lines.append("**Classes:** " + (", ".join(f"{c.emoji} {c.name} ({party.TYPE_LABEL[c.class_type]})".strip()
                                                  for c in classes) or "none yet. Pick them on the class panel."))
-        if party.brackets(s, g.id):
-            gear = party.gear_of(s, user_id, g.id)
+        hid = party.pf_id(g)
+        if party.brackets(s, hid):
+            gear = party.gear_of(s, user_id, hid)
             lines.append("**Gear score:** " + (gear.label if gear else "not set. Pick it in the roles channel."))
         events = [c.name for c in s.scalars(select(Category).where(Category.role_id != 0, Category.game_id == g.id)
                                             .order_by(Category.sort_order)) if c.role_id in held]
         lines.append("**Event pings:** " + (", ".join(events) or "none"))
         dungeons = []
-        for c in party.contents(s, g.id, False):
+        for c in party.contents_for(s, g, False):
             if c.role_id and c.role_id in held:
                 dungeons.append(party.party_title_for(c))
             elif c.role_id and c.role_id in paused:
@@ -1117,14 +1130,14 @@ def my_roles_text(s, guild_id: int, user_id: int, held: set[int], t: int) -> str
         if not many:
             lines.append(_quiet_line(s, guild_id, user_id))  # quiet hours cover every game's dungeon pings
         reg = s.scalar(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active",
-                                                PfInterest.expires_at > t, PfInterest.game_id == g.id))
+                                                PfInterest.expires_at > t, PfInterest.game_id == hid))
         if reg:
-            names = ", ".join(party.party_title_for(c) for c in party.contents(s, g.id, False)
+            names = ", ".join(party.party_title_for(c) for c in party.contents(s, hid, False)
                               if c.id in (reg.content_ids or []))
             cls = reg.pf_class.name if reg.pf_class else "?"
             lines.append(f"**Looking for a group:** {names} as {cls}, until <t:{reg.expires_at}:t> "
                          f"(<t:{reg.expires_at}:R>)")
-        p = party.live_party_for(s, user_id, g.id)
+        p = party.live_party_for(s, user_id, hid)
         if p:
             lines.append(f"**In a party:** {party.party_title(p)} ({p.status}, leader {p.leader_name})")
     if many:
