@@ -2186,6 +2186,34 @@ def create_app(cfg, bot=None) -> FastAPI:
                        "Post the roles message on the Roles page to offer them as reaction roles.")
         return back("/party#content")
 
+    @app.post("/party/classes/create-roles")
+    async def party_classes_create_roles(request: Request):
+        data = await form(request)
+        bot = app.state.bot
+        back_to = "/party#classes"
+        if not bot or not bot.is_ready():
+            flash(request, "Bot is not connected.", "err")
+            return back(back_to)
+        with db.session() as s:
+            only = str(data.get("class_id", "")).strip()
+            g = game_of(request, s)
+            linked = g.id if g.link_home_id else None
+            back_to = "/party#linked" if linked else back_to
+            ids = [c.id for c in party.classes_for(s, g) if not c.role_id and (not only or str(c.id) == only)]
+        if not ids:
+            flash(request, "Every class already has a role.")
+            return back(back_to)
+        try:
+            made = await bot.create_class_roles(guild_of(request), ids, game_id=linked)
+        except Exception as exc:
+            bus.error("roles", f"Creating class roles failed: {exc!r}")
+            flash(request, f"Discord refused: {exc}. Nyerk needs the Manage Roles permission.", "err")
+            return back(back_to)
+        refresh()
+        flash(request, f"Created {len(made)} role{'s' if len(made) != 1 else ''}: {', '.join(made)}. "
+                       "Repost the class panel and the roles channel to show them.")
+        return back(back_to)
+
     @app.post("/party/{kind}/new")
     async def party_add(request: Request, kind: str):
         data = await form(request)
