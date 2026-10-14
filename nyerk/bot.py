@@ -15,7 +15,7 @@ from sqlalchemy import select
 from . import db, engine, games, linking, party, party_bot, quiet, reaction_roles, safety, servers, timers, tracking
 from .db import get_settings, get_state
 from .logbus import bus, current_guild, for_guild
-from .models import Event, Game, PfBracket, PfContent, SentMessage, UserTimer
+from .models import Event, Game, PfBracket, PfClass, PfContent, SentMessage, UserTimer
 from .timeparse import humanize
 
 log = logging.getLogger("nyerk.bot")
@@ -856,33 +856,44 @@ class NyerkBot(discord.Client):
         """Create a mentionable role for each of a server's dungeons without
         one. game_id: a linked game, whose dungeons are another server's;
         the new roles are this server's roles for them."""
+        return await self._create_pf_roles(guild_id, "content", content_ids, game_id)
+
+    async def create_class_roles(self, guild_id: int, class_ids: list[int], game_id: int | None = None) -> list[str]:
+        """Create a role for each of a server's classes without one (not
+        mentionable: class roles are never pinged). game_id as above."""
+        return await self._create_pf_roles(guild_id, "class", class_ids, game_id)
+
+    async def _create_pf_roles(self, guild_id: int, kind: str, ids: list[int], game_id: int | None) -> list[str]:
+        model = PfContent if kind == "content" else PfClass
         guild = self._guild(guild_id)
         if guild is None:
             raise RuntimeError("Not connected to a server")
         made = []
-        for cid in content_ids:
+        for rid in ids:
             with db.session() as s:
-                c = s.get(PfContent, cid)
+                row = s.get(model, rid)
                 g = s.get(Game, game_id) if game_id else None
-                if c is None:
+                if row is None:
                     continue
                 if g is not None:
-                    if g.guild_id != guild_id or g.link_home_id != c.game_id or \
-                            any(x.id == cid and x.role_id for x in party.contents_for(s, g, False)):
+                    seen = party.contents_for(s, g, False) if kind == "content" else party.classes_for(s, g)
+                    if g.guild_id != guild_id or g.link_home_id != row.game_id or \
+                            any(x.id == rid and x.role_id for x in seen):
                         continue
-                elif c.role_id or s.get(Game, c.game_id).guild_id != guild_id:
+                elif row.role_id or s.get(Game, row.game_id).guild_id != guild_id:
                     continue
-                name = c.name
-            role = await guild.create_role(name=name[:100], mentionable=True,
-                                           reason="Nyerk dungeon ping role (party finder)")
+                name = row.name
+            what = "dungeon ping role" if kind == "content" else "class role"
+            role = await guild.create_role(name=name[:100], mentionable=kind == "content",
+                                           reason=f"Nyerk {what} (party finder)")
             with db.session() as s:
-                c = s.get(PfContent, cid)
+                row = s.get(model, rid)
                 if game_id:
-                    linking.set_role(s, s.get(Game, game_id), "content", cid, role.id)
-                elif c is not None:
-                    c.role_id = role.id
+                    linking.set_role(s, s.get(Game, game_id), kind, rid, role.id)
+                elif row is not None:
+                    row.role_id = role.id
             made.append(name)
-            bus.info("roles", f"Created dungeon role {name} ({role.id}).")
+            bus.info("roles", f"Created {what} {name} ({role.id}).")
         return made
 
     async def fetch_member(self, guild_id: int, user_id: int) -> tuple[str, set[int]] | None:

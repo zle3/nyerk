@@ -184,3 +184,18 @@ def test_my_roles_overview(s):
     assert "**Event pings:** World Boss" in text
     assert "**Dungeon pings:** Dungeon 0, Dungeon 1 (paused)" in text
     assert "**Quiet hours:** 11 PM (23:00) to 7 AM (07:00), Eastern (New York)" in text
+
+
+def test_create_missing_class_roles(s, monkeypatch):
+    from nyerk import party
+    rows = party.classes(s, 1)
+    rows[0].role_id = 5
+    s.commit()
+    guild = FakeGuild(set())
+    b = botmod.NyerkBot(0)
+    monkeypatch.setattr(b, "_guild", lambda gid: guild)
+    made = asyncio.run(b.create_class_roles(GUILD, [c.id for c in rows[:3]]))
+    assert made == [rows[1].name, rows[2].name]
+    assert guild.created == [(rows[1].name, False), (rows[2].name, False)]  # class roles are never pinged
+    s.expire_all()
+    assert all(c.role_id for c in party.classes(s, 1)[:3])
