@@ -4,9 +4,10 @@
 
 - **Timers:** alerts with role pings for events, world boss respawns, resets and maintenance, and a live dashboard with one-click boss kill reports.
 - **Roles:** self-serve ping roles, class and gear score buttons, quiet hours and a one-click "remove all my pings".
-- **Party finder:** an interest list that pings people when a matching party opens, 5 or 20 player listings, and a channel to chat and plan runs.
+- **Party finder:** an interest list that pings people when a matching party opens, 5 or 20 player listings, and a channel to chat and plan runs. Servers can share one party finder, each keeping its own roles and pings.
 - **Games:** start from the AION 2 template or a blank game; run several side by side, each with its own timer and party channels, or switch.
 - **Servers:** one Nyerk can serve several Discord servers. Each has its own owner, admins, settings and data; new servers wait for your approval.
+- **Setup help:** Nyerk can create its channels with the right permissions, and its class and dungeon roles, from the web page.
 - **Web page:** configure everything above, manage members, see stats, undo any change. Optionally open it to members with Discord sign-in.
 
 **[Quick start](#quick-start)** · **[Using it](#using-it)** · **[Updating](#updating)** · **[Wiki](https://github.com/zle3/nyerk/wiki)**
@@ -74,7 +75,7 @@ No coding needed. You need a computer or home server that stays on, with [Docker
 
 1. Turn on **User Settings → Advanced → Developer Mode**, so you can right-click anything → **Copy ID**.
 2. Make four channels (any names): timers, roles, logs, and party finder (optional). Or skip this: once Nyerk runs, **Settings → Create all missing channels** makes them with the right permissions. Make the timer channel **read-only** for members; buttons and commands still work there. Members may chat in the party finder channel: Nyerk deletes their messages after 15 minutes.
-3. Make the roles members will pick: one per event they want pings for (World Boss, Shugo, Rift, …), each set to **Allow anyone to @mention this role**. For the party finder, also one per class and Tank, Support and DPS.
+3. Make the roles members will pick: one per event they want pings for (World Boss, Shugo, Rift, …), each set to **Allow anyone to @mention this role**. For the party finder, also Tank, Support and DPS; class and dungeon roles can be made from the web page later.
 4. In **Server Settings → Roles**, drag **Nyerk's role above all of those**, or it can't hand them out.
 
 **3. Start Nyerk**
@@ -105,9 +106,9 @@ docker compose up -d
 
 1. Open `https://YOUR-COMPUTER-IP:8443` (type the `https://`). Your browser warns about the certificate; that's expected, so continue.
 2. Sign in with your `ADMIN_PASSWORD`, then pick the game: **AION 2** (events, bosses, classes and gear scores ready to go) or **another game** (starts blank). The **setup guide** opens next: it checks each step below and has a button for most of them (create channels, create roles, check Nyerk's permissions, post everything). The steps below are the same thing by hand.
-3. **Settings:** paste your channel IDs → **Save settings**. Within a minute the dashboard appears in your timer channel.
+3. **Settings:** paste your channel IDs → **Save settings**, or click **Create all missing channels** if you skipped making them. Within a minute the dashboard appears in your timer channel.
 4. **Roles:** paste the role ID next to each event category and click **Save** on that row. When they're all in, click **Post roles channel**.
-5. **Party finder** (optional): paste the class role IDs (**Save classes**) and the Tank, Support and DPS role IDs (**Save**). Add the dungeons people group for under **Content**, click **Create missing roles**, then **Post all panels**. Back on **Roles**, click **Post roles channel** again so the dungeon roles appear.
+5. **Party finder** (optional): paste the class role IDs (**Save classes**), or click **Create missing roles** under the classes, and the Tank, Support and DPS role IDs (**Save**). Add the dungeons people group for under **Content**, click **Create missing roles**, then **Post all panels**. Back on **Roles**, click **Post roles channel** again so the dungeon roles appear.
 
 **5. Check it works**
 
