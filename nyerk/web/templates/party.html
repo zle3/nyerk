@@ -50,6 +50,47 @@
   <button class="btn" type="submit">Save</button>
 </form>
 
+</fieldset>
+
+{% if home %}
+<p class="section-label" id="linked">Shared party finder</p>
+<p>This game uses <strong>{{ home_server or 'another server' }}</strong>'s <strong>{{ home.name }}</strong> party finder: its classes, dungeons, gear scores, availability windows and timings are set there, and its parties and sign-ups show here too. Pings and mentions stay in each member's own server. Unlink on the <a href="/games#links">Games</a> page.</p>
+<p class="small muted">Give each shared class and dungeon a role in this server. Members pick classes with this server's class panel; a party for a dungeon pings this server's role for it. Classes without a role are left off the panel. Tank, Support and DPS roles above are this server's.</p>
+<form method="post" action="/party/linked">
+  {{ csrf_field() }}
+  <fieldset {{ 'disabled' if not can.roles }} class="{{ '' if can.roles else 'owner-only' }}">
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Class</th><th>Type</th><th>Class role ID in this server</th></tr></thead>
+    <tbody>
+    {% for c in classes %}
+      <tr><td>{{ c.emoji }} {{ c.name }}</td><td>{{ TYPE_LABEL[c.class_type] }}</td>
+        <td><input type="text" name="role_class_{{ c.id }}" value="{{ c.role_id or '' }}" placeholder="Role ID" class="mono" aria-label="Role ID for {{ c.name }}"></td></tr>
+    {% else %}
+      <tr><td colspan="3" class="muted">The home server has no classes yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="table-wrap mt">
+  <table>
+    <thead><tr><th>Dungeon</th><th>Min gear</th><th>Ping role ID in this server</th></tr></thead>
+    <tbody>
+    {% for c in contents %}
+      <tr class="{{ '' if c.active else 'off' }}"><td>{{ c.emoji }} {{ c.name }}</td><td class="num">{{ c.min_gear_score or '' }}</td>
+        <td><div class="inline"><input type="text" name="role_content_{{ c.id }}" value="{{ c.role_id or '' }}" placeholder="Role ID" class="mono" aria-label="Ping role ID for {{ c.name }}">{% if not c.role_id %}<button class="btn small secondary" type="submit" form="mk-role-{{ c.id }}">Create role</button>{% endif %}</div></td></tr>
+    {% else %}
+      <tr><td colspan="3" class="muted">The home server has no dungeons yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="actions"><button class="btn" type="submit">Save roles</button><span class="small muted">Then repost the class panel here and the roles channel. Reaction emoji and role messages for the dungeon roles are on the Roles page.</span></div>
+  </fieldset>
+</form>
+{% for c in contents %}{% if not c.role_id %}<form method="post" action="/party/content/create-roles" id="mk-role-{{ c.id }}" data-confirm="Create a Discord role named {{ c.name }}?" hidden>{{ csrf_field() }}<input type="hidden" name="content_id" value="{{ c.id }}"></form>{% endif %}{% endfor %}
+{% else %}
+<fieldset {{ 'disabled' if not can.roles }} class="{{ '' if can.roles else 'owner-only' }}">
 <p class="section-label" id="classes">Classes</p>
 <form method="post" action="/party/classes/bulk">
   {{ csrf_field() }}
@@ -83,8 +124,8 @@
   <button class="btn small" type="submit">Add</button>
 </form>
 <p class="small muted">Classes without a role ID are left off the panel.</p>
-
 </fieldset>
+
 
 <p class="section-label" id="content">Content and dungeon roles</p>
 <form method="post" action="/party/content/bulk">
@@ -186,6 +227,8 @@
   </div>
 </div>
 
+{% endif %}
+
 <p class="section-label">Open and full parties</p>
 <div class="table-wrap">
 <table>
@@ -194,7 +237,7 @@
   {% for p in parties %}
     <tr>
       <td><strong>{{ p.content.name if p.content else 'Party' }}</strong><br><span class="small muted">#{{ p.id }} · {{ p.requirement }}{% if p.description %} · {{ p.description }}{% endif %}</span></td>
-      <td>{{ p.leader_name }}</td>
+      <td>{{ p.leader_name }}{% for m in p.members if m.user_id == p.leader_id and tags.get(m.origin_game_id) %} <span class="small muted">{{ tags[m.origin_game_id] }}</span>{% endfor %}</td>
       <td class="num">{{ p.members|length }}/{{ p.size }}</td>
       <td>{% if p.status == 'open' %}<span class="pill ok">open</span> <span class="small muted">closes <time data-ts="{{ p.expires_at }}" data-style="R"></time></span>{% else %}<span class="pill accent">full</span>{% endif %}</td>
       <td><form method="post" action="/party-parties/{{ p.id }}/close" class="inline-form" data-confirm="Close this party? Its messages are deleted.">{{ csrf_field() }}<button class="btn small danger" type="submit">Close</button></form></td>
@@ -213,7 +256,7 @@
   <tbody>
   {% for r in interests %}
     <tr>
-      <td>{{ r.user_name }}</td>
+      <td>{{ r.user_name }}{% if tags.get(r.origin_game_id) %} <span class="small muted">{{ tags[r.origin_game_id] }}</span>{% endif %}</td>
       <td>{{ r.pf_class.name if r.pf_class else '?' }} <span class="small muted">{{ TYPE_LABEL.get(r.class_type, '') }}</span></td>
       <td>{{ r.bracket.label if r.bracket else '?' }}</td>
       <td class="small">{% for cid in r.content_ids %}{{ content_names.get(cid, '?') }}{{ ', ' if not loop.last }}{% endfor %}</td>

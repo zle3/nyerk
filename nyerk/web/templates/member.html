@@ -67,7 +67,7 @@
   {% for reg, text in registrations %}
   <div class="row">
     <div class="grow"><div class="title">Looking for a group</div><div class="sub">{{ text }} · until <time data-ts="{{ reg.expires_at }}" data-style="t"></time></div></div>
-    <form method="post" action="/members/{{ uid }}/registration/cancel" class="inline-form">{{ csrf_field() }}<input type="hidden" name="game_id" value="{{ reg.game_id }}"><button class="btn small secondary" type="submit">Cancel</button></form>
+    <form method="post" action="/members/{{ uid }}/registration/cancel" class="inline-form">{{ csrf_field() }}<input type="hidden" name="game_id" value="{{ reg.origin_game_id or reg.game_id }}"><button class="btn small secondary" type="submit">Cancel</button></form>
   </div>
   {% endfor %}
   {% for p, title in parties %}

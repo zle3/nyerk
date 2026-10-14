@@ -3,7 +3,7 @@ from sqlalchemy import select
 
 from nyerk import party
 from nyerk.db import get_settings
-from nyerk.models import PfClass, PfContent, PfInterest
+from nyerk.models import PartyPost, PfClass, PfContent, PfInterest
 from nyerk.party import PartyError, Who
 from .conftest import GUILD, G  # noqa: F401
 
@@ -108,9 +108,12 @@ def test_create_join_fill_leave_reopen(pf):
     assert p.status == "full" and p.remaining_s == 3000
     with pytest.raises(PartyError, match="no longer open"):
         party.join(s, p, who(s, 7, "Gladiator"), T)
+    s.add(PartyPost(party_id=p.id, game_id=p.game_id, listing_message_id=99, listing_hash="x"))
+    s.flush()
+    s.refresh(p)
     res = party.remove_member(s, p, 4, T + 1200)
     assert res.reopened and p.status == "open" and p.expires_at == T + 1200 + 3000
-    assert p.listing_message_id == 0 and not p.ping_pending  # new listing, no re-ping
+    assert p.posts[0].listing_message_id == 0 and not p.ping_pending  # new listing, no re-ping
 
 
 def test_one_party_at_a_time_and_leader_promotion(pf):

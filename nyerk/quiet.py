@@ -16,7 +16,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Game, PfContent, QuietHours, RoleHolder
+from . import party
+from .models import QuietHours, RoleHolder
 
 ZONES = [
     ("America/New_York", "Eastern (New York)"), ("America/Chicago", "Central (Chicago)"),
@@ -50,8 +51,7 @@ def in_window(q: QuietHours, now: int) -> bool:
 
 def content_role_ids(s: Session, guild_id: int) -> set[int]:
     """Every game's dungeon ping roles in a server: quiet hours pause them all."""
-    return {c.role_id for c in s.scalars(select(PfContent).join(Game, PfContent.game_id == Game.id).where(
-        PfContent.role_id != 0, Game.guild_id == guild_id))}
+    return {c.role_id for c in party.server_contents(s, guild_id, False) if c.role_id}
 
 
 def get(s: Session, guild_id: int, user_id: int) -> QuietHours | None:

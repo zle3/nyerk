@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from . import party
 from .models import (
-    Category, PfContent, PfInterest, PfParty, PfPartyMember, RoleHolder,
+    Category, PfInterest, PfParty, PfPartyMember, RoleHolder,
 )
 
 RANGES = {"7": ("Last 7 days", 7 * 86400), "30": ("Last 30 days", 30 * 86400), "all": ("All time", None)}
@@ -84,9 +84,12 @@ def compute(s: Session, range_key: str, now: int, tz: str, game_id: int) -> Stat
     zone = ZoneInfo(tz)
 
     # -- classes and roles (current holders) -----------------------------------
-    class_by_role = {c.role_id: c for c in party.classes(s, game_id) if c.role_id}
+    # A linked game: this server's roles for the shared classes and dungeons;
+    # party finder numbers are the whole shared party finder's.
+    pf = party.pf_id(party.game(s, game_id))
+    class_by_role = {c.role_id: c for c in party.classes_for(s, game_id) if c.role_id}
     game_roles = set(class_by_role) | {c.role_id for c in s.scalars(select(Category).where(
-        Category.role_id != 0, Category.game_id == game_id))} | {c.role_id for c in party.contents(s, game_id, False)
+        Category.role_id != 0, Category.game_id == game_id))} | {c.role_id for c in party.contents_for(s, game_id, False)
                                                                 if c.role_id}
     holders = [h for h in s.scalars(select(RoleHolder)) if h.role_id in game_roles]
     st.tracked_members = len({h.user_id for h in holders})
@@ -99,27 +102,26 @@ def compute(s: Session, range_key: str, now: int, tz: str, game_id: int) -> Stat
     ping_counts = Counter(h.role_id for h in holders if h.kind == "ping")
     labels = {c.role_id: c.name for c in s.scalars(select(Category).where(Category.role_id != 0,
                                                                           Category.game_id == game_id))}
-    labels |= {c.role_id: f"{c.name} (dungeon)" for c in s.scalars(select(PfContent).where(
-        PfContent.role_id != 0, PfContent.game_id == game_id))}
+    labels |= {c.role_id: f"{c.name} (dungeon)" for c in party.contents_for(s, game_id, False) if c.role_id}
     st.ping_roles = bars(sorted(((labels.get(r, f"Role {r}"), n) for r, n in ping_counts.items()),
                                 key=lambda x: -x[1]))
 
     # -- content demand -----------------------------------------------------------
-    regs = list(s.scalars(select(PfInterest).where(PfInterest.created_at >= since, PfInterest.game_id == game_id)))
+    regs = list(s.scalars(select(PfInterest).where(PfInterest.created_at >= since, PfInterest.game_id == pf)))
     st.registrations = len(regs)
     st.registrants = len({r.user_id for r in regs})
-    contents = party.contents(s, game_id, False)
+    contents = party.contents(s, pf, False)
     names = {c.id: party.party_title_for(c) for c in contents}
     interest = Counter(cid for r in regs for cid in (r.content_ids or []))
-    parties = list(s.scalars(select(PfParty).where(PfParty.created_at >= since, PfParty.game_id == game_id)))
+    parties = list(s.scalars(select(PfParty).where(PfParty.created_at >= since, PfParty.game_id == pf)))
     by_content = Counter(p.content_id for p in parties)
     st.content_interest = bars(sorted(((names.get(c, "Removed"), n) for c, n in interest.items()),
                                       key=lambda x: -x[1]))
     st.content_parties = bars(sorted(((names.get(c, "Removed"), n) for c, n in by_content.items()),
                                      key=lambda x: -x[1]))
     bracket_counts = Counter(r.bracket_id for r in regs)
-    st.brackets = bars([(b.label, bracket_counts.get(b.id, 0)) for b in party.brackets(s, game_id)], note_share=True)
-    window_labels = {w.minutes: w.label or f"{w.minutes} min" for w in party.windows(s, game_id)}
+    st.brackets = bars([(b.label, bracket_counts.get(b.id, 0)) for b in party.brackets(s, pf)], note_share=True)
+    window_labels = {w.minutes: w.label or f"{w.minutes} min" for w in party.windows(s, pf)}
     window_counts = Counter(round((r.expires_at - r.created_at) / 60) for r in regs)
     st.windows = bars([(window_labels.get(m, f"{m} min"), window_counts.get(m, 0))
                        for m in sorted(set(window_labels) | set(window_counts))], note_share=True)

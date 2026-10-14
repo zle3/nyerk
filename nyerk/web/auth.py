@@ -31,7 +31,7 @@ HOST_PATHS = ("/servers", "/settings/password")  # the password is the host's, f
 OWNER_PATHS = ("/settings", "/history", "/access", "/games", "/setup")
 # Admins may view these pages and use the listed actions; other changes are owner-only.
 ADMIN_POSTS_UNDER_OWNER_PAGES = ("/categories/repost-roles",)
-OWNER_POSTS = ("/categories", "/roles/", "/party/types", "/party/classes")
+OWNER_POSTS = ("/categories", "/roles/", "/party/types", "/party/classes", "/party/linked")
 
 
 # Owner-only areas the owner can open to admins on the Access page, so they

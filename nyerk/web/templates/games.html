@@ -31,6 +31,44 @@
   {% endfor %}
 </div>
 
+<p class="section-label" id="links">Party finders shared with other servers</p>
+<p class="small muted">Several servers can run one party finder together. One server's game is the home: its classes, dungeons, gear scores and parties are used. Every linked server shows the same parties and sign-ups in its own party channel, with its own roles; pings stay in each member's own server. Listings show which server each member is from. Either side can unlink at any time.</p>
+<div class="list">
+  {% for r in rows %}{% set g = r.g %}
+  <div class="row">
+    <div class="grow">
+      <strong>{{ g.name }}</strong>
+      {% if r.home %}
+        <span class="small">uses <strong>{{ r.home_server or 'another server' }}</strong>'s {{ r.home.name }} party finder. <a href="/party?game={{ g.id }}#linked">Set this server's roles</a></span>
+      {% elif r.linked %}
+        <span class="small">shared with {% for x, server in r.linked %}<strong>{{ server }}</strong> ({{ x.name }}){{ ', ' if not loop.last }}{% endfor %}</span>
+      {% else %}
+        <span class="small muted">own party finder, not shared</span>
+      {% endif %}
+      {% if r.code %}<div class="small mt">Link code: <code class="mono">{{ r.code }}</code> · works until <time data-ts="{{ r.code_expires }}" data-style="f"></time></div>{% endif %}
+    </div>
+    <div class="inline">
+      {% if r.home %}
+        <form method="post" action="/games/{{ g.id }}/link/unlink" class="inline-form" data-confirm="Stop using {{ r.home_server or 'the other server' }}'s party finder? This server's sign-ups there end.">
+          {{ csrf_field() }}<button class="btn small danger" type="submit">Unlink</button></form>
+      {% else %}
+        {% for x, server in r.linked %}
+        <form method="post" action="/games/{{ g.id }}/link/unlink" class="inline-form" data-confirm="Stop sharing {{ g.name }}'s party finder with {{ server }}? Their sign-ups end.">
+          {{ csrf_field() }}<input type="hidden" name="other" value="{{ x.id }}"><button class="btn small danger" type="submit">Unlink {{ server }}</button></form>
+        {% endfor %}
+        <form method="post" action="/games/{{ g.id }}/link/code" class="inline-form">
+          {{ csrf_field() }}<button class="btn small secondary" type="submit">{{ 'New link code' if r.code else 'Share: make a link code' }}</button></form>
+        {% if not r.linked %}
+        <form method="post" action="/games/{{ g.id }}/link/join" class="inline-form" data-confirm="Use the other server's party finder for {{ g.name }}? Its own classes, dungeons and gear scores stay but go unused, its open parties close, and sign-ups end.">
+          {{ csrf_field() }}<input type="text" name="code" placeholder="Link code from another server" class="mono" aria-label="Link code for {{ g.name }}" required>
+          <button class="btn small" type="submit">Join</button></form>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
 <p class="section-label" id="add">Add a game</p>
 <form method="post" action="/games/new" class="card">
   {{ csrf_field() }}

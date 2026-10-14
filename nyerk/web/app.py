@@ -25,13 +25,13 @@ from . import auth
 from . import search as websearch
 from . import security as websecurity
 
-from .. import db, engine, forgotten, games, history, servers, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
+from .. import db, engine, forgotten, games, history, linking, servers, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus, current_guild
 from ..models import (
-    AlertSlot, Category, ConfigChange, Event, Game, LogEntry, PfBracket, PfClass, PfContent, PfInterest, PfParty,
-    PfWindow, QuietHours, ReactionGroup, RoleHolder, UserTimer,
+    AlertSlot, Category, ConfigChange, Event, Game, LinkedRole, LogEntry, PartyPost, PfBracket, PfClass, PfContent,
+    PfInterest, PfParty, PfWindow, QuietHours, ReactionGroup, RoleHolder, UserTimer,
 )
 from ..seed import make_slots, NONE
 
@@ -289,6 +289,24 @@ def create_app(cfg, bot=None) -> FastAPI:
             raise HTTPException(404)
         return row
 
+    def shared(request: Request, s, row):
+        """A party or registration in a party finder: reachable from the
+        server it was made from and from the party finder's own server."""
+        home = s.get(Game, row.game_id) if row is not None else None
+        if row is None or guild_of(request) not in {servers.row_guild(s, row), home.guild_id if home else None}:
+            raise HTTPException(404)
+        return row
+
+    def seated(request: Request, s, pid: int, uid: int) -> PfParty:
+        """A party this server's member sits in, joined from this server (in
+        a linked party finder the party may be another server's)."""
+        p = s.get(PfParty, pid)
+        here = {g.id for g in games.all_games(s, guild_of(request))}
+        seat = next((m for m in p.members if m.user_id == uid), None) if p else None
+        if seat is None or (seat.origin_game_id or p.game_id) not in here:
+            raise HTTPException(404)
+        return p
+
     def own_game_id(request: Request, s, data) -> int:
         """A game ID from a form, only if it is one of this server's games."""
         g = games.get(s, _int(data, "game_id", 0, 0, 10**9), guild_of(request))
@@ -297,12 +315,13 @@ def create_app(cfg, bot=None) -> FastAPI:
         return g.id
 
     def own_gear_target(request: Request, s, data, raw: str) -> tuple[int, int | None]:
-        """(game, bracket or None to clear) from a gear score form, inside this server."""
-        gid = own_game_id(request, s, data)
+        """(party finder game, bracket or None to clear) from a gear score form,
+        for one of this server's games (a linked game's brackets are the home's)."""
+        gid = party.pf_id(s.get(Game, own_game_id(request, s, data)))
         if not raw.isdigit():
             return gid, None
-        bracket = mine(request, s, s.get(PfBracket, int(raw)))
-        if bracket.game_id != gid:
+        bracket = s.get(PfBracket, int(raw))
+        if bracket is None or bracket.game_id != gid:
             raise HTTPException(404)
         return gid, bracket.id
 
@@ -675,11 +694,75 @@ def create_app(cfg, bot=None) -> FastAPI:
         require(request)
         with db.session() as s:
             rows = []
+            names = {x.guild_id: x.guild_name for x in servers.all_servers(s)}
+            t = int(time.time())
             for g in games.all_games(s, guild_of(request)):
+                home = s.get(Game, g.link_home_id) if g.link_home_id else None
+                linked = list(s.scalars(select(Game).where(Game.link_home_id == g.id).order_by(Game.id)))
                 rows.append(dict(g=g, events=s.scalar(select(func.count()).select_from(Event).where(
                     Event.game_id == g.id, Event.overrides_event_id.is_(None))) or 0,
-                    classes=len(party.classes(s, g.id)), contents=len(party.contents(s, g.id, False))))
+                    classes=len(party.classes_for(s, g)), contents=len(party.contents_for(s, g, False)),
+                    home=home, home_server=names.get(home.guild_id, "") if home else "",
+                    linked=[(x, names.get(x.guild_id, "") or str(x.guild_id)) for x in linked],
+                    code=g.link_code if g.link_code and g.link_code_expires > t else "",
+                    code_expires=g.link_code_expires))
         return render(request, "games.html", rows=rows, kinds=games.KINDS)
+
+    @app.post("/games/{game_id}/link/code")
+    async def game_link_code(request: Request, game_id: int):
+        await form(request)
+        try:
+            with db.session() as s:
+                g = games.get(s, game_id, guild_of(request)) or _404()
+                code, name = linking.new_code(s, g), g.name
+        except linking.LinkError as exc:
+            flash(request, str(exc), "err")
+            return back("/games#links")
+        bus.info("config", f"Link code made for {name}'s party finder.", discord=False)
+        flash(request, f"Link code for {name}: {code} . Give it to the other server's owner; it works for "
+                       f"{linking.CODE_TTL // 3600} hours, for any number of servers.")
+        return back("/games#links")
+
+    @app.post("/games/{game_id}/link/join")
+    async def game_link_join(request: Request, game_id: int):
+        data = await form(request)
+        try:
+            with db.session() as s:
+                g = games.get(s, game_id, guild_of(request)) or _404()
+                home = linking.join(s, g, str(data.get("code", "")))
+                name, home_name = g.name, home.name
+                home_server = servers.get(s, home.guild_id).guild_name if servers.get(s, home.guild_id) else ""
+        except linking.LinkError as exc:
+            flash(request, str(exc), "err")
+            return back("/games#links")
+        bus.info("config", f"{name} now uses the {home_name} party finder of {home_server or 'another server'}.")
+        refresh(repost=True, game_id=game_id)
+        flash(request, f"{name} now shares {home_server or 'the other server'}'s {home_name} party finder. "
+                       "Next: give its classes and dungeons this server's roles on the Party finder page, "
+                       "then post the party finder panels again.")
+        return back(f"/party?game={game_id}#linked")
+
+    @app.post("/games/{game_id}/link/unlink")
+    async def game_link_unlink(request: Request, game_id: int):
+        """Either side ends a link: this server's game stops using another
+        server's party finder (game_id here), or this server's party finder
+        stops being shared with one game (other)."""
+        data = await form(request)
+        with db.session() as s:
+            g = games.get(s, game_id, guild_of(request)) or _404()
+            other = _int(data, "other", 0, 0, 10**9)
+            target = g if not other else s.get(Game, other)
+            if target is None or (other and target.link_home_id != g.id) or not target.link_home_id:
+                flash(request, "That link is already gone.")
+                return back("/games#links")
+            linking.unlink(s, target)
+            name = target.name
+            server = servers.get(s, target.guild_id).guild_name if servers.get(s, target.guild_id) else ""
+        bus.info("config", f"Party finder link ended: {name} ({server or 'another server'}).")
+        refresh(repost=True)
+        flash(request, f"Unlinked. {name} has its own party finder again; repost its panels there."
+              if not other else f"Unlinked {name} ({server}). Its server keeps its own party finder.")
+        return back("/games#links")
 
     @app.post("/games/new")
     async def game_add(request: Request):
@@ -733,9 +816,13 @@ def create_app(cfg, bot=None) -> FastAPI:
             msgs += [(g.party_channel_id, x) for x in (g.class_panel_message_id, g.gear_panel_message_id,
                                                       g.interest_panel_message_id, g.party_panel_message_id,
                                                       g.party_status_message_id)]
-            for p in s.scalars(select(PfParty).where(PfParty.game_id == game_id)):
-                msgs += [(g.party_channel_id, x) for x in (p.listing_message_id, p.ping_message_id,
-                                                          p.warning_message_id, p.ready_message_id)]
+            # Party messages in this game's channel, and in linked servers' channels for its parties.
+            for post, channel in s.execute(
+                    select(PartyPost, Game.party_channel_id).join(Game, PartyPost.game_id == Game.id)
+                    .join(PfParty, PartyPost.party_id == PfParty.id)
+                    .where((PfParty.game_id == game_id) | (PartyPost.game_id == game_id))):
+                msgs += [(channel, x) for x in (post.listing_message_id, post.ping_message_id,
+                                                post.warning_message_id, post.ready_message_id)]
             s.execute(text("DELETE FROM games WHERE id = :id"), {"id": game_id})  # the database removes the rest
             if request.session.get("game_id") == game_id:
                 request.session.pop("game_id", None)
@@ -944,7 +1031,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         with db.session() as s:
             try:
                 gid, bid = own_gear_target(request, s, data, raw)
-                b = party.set_gear(s, user["uid"], user["name"], bid, int(time.time()), gid)
+                b = party.set_gear(s, user["uid"], user["name"], bid, int(time.time()), gid, guild_id=guild_of(request))
             except party.PartyError as exc:
                 flash(request, str(exc), "err")
                 return back("/me#gear")
@@ -1016,7 +1103,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         user = me(request)
         with db.session() as s:
-            row = party.cancel_registration(s, user["uid"], own_game_id(request, s, data))
+            row = party.cancel_registration(s, user["uid"], party.pf_id(s.get(Game, own_game_id(request, s, data))))
         if row:
             refresh()
         flash(request, "Registration cancelled." if row else "You weren't registered.")
@@ -1028,7 +1115,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         user = me(request)
         try:
             with db.session() as s:
-                p = mine(request, s, s.get(PfParty, _int(data, "party_id", 0, 0, 10**12)))
+                p = seated(request, s, _int(data, "party_id", 0, 0, 10**12), user["uid"])
                 if p.status not in party.LIVE or all(m.user_id != user["uid"] for m in p.members):
                     raise party.PartyError("You're not in that party.")
                 title = party.party_title(p)
@@ -1148,7 +1235,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             name = members.detail(s, guild_of(request), uid)["name"] or f"User {uid}"
             try:
                 gid, bid = own_gear_target(request, s, data, raw)
-                b = party.set_gear(s, uid, name, bid, int(time.time()), gid)
+                b = party.set_gear(s, uid, name, bid, int(time.time()), gid, guild_id=guild_of(request))
             except party.PartyError as exc:
                 flash(request, str(exc), "err")
                 return back(f"/members/{uid}#gear")
@@ -1200,7 +1287,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def member_registration_cancel(request: Request, uid: int):
         data = await form(request)
         with db.session() as s:
-            row = party.cancel_registration(s, uid, own_game_id(request, s, data))
+            row = party.cancel_registration(s, uid, party.pf_id(s.get(Game, own_game_id(request, s, data))))
             name = row.user_name if row else ""
         if row:
             bus.info("party", f"Registration of {name} cancelled by admin.")
@@ -1214,7 +1301,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         try:
             with db.session() as s:
                 pid = _int(data, "party_id", 0, 0, 10**12)
-                p = mine(request, s, s.get(PfParty, pid))
+                p = seated(request, s, pid, uid)
                 if p.status not in party.LIVE or all(m.user_id != uid for m in p.members):
                     raise party.PartyError("Not in that party.")
                 title = party.party_title(p)
@@ -1365,14 +1452,21 @@ def create_app(cfg, bot=None) -> FastAPI:
             assign = [("category", c.id, c.name, c.role_id, c.emoji, c.group_id or default_group.get("category"))
                       for c in cats]
             assign += [("content", c.id, c.name, c.role_id, c.react_emoji, c.group_id or default_group.get("content"))
-                       for c in party.contents(s, game.id, False)]
+                       for c in party.contents(s, game.id, False) if not game.link_home_id]
+            if game.link_home_id:  # a linked game's dungeons: this server's roles for them
+                names = {c.id: c.name for c in party.contents(s, game.link_home_id, False)}
+                assign += [("linked", r.id, names[r.ref_id], r.role_id, r.react_emoji,
+                            r.group_id or default_group.get("content"))
+                           for r in s.scalars(select(LinkedRole).where(LinkedRole.game_id == game.id,
+                                                                       LinkedRole.kind == "content"))
+                           if r.ref_id in names and r.role_id]
             previews = [text for text, _ in reaction_roles.messages(s, guild_of(request))]
             ctx = dict(cats=cats, counts=counts, groups=groups, assign=assign, emoji_of=emoji_of,
                        roles_header=get_settings(s, guild_of(request)).roles_header,
                        previews=previews, class_preview=party.class_panel_text(game),
                        clear_preview=reaction_roles.CLEAR_TEXT,
                        gear_preview=party.gear_panel_text(game, len(games.all_games(s, guild_of(request))) > 1),
-                       gear_labels=[b.label for b in party.brackets(s, game.id)],
+                       gear_labels=[b.label for b in party.brackets(s, party.pf_id(game))],
                        posted=bool(state.reaction_messages or state.reaction_message_id))
         return render(request, "categories.html", **ctx)
 
@@ -1470,7 +1564,8 @@ def create_app(cfg, bot=None) -> FastAPI:
             valid = {g.id for g in reaction_roles.groups(s, guild_of(request))}
             changed = 0
             here = select(Game.id).where(Game.guild_id == guild_of(request))
-            for model, kind, attr in ((Category, "category", "emoji"), (PfContent, "content", "react_emoji")):
+            for model, kind, attr in ((Category, "category", "emoji"), (PfContent, "content", "react_emoji"),
+                                      (LinkedRole, "linked", "react_emoji")):
                 for row in s.scalars(select(model).where(model.game_id.in_(here))):
                     gid = data.get(f"group_{kind}_{row.id}")
                     gid = int(gid) if gid and str(gid).isdigit() and int(gid) in valid else row.group_id
@@ -1923,13 +2018,17 @@ def create_app(cfg, bot=None) -> FastAPI:
         t = int(time.time())
         with db.session() as s:
             settings = game_of(request, s)
-            gid = settings.id
+            gid = party.pf_id(settings)  # a linked game shows the home's party finder
+            home = s.get(Game, gid) if settings.link_home_id else None
             parties = party.live_parties(s, gid)
             interests = list(s.scalars(select(PfInterest).where(PfInterest.status == "active",
                                                                PfInterest.expires_at > t, PfInterest.game_id == gid)
                                        .order_by(PfInterest.expires_at)))
             for r in interests:
                 _ = r.pf_class, r.bracket
+            tags = linking.tags(s, gid)
+            emoji = {r.ref_id: r for r in s.scalars(select(LinkedRole).where(
+                LinkedRole.game_id == settings.id, LinkedRole.kind == "content"))}
             quiet_rows = []
             for q in s.scalars(select(QuietHours).where(QuietHours.enabled.is_(True),
                                                         QuietHours.guild_id == guild_of(request))
@@ -1938,9 +2037,11 @@ def create_app(cfg, bot=None) -> FastAPI:
                     RoleHolder.guild_id == q.guild_id, RoleHolder.user_id == q.user_id,
                     RoleHolder.suspended.is_(True))) or 0
                 quiet_rows.append((q, quiet.window_text(q), paused))
-            ctx = dict(st=settings, state=settings, classes=party.classes(s, gid), brackets=party.brackets(s, gid),
-                       quiet_rows=quiet_rows,
-                       windows=party.windows(s, gid), contents=party.contents(s, gid, False), parties=parties,
+            home_server = servers.get(s, home.guild_id) if home else None
+            ctx = dict(st=settings, state=settings, classes=party.classes_for(s, settings),
+                       brackets=party.brackets(s, gid), quiet_rows=quiet_rows, home=home,
+                       home_server=home_server.guild_name if home_server else "", tags=tags, linked_emoji=emoji,
+                       windows=party.windows(s, gid), contents=party.contents_for(s, settings, False), parties=parties,
                        interests=interests, content_names={c.id: c.name for c in party.contents(s, gid, False)},
                        TYPE_LABEL=party.TYPE_LABEL)
         return render(request, "party.html", **ctx)
@@ -1963,6 +2064,38 @@ def create_app(cfg, bot=None) -> FastAPI:
         bus.info("config", "Party finder type roles and default makeup saved.")
         flash(request, "Saved. Repost the class panel if role IDs changed.")
         return back("/party")
+
+    @app.post("/party/linked")
+    async def party_linked_roles(request: Request):
+        """A linked game: this server's roles for the shared classes and dungeons."""
+        data = await form(request)
+        try:
+            with db.session() as s:
+                g = game_of(request, s)
+                if not g.link_home_id:
+                    raise ValueError("This game has its own party finder")
+                changed = 0
+                for kind, rows in (("class", party.classes_for(s, g)), ("content", party.contents_for(s, g, False))):
+                    roles = {}
+                    for c in rows:
+                        roles[c.id] = _role_id(data.get(f"role_{kind}_{c.id}"))
+                    used = [r for r in roles.values() if r]
+                    if len(used) != len(set(used)):
+                        raise ValueError(f"Two {'classes' if kind == 'class' else 'dungeons'} use the same role ID")
+                    for c in rows:
+                        if c.role_id != roles[c.id]:
+                            linking.set_role(s, g, kind, c.id, roles[c.id])
+                            changed += 1
+                name = g.name
+        except ValueError as exc:
+            flash(request, f"Nothing saved: {exc}.", "err")
+            return back("/party#linked")
+        if changed:
+            bus.info("config", f"{name}: roles for the shared party finder saved ({changed} changed).")
+            refresh()
+        flash(request, f"Saved {changed} role{'s' if changed != 1 else ''}. Repost the class panel and the roles "
+                       "channel to update their buttons." if changed else "No changes.")
+        return back("/party#linked")
 
     @app.post("/party/classes/bulk")
     async def party_classes_bulk(request: Request):
@@ -2036,13 +2169,15 @@ def create_app(cfg, bot=None) -> FastAPI:
             return back("/party#content")
         with db.session() as s:
             only = str(data.get("content_id", "")).strip()
-            ids = [c.id for c in party.contents(s, game_of(request, s).id, False)
+            g = game_of(request, s)
+            linked = g.id if g.link_home_id else None
+            ids = [c.id for c in party.contents_for(s, g, False)
                    if not c.role_id and (not only or str(c.id) == only)]
         if not ids:
             flash(request, "Every dungeon already has a role.")
             return back("/party#content")
         try:
-            made = await bot.create_content_roles(guild_of(request), ids)
+            made = await bot.create_content_roles(guild_of(request), ids, game_id=linked)
         except Exception as exc:
             bus.error("roles", f"Creating dungeon roles failed: {exc!r}")
             flash(request, f"Discord refused: {exc}. Nyerk needs the Manage Roles permission.", "err")
@@ -2150,7 +2285,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def party_close(request: Request, pid: int):
         await form(request)
         with db.session() as s:
-            p = mine(request, s, s.get(PfParty, pid))
+            p = shared(request, s, s.get(PfParty, pid))
             if p.status in party.LIVE:
                 party.end(p, "closed", int(time.time()))
                 title = party.party_title(p)
@@ -2177,7 +2312,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def party_interest_cancel(request: Request, rid: int):
         await form(request)
         with db.session() as s:
-            r = mine(request, s, s.get(PfInterest, rid))
+            r = shared(request, s, s.get(PfInterest, rid))
             name = r.user_name
             if r.status == "active":
                 r.status = "cancelled"
@@ -2238,9 +2373,9 @@ def _gears(s, guild_id: int, uid: int) -> list[dict]:
     """A member's gear score in each of a server's games that has gear score options."""
     out = []
     for g in games.all_games(s, guild_id, enabled_only=True):
-        brackets = party.brackets(s, g.id)
+        brackets = party.brackets(s, party.pf_id(g))
         if brackets:
-            gear = party.gear_of(s, uid, g.id)
+            gear = party.gear_of(s, uid, party.pf_id(g))
             out.append(dict(game_id=g.id, name=g.name, brackets=brackets, gear_id=gear.id if gear else 0))
     return out
 
