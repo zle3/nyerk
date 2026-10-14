@@ -531,8 +531,14 @@ class NyerkBot(discord.Client):
             due = engine.due_slots(s, t, last)
             to_send = []
             skipped = []
+            held = []
             for d in due:
-                if d.action == "skip":
+                if d.action == "maintenance":  # the game is down then: never sent, not a missed alert
+                    s.add(SentMessage(event_id=d.occ.event.id, timer_id=d.occ.timer_id, occurrence_at=d.occ.at,
+                                      slot=d.slot.lead_minutes, status="skipped", sent_at=t))
+                    held.append((guild_of.get(d.occ.event.game_id, 0),
+                                 f"{d.occ.event.name} ({_slot_name(d.slot.lead_minutes)})"))
+                elif d.action == "skip":
                     s.add(SentMessage(event_id=d.occ.event.id, timer_id=d.occ.timer_id, occurrence_at=d.occ.at,
                                       slot=d.slot.lead_minutes, status="skipped", sent_at=t))
                     skipped.append((guild_of.get(d.occ.event.game_id, 0),
@@ -545,6 +551,10 @@ class NyerkBot(discord.Client):
                     to_send.append((d.occ.event.game_id, d.occ.event.id, d.occ.event.name, d.occ.timer_id,
                                     d.occ.at, d.slot.lead_minutes, content, role_id))
 
+        for guild_id in sorted({g for g, _ in held}):
+            with for_guild(guild_id):
+                bus.info("maintenance", "Not sent, the game is in maintenance then: " +
+                         "; ".join(line for g, line in held if g == guild_id), discord=False)
         for guild_id in sorted({g for g, _ in skipped}):
             mine = [line for g, line in skipped if g == guild_id]
             with for_guild(guild_id):

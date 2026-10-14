@@ -52,7 +52,7 @@ class DueSlot:
     occ: Occurrence
     slot: AlertSlot
     send_at: int
-    action: str  # send | skip
+    action: str  # send | skip (missed while Nyerk was down) | maintenance (the game is down then)
 
 
 # --------------------------------------------------------------------------
@@ -104,12 +104,40 @@ def event_occurrences(
     return occ
 
 
-def next_occurrence(event: Event, now: int, overrides: list[Event] | None = None, horizon: int = 40 * 86400) -> Occurrence | None:
+def is_maintenance(event: Event) -> bool:
+    """The game's maintenance: an event in its "Maintenance" category."""
+    return bool(event.category and event.category.name.strip().lower() == "maintenance")
+
+
+def maintenance_windows(events: list[Event], start: int, end: int) -> dict[int, list[tuple[int, int]]]:
+    """{game_id: [(start, end)]} of maintenance running at some point in
+    (start, end]: the regular window, moved weeks and emergency windows."""
+    overrides = _overrides(events)
+    out: dict[int, list[tuple[int, int]]] = {}
+    for e in events:
+        if e.overrides_event_id or not e.enabled or not is_maintenance(e):
+            continue
+        longest = max([e.duration_minutes] + [o.duration_minutes for o in overrides.get(e.id, [])]) * 60
+        for occ in event_occurrences(e, start - longest, end, overrides.get(e.id)):
+            if occ.end > occ.at and occ.end > start:
+                out.setdefault(e.game_id, []).append((occ.at, occ.end))
+    return out
+
+
+def during(windows: list[tuple[int, int]], at: int) -> bool:
+    return any(a <= at < b for a, b in windows)
+
+
+def next_occurrence(event: Event, now: int, overrides: list[Event] | None = None, horizon: int = 40 * 86400,
+                    skip: list[tuple[int, int]] | None = None) -> Occurrence | None:
+    """The next occurrence, passing over any that fall in `skip` (maintenance)."""
     if schedules.get(event.schedule_type).repeat == "hourly":
         horizon = 3 * 3600
     elif schedules.get(event.schedule_type).repeat == "daily":
         horizon = 2 * 86400
-    occ = event_occurrences(event, now, now + horizon, overrides)
+    if skip:  # look past the end of maintenance
+        horizon = max(horizon, max(b for _, b in skip) - now + horizon)
+    occ = [o for o in event_occurrences(event, now, now + horizon, overrides) if not during(skip or [], o.at)]
     return occ[0] if occ else None
 
 
@@ -137,6 +165,7 @@ def due_slots(s: Session, now: int, last_tick: int) -> list[DueSlot]:
                                                Game.guild_id.in_(servers.approved_ids(s)))))
     events = [e for e in load_events(s) if e.game_id in live]  # switched-off games and waiting servers send nothing
     overrides = _overrides(events)
+    down = maintenance_windows(events, last_tick, now + 7 * 86400)
     timers = list(s.scalars(select(UserTimer).where(UserTimer.status == "active")))
     out: list[DueSlot] = []
     for event in events:
@@ -149,6 +178,7 @@ def due_slots(s: Session, now: int, last_tick: int) -> list[DueSlot]:
         if not slots:
             continue
         max_lead = max(sl.lead_minutes for sl in slots) * 60
+        held = [] if is_maintenance(event) else down.get(event.game_id, [])
         for occ in event_occurrences(event, last_tick, now + max_lead, overrides.get(event.id), timers):
             for sl in slots:
                 send_at = occ.at - sl.lead_minutes * 60
@@ -156,7 +186,10 @@ def due_slots(s: Session, now: int, last_tick: int) -> list[DueSlot]:
                     continue
                 if occ.timer and send_at < occ.timer.armed_at - 1:
                     continue  # warning was already in the past when reported
-                out.append(DueSlot(occ, sl, send_at, "skip" if now - send_at > GRACE_SECONDS else "send"))
+                action = "skip" if now - send_at > GRACE_SECONDS else "send"
+                if during(held, occ.at):
+                    action = "maintenance"  # it would happen while the game is down
+                out.append(DueSlot(occ, sl, send_at, action))
     if not out:
         return out
     seen = {
@@ -266,6 +299,7 @@ def build_dashboard(s: Session, settings: Game, now: int) -> Dashboard:
     """The dashboard for one game (`settings` is the game: its wording and events)."""
     events = load_events(s, settings.id)
     overrides = _overrides(events)
+    down = maintenance_windows(events, now, now + 7 * 86400).get(settings.id, [])
     top: list[str] = []
     main: list[tuple[int, str]] = []
     oneoffs: list[tuple[int, str]] = []
@@ -285,7 +319,7 @@ def build_dashboard(s: Session, settings: Game, now: int) -> Dashboard:
             if nxt:
                 top.append(_line(_label(e, False), nxt.at, now, settings))
             continue
-        nxt = next_occurrence(e, now, overrides.get(e.id))
+        nxt = next_occurrence(e, now, overrides.get(e.id), skip=down)  # nothing happens during maintenance
         if not nxt:
             continue
         if st.repeat == "oneoff":

@@ -299,3 +299,40 @@ def test_route_update_reorders_and_renames_untouched_locations(s):
                                             "Silent Dartan")] == [0, 1, 2, 3]
     assert boss(s, "High Commander Lagta").location == "Laborer's Rest Stop"
     assert boss(s, "Silent Dartan").location == "My own spot"  # edited by the admin: kept
+
+
+def _utc(*args) -> int:
+    from datetime import datetime, timezone
+    return int(datetime(*args, tzinfo=timezone.utc).timestamp())
+
+
+def test_nothing_fires_during_maintenance(s):
+    """Maintenance is Wednesday 06:30-10:00 UTC; Shugo Festival is hourly."""
+    wed = (2026, 10, 14)
+    due = engine.due_slots(s, _utc(*wed, 6, 55), _utc(*wed, 6, 54, 30))
+    shugo = [d for d in due if d.occ.event.name == "Shugo Festival"]
+    assert shugo and all(d.action == "maintenance" for d in shugo)        # 07:00 is inside the window
+    later = engine.due_slots(s, _utc(*wed, 9, 55), _utc(*wed, 9, 54, 30))
+    assert [d.action for d in later if d.occ.event.name == "Shugo Festival"] == ["send"]   # 10:00: over
+    start = engine.due_slots(s, _utc(*wed, 6, 30), _utc(*wed, 6, 29, 30))
+    assert [d.action for d in start if d.occ.event.name == "Maintenance"] == ["send"]      # its own alert
+
+
+def test_emergency_maintenance_and_boss_timers_are_held_too(s):
+    maint = s.scalar(select(Event).where(Event.name == "Maintenance", Event.overrides_event_id.is_(None)))
+    at = _utc(2026, 10, 16, 15, 0)                                      # a Friday afternoon
+    s.add(Event(game_id=1, name="Maintenance", category_id=maint.category_id, schedule_type="one_off",
+                schedule_params={"at": "2026-10-16 15:00", "tz": "UTC", "_ts": at, "replaces": 0},
+                duration_minutes=60, overrides_event_id=maint.id, enabled=True, dashboard="hidden"))
+    s.flush()
+    boss = timers.find_boss(s, "Eternal Gartua", GUILD)
+    assert timers.report(s, boss, 1, "Rae", at - 3600, respawns_in="1h 30m").ok         # respawns at 15:30
+    due = engine.due_slots(s, at + 30 * 60, at + 30 * 60 - 30)
+    gartua = [d for d in due if d.occ.event.name == "Eternal Gartua"]
+    assert gartua and all(d.action == "maintenance" for d in gartua)
+
+
+def test_dashboard_skips_to_after_maintenance(s):
+    dash = engine.build_dashboard(s, G(s), _utc(2026, 10, 14, 6, 40))
+    shugo = next(line for line in dash.text.splitlines() if line.startswith("Shugo Festival"))
+    assert f"<t:{_utc(2026, 10, 14, 10, 0)}:R>" in shugo                 # not 07:00, 08:00 or 09:00
