@@ -318,6 +318,19 @@ def test_nothing_fires_during_maintenance(s):
     assert [d.action for d in start if d.occ.event.name == "Maintenance"] == ["send"]      # its own alert
 
 
+def test_switched_off_maintenance_still_holds_alerts(s):
+    """Switching the Maintenance event off stops its own alerts, not the window."""
+    maint = s.scalar(select(Event).where(Event.name == "Maintenance", Event.overrides_event_id.is_(None)))
+    maint.enabled = False
+    s.flush()
+    wed = (2026, 10, 14)
+    due = engine.due_slots(s, _utc(*wed, 8, 45), _utc(*wed, 8, 44, 30))
+    rift = [d for d in due if d.occ.event.name == "Spacetime Rift"]
+    assert rift and all(d.action == "maintenance" for d in rift)
+    start = engine.due_slots(s, _utc(*wed, 6, 30), _utc(*wed, 6, 29, 30))
+    assert not [d for d in start if d.occ.event.name == "Maintenance"]  # its own alert stays off
+
+
 def test_emergency_maintenance_and_boss_timers_are_held_too(s):
     maint = s.scalar(select(Event).where(Event.name == "Maintenance", Event.overrides_event_id.is_(None)))
     at = _utc(2026, 10, 16, 15, 0)                                      # a Friday afternoon

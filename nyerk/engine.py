@@ -111,11 +111,13 @@ def is_maintenance(event: Event) -> bool:
 
 def maintenance_windows(events: list[Event], start: int, end: int) -> dict[int, list[tuple[int, int]]]:
     """{game_id: [(start, end)]} of maintenance running at some point in
-    (start, end]: the regular window, moved weeks and emergency windows."""
+    (start, end]: the regular window, moved weeks and emergency windows.
+    A switched-off maintenance event still counts: switching it off stops
+    its own alerts, the game still goes down then."""
     overrides = _overrides(events)
     out: dict[int, list[tuple[int, int]]] = {}
     for e in events:
-        if e.overrides_event_id or not e.enabled or not is_maintenance(e):
+        if e.overrides_event_id or not is_maintenance(e):
             continue
         longest = max([e.duration_minutes] + [o.duration_minutes for o in overrides.get(e.id, [])]) * 60
         for occ in event_occurrences(e, start - longest, end, overrides.get(e.id)):
