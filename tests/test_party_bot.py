@@ -9,7 +9,7 @@ from nyerk.models import PfClass, PfContent, PfParty
 
 from .test_bot import FakeChannel
 from .test_party import T, reg, who
-from nyerk.games import first as G
+from .conftest import GUILD, G  # noqa: F401
 
 
 class StubBot:

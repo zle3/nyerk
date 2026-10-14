@@ -45,17 +45,18 @@ class Group:
     chunks: list[list[Entry]] = field(default_factory=list)  # one per Discord message
 
 
-def groups(s: Session) -> list[ReactionGroup]:
-    return list(s.scalars(select(ReactionGroup).order_by(ReactionGroup.sort_order, ReactionGroup.id)))
+def groups(s: Session, guild_id: int) -> list[ReactionGroup]:
+    return list(s.scalars(select(ReactionGroup).where(ReactionGroup.guild_id == guild_id)
+                          .order_by(ReactionGroup.sort_order, ReactionGroup.id)))
 
 
-def build(s: Session, skip: set[int] | None = None) -> list[Group]:
+def build(s: Session, guild_id: int, skip: set[int] | None = None) -> list[Group]:
     """Every group with its entries and final emojis, in posting order.
     Groups with no roles are left out; roles in `skip` are left out, and so
     are switched-off games' roles. With several games, labels name the game."""
     skip = skip or set()
-    rows = groups(s)
-    live = {g.id: g.name for g in s.scalars(select(Game).where(Game.enabled.is_(True)))}
+    rows = groups(s, guild_id)
+    live = {g.id: g.name for g in s.scalars(select(Game).where(Game.enabled.is_(True), Game.guild_id == guild_id))}
     many = len(live) > 1
 
     def label(game_id, name):
@@ -104,10 +105,10 @@ def _chunks(rows: list[Entry]) -> list[list[Entry]]:
     return [rows[i:i + PER_MESSAGE] for i in range(0, len(rows), PER_MESSAGE)]
 
 
-def messages(s: Session, skip: set[int] | None = None) -> list[tuple[str, list[Entry]]]:
+def messages(s: Session, guild_id: int, skip: set[int] | None = None) -> list[tuple[str, list[Entry]]]:
     """(text, entries) for every reaction message, in posting order."""
     out = []
-    for g in build(s, skip):
+    for g in build(s, guild_id, skip):
         for i, chunk in enumerate(g.chunks):
             head = [f"## {g.name}"] + ([g.description] if g.description else []) if i == 0 \
                 else [f"## {g.name} (continued)"]
@@ -115,11 +116,13 @@ def messages(s: Session, skip: set[int] | None = None) -> list[tuple[str, list[E
     return out
 
 
-def entries(s: Session) -> list[Entry]:
-    return [e for g in build(s) for e in g.entries]
+def entries(s: Session, guild_id: int) -> list[Entry]:
+    return [e for g in build(s, guild_id) for e in g.entries]
 
 
-def ping_role_ids(s: Session) -> set[int]:
-    ids = {c.role_id for c in s.scalars(select(Category).where(Category.role_id != 0))}
-    ids |= {c.role_id for c in s.scalars(select(PfContent).where(PfContent.role_id != 0))}
+def ping_role_ids(s: Session, guild_id: int) -> set[int]:
+    games = select(Game.id).where(Game.guild_id == guild_id)
+    ids = {c.role_id for c in s.scalars(select(Category).where(Category.role_id != 0, Category.game_id.in_(games)))}
+    ids |= {c.role_id for c in s.scalars(select(PfContent).where(PfContent.role_id != 0,
+                                                                 PfContent.game_id.in_(games)))}
     return ids

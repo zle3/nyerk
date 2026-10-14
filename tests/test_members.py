@@ -4,13 +4,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from nyerk.games import first as G
 from nyerk import db, members, party, quiet, tracking
 from nyerk.config import Config
-from nyerk.db import get_settings
+from nyerk.db import get_settings, get_state
 from nyerk.models import Category, PfContent, QuietHours, RoleHolder, UserTimer
 from nyerk.seed import seed, seed_party_finder, seed_reaction_groups
 from nyerk.web.app import create_app, hash_password
+from .conftest import GUILD, G  # noqa: F401
 
 CLERIC, RANGER = 1007, 1004
 SUPPORT, DPS = 2002, 2003
@@ -30,17 +30,17 @@ def setup_roles(s):
 def test_plan_adds_type_roles_and_removes_unticked(s):
     setup_roles(s)
     live = {RANGER, DPS, SHUGO, 555}  # 555 isn't managed by Nyerk and must stay
-    add, remove, hold = members.plan_roles(s, 1, live, {CLERIC, FIRE})
+    add, remove, hold = members.plan_roles(s, GUILD, 1, live, {CLERIC, FIRE})
     assert add == {CLERIC, SUPPORT, FIRE} and remove == {RANGER, DPS, SHUGO} and hold == set()
 
 
 def test_plan_holds_dungeon_roles_during_quiet_hours(s):
     setup_roles(s)
-    quiet.set_hours(s, 1, "Rae", 23, 7, "UTC", set())
-    quiet.confirm(s, 1, "quiet", set())
-    add, remove, hold = members.plan_roles(s, 1, set(), {FIRE, SHUGO})
+    quiet.set_hours(s, GUILD, 1, "Rae", 23, 7, "UTC", set())
+    quiet.confirm(s, GUILD, 1, "quiet", set())
+    add, remove, hold = members.plan_roles(s, GUILD, 1, set(), {FIRE, SHUGO})
     assert add == {SHUGO} and hold == {FIRE}
-    members.record(s, 1, "Rae", {FIRE, SHUGO}, hold)
+    members.record(s, GUILD, 1, "Rae", {FIRE, SHUGO}, hold)
     rows = {r.role_id: r.suspended for r in s.scalars(select(RoleHolder).where(RoleHolder.user_id == 1))}
     assert rows == {FIRE: True, SHUGO: False}
 
@@ -48,15 +48,15 @@ def test_plan_holds_dungeon_roles_during_quiet_hours(s):
 def test_known_members_merges_sources(s):
     setup_roles(s)
     s.commit()
-    tracking.set_classes(5, "Kai", {CLERIC})
-    tracking.add_ping(5, "Kai", SHUGO)
-    quiet.set_hours(s, 6, "Mira", 22, 6, "UTC", set())
+    tracking.set_classes(GUILD, 5, "Kai", {CLERIC})
+    tracking.add_ping(GUILD, 5, "Kai", SHUGO)
+    quiet.set_hours(s, GUILD, 6, "Mira", 22, 6, "UTC", set())
     s.commit()
-    rows = {m.name: m for m in members.known(s)}
+    rows = {m.name: m for m in members.known(s, GUILD)}
     assert rows["Kai"].classes == ["Cleric"] and rows["Kai"].pings == 1
     assert rows["Mira"].quiet == "on"
-    assert [m.name for m in members.known(s, "mir")] == ["Mira"]
-    assert [m.name for m in members.known(s, "5")] == ["Kai"]
+    assert [m.name for m in members.known(s, GUILD, "mir")] == ["Mira"]
+    assert [m.name for m in members.known(s, GUILD, "5")] == ["Kai"]
 
 
 class FakeBot:
@@ -66,16 +66,22 @@ class FakeBot:
     def is_ready(self):
         return True
 
-    def status(self):
-        return {"connected": True, "user": "Nyerk", "guild": "g", "latency_ms": 1, "last_tick": 0}
+    def status(self, guild_id=None):
+        return {"connected": True, "user": "Nyerk", "guild": "g", "guilds": 1, "latency_ms": 1, "last_tick": 0}
+
+    def server_ids(self):
+        return {GUILD}
+
+    async def member_access(self, guild_id, uid):
+        return ("Kai", set(self.roles), False, False) if uid == 5 and guild_id == GUILD else None
 
     def request_refresh(self, repost=False, game_id=None):
         pass
 
-    async def fetch_member(self, uid):
+    async def fetch_member(self, guild_id, uid):
         return ("Kai", set(self.roles)) if uid == 5 else None
 
-    async def admin_apply_roles(self, uid, add, remove):
+    async def admin_apply_roles(self, guild_id, uid, add, remove):
         self.applied.append((uid, add, remove))
         self.roles = (self.roles | add) - remove
         return []
@@ -90,9 +96,9 @@ def admin(tmp_path, monkeypatch):
     monkeypatch.setenv("WEB_TLS", "off")
     db.init_engine(":memory:")
     with db.session() as s:
-        seed(s), seed_party_finder(s), seed_reaction_groups(s)
+        seed(s), seed_party_finder(s), seed_reaction_groups(s, GUILD)
         setup_roles(s)
-        get_settings(s).admin_password_hash = hash_password("pw")
+        get_state(s).admin_password_hash = hash_password("pw")
     bot = FakeBot({RANGER, DPS})
     c = TestClient(create_app(Config(), bot))
     csrf = re.search(r'name="csrf" value="([^"]+)"', c.get("/login").text)[1]
@@ -129,7 +135,7 @@ def test_member_quiet_hours_and_activity(admin):
     csrf = _csrf(admin, "/members/5")
     r = admin.post("/members/5/quiet", data={"csrf": csrf, "enabled": "1", "start": "22", "end": "6",
                                              "tz": "Europe/London"})
-    assert "10 PM (22:00) to 6 AM (06:00), UK (London)" in r.text and admin.bot.quiet_runs == [5]
+    assert "10 PM (22:00) to 6 AM (06:00), UK (London)" in r.text and admin.bot.quiet_runs == [(GUILD, 5)]
     admin.post("/members/5/quiet", data={"csrf": csrf})
     with db.session() as s:
         assert not s.scalar(select(QuietHours).where(QuietHours.user_id == 5)).enabled
@@ -154,16 +160,16 @@ def test_forget_member_erases_their_data(s):
     for i, c in enumerate(party.classes(s, 1)):
         c.role_id = 1001 + i
     s.flush()
-    tracking.add_ping(5, "Raelin", 777)
-    quiet.set_hours(s, 5, "Raelin", 23, 7, "America/New_York", set())
+    tracking.add_ping(GUILD, 5, "Raelin", 777)
+    quiet.set_hours(s, GUILD, 5, "Raelin", 23, 7, "America/New_York", set())
     party.set_gear(s, 5, "Raelin", party.brackets(s, 1)[0].id, T)
     old = party.create(s, who(s, 5, "Templar"), cid, 5, "none", "", "", T - 9000)
     party.end(old, "done", T - 5000)
     live = party.create(s, who(s, 6, "Cleric"), cid, 5, "none", "", "", T)
     party.join(s, live, who(s, 5, "Templar"), T)
-    s.add(LogEntry(at=T, level="INFO", kind="party", text="Raelin joined; Raelinx is someone else."))
+    s.add(LogEntry(guild_id=GUILD, at=T, level="INFO", kind="party", text="Raelin joined; Raelinx is someone else."))
     s.flush()
-    res = m.forget(s, 5, T + 10)
+    res = m.forget(s, GUILD, 5, T + 10)
     s.flush()
     assert res.name == "Raelin" and res.left_party
     for model in (RoleHolder, MemberProfile, QuietHours, PfPartyMember):
@@ -172,7 +178,7 @@ def test_forget_member_erases_their_data(s):
     assert [x.user_id for x in s.get(PfParty, live.id).members] == [6]
     text = s.scalar(select(LogEntry.text).where(LogEntry.kind == "party"))
     assert text == "former member joined; Raelinx is someone else."
-    assert all(x.user_id != 5 for x in m.known(s))
+    assert all(x.user_id != 5 for x in m.known(s, GUILD))
 
 
 def test_forgotten_list_survives_a_restore_and_expires(s, tmp_path, monkeypatch):
@@ -181,15 +187,15 @@ def test_forgotten_list_survives_a_restore_and_expires(s, tmp_path, monkeypatch)
     from .test_party import T
     monkeypatch.setenv("NYERK_DATA_DIR", str(tmp_path))
     cfg = Config()
-    tracking.add_ping(5, "Raelin", 777)
+    tracking.add_ping(GUILD, 5, "Raelin", 777)
     s.commit()
-    members.forget(s, 5, T)
-    forgotten.record(cfg, s, 5, T)
+    members.forget(s, GUILD, 5, T)
+    forgotten.record(cfg, s, GUILD, 5, T)
     s.commit()
     entry = forgotten.load(cfg)[0]
-    assert entry["user_id"] == 5 and set(entry) == {"id", "user_id", "at"}
+    assert entry["user_id"] == 5 and set(entry) == {"id", "guild_id", "user_id", "at"}
     # Live database: already applied, so a member who comes back keeps new data.
-    tracking.add_ping(5, "Raelin", 888)
+    tracking.add_ping(GUILD, 5, "Raelin", 888)
     assert forgotten.reapply(cfg, T + 60) == 0
     assert s.scalars(select(RoleHolder).where(RoleHolder.user_id == 5)).all()
     # A restored older copy: it doesn't know the forget, so it runs again.

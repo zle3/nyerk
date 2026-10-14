@@ -1,9 +1,12 @@
-"""Who may see what. Three levels, decided from Discord, never stored as
-accounts:
+"""Who may see what. Levels are decided from Discord each time, never
+stored as accounts, and apply per Discord server:
 
-- owner:  Discord user IDs in OWNER_IDS (env), or the LAN password login.
-- admin:  members holding a role in ADMIN_ROLE_IDS (env), unless the owner
-          has locked admin access.
+- host:   whoever runs this Nyerk: Discord user IDs in OWNER_IDS (env), or
+          the LAN password login. Every server, plus the Servers page.
+- owner:  the Discord server's owner, in that server.
+- admin:  members with Manage Server in that server, or a role its owner
+          made an admin role (or ADMIN_ROLE_IDS in the env), unless the
+          owner has locked admin access.
 - member: anyone else in the server; only their own /me page.
 
 Pages are protected by one path policy (`needed_level`), applied in
@@ -16,14 +19,15 @@ from urllib.parse import urlencode
 
 import httpx
 
-LEVELS = {"member": 1, "admin": 2, "owner": 3}
+LEVELS = {"member": 1, "admin": 2, "owner": 3, "host": 4}
 RECHECK_SECONDS = 300          # re-read roles from Discord this often
 FRESH_SECONDS = 3600           # owner-only changes need a sign-in this recent
 DISCORD_API = "https://discord.com/api/v10"
 
 # Path prefix -> level needed. First match wins; everything else needs admin.
 # Prefixes end at a path boundary: "/me" must not match "/members".
-MEMBER_PATHS = ("/me", "/auth", "/logout")
+MEMBER_PATHS = ("/me", "/auth", "/logout", "/server/use")
+HOST_PATHS = ("/servers", "/settings/password")  # the password is the host's, for every server
 OWNER_PATHS = ("/settings", "/history", "/access", "/games", "/setup")
 # Admins may view these pages and use the listed actions; other changes are owner-only.
 ADMIN_POSTS_UNDER_OWNER_PAGES = ("/categories/repost-roles",)
@@ -80,6 +84,8 @@ def _under(path: str, prefixes) -> bool:
 def needed_level(path: str, method: str) -> str:
     if _under(path, MEMBER_PATHS):
         return "member"
+    if _under(path, HOST_PATHS):
+        return "host"
     if _under(path, OWNER_PATHS):
         return "owner"
     if method == "POST" and _under(path, OWNER_POSTS) and not _under(path, ADMIN_POSTS_UNDER_OWNER_PAGES):
@@ -91,12 +97,22 @@ def allows(have: str | None, need: str) -> bool:
     return LEVELS.get(have or "", 0) >= LEVELS[need]
 
 
-def level_for(user_id: int, role_ids: set[int], cfg, admin_locked: bool) -> str:
-    if user_id in cfg.owner_ids:
+def server_level(is_server_owner: bool, can_manage: bool, role_ids: set[int], admin_roles: set[int]) -> str:
+    """Someone's level in one server, before the owner's admin lock."""
+    if is_server_owner:
         return "owner"
-    if role_ids & set(cfg.admin_role_ids) and not admin_locked:
+    if can_manage or role_ids & admin_roles:
         return "admin"
     return "member"
+
+
+def effective(base: str | None, locked: bool) -> str | None:
+    """The admin lock turns admins into members until the owner unlocks."""
+    return "member" if base == "admin" and locked else base
+
+
+def parse_ids(raw: str | None) -> set[int]:
+    return {int(x) for x in str(raw or "").replace(" ", "").split(",") if x.isdigit()}
 
 
 def authorize_url(cfg, state: str) -> str:
@@ -128,6 +144,10 @@ async def discord_identify(cfg, code: str) -> tuple[int, str]:
     return int(data["id"]), data.get("global_name") or data.get("username") or "member"
 
 
-def new_session(uid: int, name: str, level: str, via: str, epoch: int) -> dict:
+def new_session(uid: int, name: str, host: bool, servers: dict[str, str], epochs: dict[str, int], via: str,
+                epoch: int) -> dict:
+    """servers: {"<guild id>": base level} for every approved server they're
+    in; epochs: each server's sign-everyone-out counter at sign-in."""
     now = int(time.time())
-    return {"uid": uid, "name": name, "level": level, "via": via, "issued": now, "checked": now, "epoch": epoch}
+    return {"uid": uid, "name": name, "host": host, "servers": servers, "epochs": epochs, "level": "host" if host
+            else "member", "via": via, "issued": now, "checked": now, "epoch": epoch}

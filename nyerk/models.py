@@ -19,8 +19,10 @@ class Base(DeclarativeBase):
 
 
 class Settings(Base):
-    """Server-wide settings. Per-game ones (channels, dashboard, party finder)
-    are on Game."""
+    """One Discord server Nyerk serves: its settings, access switches and
+    roles channel messages. Per-game settings (channels, dashboard, party
+    finder) are on Game. guild_id 0 is the server of an install from before
+    servers, until it is claimed (see servers.claim_legacy)."""
 
     __tablename__ = "settings"
 
@@ -31,7 +33,14 @@ class Settings(Base):
             raise AttributeError(f"Settings has no {key!r}; per-game settings are on Game")
         super().__setattr__(key, value)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    guild_name: Mapped[str] = mapped_column(String(100), default="")
+    # waiting: invited the bot, the host hasn't approved it, Nyerk does nothing there.
+    status: Mapped[str] = mapped_column(String(8), default="waiting")  # approved | waiting
+    joined_at: Mapped[int] = mapped_column(BigInteger, default=0)
+    # Roles the server owner made admins, besides Manage Server (comma-separated IDs).
+    admin_role_ids: Mapped[str] = mapped_column(String(400), default="")
     roles_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
     log_channel_id: Mapped[int] = mapped_column(BigInteger, default=0)
     default_tz: Mapped[str] = mapped_column(String(64), default="America/New_York")
@@ -40,7 +49,6 @@ class Settings(Base):
     link_preview_description: Mapped[str] = mapped_column(
         String(300), default="AION 2 boss timers, event alerts, roles and party finder. "
                              "Sign in with Discord to manage your timers, classes, pings and quiet hours.")
-    admin_password_hash: Mapped[str] = mapped_column(String(255), default="")
     # Owner switch: while on, admin-role holders get member access only.
     admin_locked: Mapped[bool] = mapped_column(Boolean, default=False)
     # Owner-only areas the owner has opened to admins, comma-separated (see web/auth.AREAS).
@@ -49,6 +57,18 @@ class Settings(Base):
     # First message in the roles channel. Blank posts no header.
     roles_header: Mapped[str] = mapped_column(
         String(500), default="# 🎭 Roles\nPick your classes and gear score, then the pings you want. Change them any time.")
+    # Bumped by this server's "Sign everyone out".
+    session_epoch: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Roles channel messages as posted.
+    reaction_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    # {"1️⃣": role_id, ...} as posted, so reordering in the admin page does not
+    # silently change what an existing reaction grants.
+    reaction_map: Mapped[dict] = mapped_column(JSON, default=dict)
+    # {"<message id>": {"<emoji>": role_id}} for every roles message posted.
+    reaction_messages: Mapped[dict] = mapped_column(JSON, default=dict)
+    roles_header_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    roles_clear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
 
 
 
@@ -61,8 +81,8 @@ class Game(Base):
     __tablename__ = "games"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    # 0 = the server in GUILD_ID (one server per Nyerk for now).
-    guild_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    # The Discord server this game belongs to (0 until a pre-servers install is claimed).
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
     name: Mapped[str] = mapped_column(String(64))
     kind: Mapped[str] = mapped_column(String(16), default="custom")  # aion2 | custom
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -137,9 +157,11 @@ class ReactionGroup(Base):
     """One reaction roles message in the roles channel (split past 20)."""
 
     __tablename__ = "reaction_groups"
+    __table_args__ = (UniqueConstraint("guild_id", "name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(64), unique=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    name: Mapped[str] = mapped_column(String(64))
     description: Mapped[str] = mapped_column(String(200), default="")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     # "category" / "content": where roles without a chosen message go.
@@ -247,27 +269,20 @@ class SentMessage(Base):
 
 
 class BotState(Base):
-    """Server-wide bookkeeping. Per-game Discord message IDs are on Game."""
+    """Bookkeeping for this Nyerk as a whole (every server)."""
 
     __tablename__ = "bot_state"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    reaction_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    # {"1️⃣": role_id, ...} as posted, so reordering in the admin page does not
-    # silently change what an existing reaction grants.
-    reaction_map: Mapped[dict] = mapped_column(JSON, default=dict)
-    # {"<message id>": {"<emoji>": role_id}} for every roles message posted.
-    reaction_messages: Mapped[dict] = mapped_column(JSON, default=dict)
+    # The host's password for signing in on the LAN (OWNER_IDS sign in with Discord).
+    admin_password_hash: Mapped[str] = mapped_column(String(255), default="")
     # IDs of entries in data/forgotten.json already applied to this database
     # (see forgotten.py). A restored older copy lacks them, so they run again.
     forgets_applied: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    # Extra messages in the roles channel: header, remove-all.
-    roles_header_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     # One-time data upgrades already applied, so deleting a seeded row sticks.
     upgrades_done: Mapped[list] = mapped_column(JSON, default=list)
-    # Bumped by "Sign everyone out"; sessions from an older epoch are dropped.
+    # Bumped by the host's "Sign everyone out"; sessions from an older epoch are dropped.
     session_epoch: Mapped[int] = mapped_column(Integer, default=0)
-    roles_clear_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     last_tick_at: Mapped[int] = mapped_column(BigInteger, default=0)
     last_backup_day: Mapped[str] = mapped_column(String(10), default="")
 
@@ -278,6 +293,7 @@ class LogEntry(Base):
     __tablename__ = "log_entries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
     at: Mapped[int] = mapped_column(BigInteger)
     level: Mapped[str] = mapped_column(String(8))
     kind: Mapped[str] = mapped_column(String(32))
@@ -424,6 +440,7 @@ class RoleHolder(Base):
     __table_args__ = (UniqueConstraint("user_id", "role_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
     user_id: Mapped[int] = mapped_column(BigInteger)
     user_name: Mapped[str] = mapped_column(String(100), default="")
     role_id: Mapped[int] = mapped_column(BigInteger)
@@ -437,9 +454,11 @@ class QuietHours(Base):
     """A member's daily window without dungeon ping roles."""
 
     __tablename__ = "quiet_hours"
+    __table_args__ = (UniqueConstraint("guild_id", "user_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
     user_name: Mapped[str] = mapped_column(String(100), default="")
     start_min: Mapped[int] = mapped_column(Integer)   # minutes after midnight, member's time zone
     end_min: Mapped[int] = mapped_column(Integer)
@@ -453,9 +472,11 @@ class MemberProfile(Base):
     """Per-member settings Nyerk keeps itself (not Discord roles)."""
 
     __tablename__ = "member_profiles"
+    __table_args__ = (UniqueConstraint("guild_id", "user_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
     user_name: Mapped[str] = mapped_column(String(100), default="")
     updated_at: Mapped[int] = mapped_column(BigInteger, default=0)
 
@@ -483,6 +504,7 @@ class ConfigChange(Base):
     __tablename__ = "config_changes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
     at: Mapped[int] = mapped_column(BigInteger)
     user_id: Mapped[int] = mapped_column(BigInteger, default=0)
     user_name: Mapped[str] = mapped_column(String(100), default="")

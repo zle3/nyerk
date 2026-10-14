@@ -98,8 +98,8 @@
   {% else %}<p class="small muted">Import needs Settings, Message wording and Roles opened to admins on the Access page.</p>{% endif %}
 </div>
 
-{% if is_owner %}
-<p class="section-label" id="admin-password">Admin password</p>
+{% if is_host %}
+<p class="section-label" id="admin-password">Host password</p>
 <form method="post" action="/settings/password" class="card">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <input type="text" name="username" value="admin" autocomplete="username" hidden>

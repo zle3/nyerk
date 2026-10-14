@@ -30,12 +30,16 @@ def boss_events(s: Session, enabled_only: bool = True, game_id: int | None = Non
     if game_id is not None:
         q = q.where(Event.game_id == game_id)
     if enabled_only:
-        q = q.where(Event.enabled.is_(True), Event.game_id.in_(select(Game.id).where(Game.enabled.is_(True))))
+        from . import servers
+        q = q.where(Event.enabled.is_(True), Event.game_id.in_(select(Game.id).where(
+            Game.enabled.is_(True), Game.guild_id.in_(servers.approved_ids(s)))))
     return list(s.scalars(q))
 
 
-def find_boss(s: Session, name_or_id: str) -> Event | None:
-    bosses = boss_events(s)
+def find_boss(s: Session, name_or_id: str, guild_id: int) -> Event | None:
+    """An enabled boss of one server, by event ID or name."""
+    mine = set(s.scalars(select(Game.id).where(Game.guild_id == guild_id)))
+    bosses = [b for b in boss_events(s) if b.game_id in mine]
     key = str(name_or_id).strip()
     for b in bosses:
         if str(b.id) == key or b.name.lower() == key.lower():
@@ -53,7 +57,8 @@ def active_count(s: Session, user_id: int, game_id: int | None = None) -> int:
 
 def _compute(s: Session, boss: Event, now: int, killed_at: str, respawns_in: str) -> tuple[str, int | None, int]:
     """-> (mode, killed_at_ts, fire_at). Raises TimeParseError."""
-    settings, game = get_settings(s), s.get(Game, boss.game_id)
+    game = s.get(Game, boss.game_id)
+    settings = get_settings(s, game.guild_id)
     killed_at, respawns_in = (killed_at or "").strip(), (respawns_in or "").strip()
     if killed_at and respawns_in:
         raise TimeParseError("Fill in killed_at or respawns_in, not both.")

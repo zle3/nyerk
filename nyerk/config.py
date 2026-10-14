@@ -26,6 +26,9 @@ def _env_int(name: str, default: int = 0) -> int:
 @dataclass(frozen=True)
 class Config:
     discord_token: str = field(default_factory=lambda: _env("DISCORD_TOKEN"))
+    # Your own Discord server: approved from the start, and an install from
+    # before servers hands its data to it. Other servers that add the bot
+    # wait for the host's approval on the Servers page.
     guild_id: int = field(default_factory=lambda: _env_int("GUILD_ID"))
     data_dir: Path = field(default_factory=lambda: Path(_env("NYERK_DATA_DIR", "./data")))
     admin_password: str = field(default_factory=lambda: _env("ADMIN_PASSWORD"))

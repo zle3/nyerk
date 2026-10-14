@@ -4,15 +4,15 @@ import pytest
 from sqlalchemy import select
 
 from nyerk import transfer
-from nyerk.db import get_settings
+from nyerk.db import get_settings, get_state
 from nyerk.models import Category, Event, PfClass
-from nyerk.games import first as G
+from .conftest import GUILD, G  # noqa: F401
 
 
 def test_export_has_no_secrets_and_ids_are_strings(s):
-    get_settings(s).admin_password_hash = "secret-hash"
+    get_state(s).admin_password_hash = "secret-hash"
     G(s).timer_channel_id = 1234567890123456789
-    data = transfer.export(s)
+    data = transfer.export(s, GUILD)
     raw = json.dumps(data)
     assert "secret-hash" not in raw and "admin_password_hash" not in raw
     game = data["games"][0]
@@ -24,8 +24,8 @@ def test_export_has_no_secrets_and_ids_are_strings(s):
 
 
 def test_round_trip_is_a_no_op(s):
-    data = json.loads(json.dumps(transfer.export(s)))
-    assert transfer.apply_import(s, data) == []
+    data = json.loads(json.dumps(transfer.export(s, GUILD)))
+    assert transfer.apply_import(s, data, GUILD) == []
 
 
 def test_partial_id_file(s):
@@ -33,7 +33,7 @@ def test_partial_id_file(s):
         "nyerk_export": 1,
         "settings": {"party_channel_id": "222222222222222222"},
         "party_finder": {"classes": [{"name": "Cleric", "role_id": "<@&333333333333333333>"}]},
-    }, game_id=1)  # a file from before games goes into the game you're looking at
+    }, GUILD, game_id=1)  # a file from before games goes into the game you're looking at
     assert G(s).party_channel_id == 222222222222222222
     assert s.scalar(select(PfClass).where(PfClass.name == "Cleric")).role_id == 333333333333333333
     assert len(changes) == 2
@@ -49,7 +49,7 @@ def test_import_merges_events_and_categories(s):
              "slots": [{"lead_minutes": 15, "enabled": True, "ping": True}]},
             {"name": "Shugo Festival", "enabled": False},
         ],
-    }, game_id=1)
+    }, GUILD, game_id=1)
     siege = s.scalar(select(Event).where(Event.name == "Artifact Siege"))
     assert siege.category.name == "Siege" and siege.schedule_params["days"] == ["mon"]
     assert {sl.lead_minutes: sl.ping for sl in siege.slots}[15] is True
@@ -66,7 +66,7 @@ def test_import_merges_events_and_categories(s):
 ])
 def test_bad_files(s, bad, msg):
     with pytest.raises(transfer.ImportError_, match=msg):
-        transfer.apply_import(s, bad, game_id=1)
+        transfer.apply_import(s, bad, GUILD, game_id=1)
 
 
 def test_events_and_roles_round_trip_between_installs(s):
@@ -81,13 +81,13 @@ def test_events_and_roles_round_trip_between_installs(s):
     slot = next(sl for sl in rift.slots if sl.lead_minutes == 5)
     slot.ping, slot.template = False, "{name} soon"
     s.commit()
-    data = json.loads(json.dumps(transfer.export(s)))
+    data = json.loads(json.dumps(transfer.export(s, GUILD)))
 
     db.init_engine(":memory:")
     with db.session() as fresh:
         seed(fresh)
         seed_party_finder(fresh)
-        transfer.apply_import(fresh, data)
+        transfer.apply_import(fresh, data, GUILD)
         cat2 = fresh.scalar(select(Category).where(Category.name == "Rift"))
         rift2 = fresh.scalar(select(Event).where(Event.name == "Spacetime Rift"))
         slot2 = next(sl for sl in rift2.slots if sl.lead_minutes == 5)
@@ -98,22 +98,22 @@ def test_events_and_roles_round_trip_between_installs(s):
 
 def test_role_messages_round_trip(s):
     from nyerk.models import ReactionGroup
-    g = ReactionGroup(name="Siege pings", description="Abyss", sort_order=3)
+    g = ReactionGroup(guild_id=GUILD, name="Siege pings", description="Abyss", sort_order=3)
     s.add(g)
     s.flush()
     s.scalar(select(Category).where(Category.name == "Shugo")).group_id = g.id
-    data = json.loads(json.dumps(transfer.export(s)))
+    data = json.loads(json.dumps(transfer.export(s, GUILD)))
     assert {"name": "Siege pings", "description": "Abyss", "sort_order": 3} in data["role_messages"]
     assert next(c for c in data["games"][0]["categories"] if c["name"] == "Shugo")["role_message"] == "Siege pings"
-    assert transfer.apply_import(s, data) == []
+    assert transfer.apply_import(s, data, GUILD) == []
     with pytest.raises(transfer.ImportError_, match="unknown role message"):
         transfer.apply_import(s, {"nyerk_export": 1, "categories": [{"name": "Shugo", "role_message": "Nope"}]},
-                              game_id=1)
+                              GUILD, game_id=1)
 
 
 def test_old_format_needs_a_game_to_go_into(s):
     with pytest.raises(transfer.ImportError_, match="Pick the game"):
-        transfer.apply_import(s, {"nyerk_export": 1, "settings": {"party_channel_id": "222222222222222222"}})
+        transfer.apply_import(s, {"nyerk_export": 1, "settings": {"party_channel_id": "222222222222222222"}}, GUILD)
 
 
 def test_two_games_round_trip(s):
@@ -121,18 +121,18 @@ def test_two_games_round_trip(s):
     from nyerk import db, games
     from nyerk.seed import seed
 
-    other = games.create(s, "Throne and Liberty", "custom")
+    other = games.create(s, GUILD, "Throne and Liberty", "custom")
     s.add_all([Category(game_id=other.id, name="World Boss", role_id=777777777777777777),
                PfClass(game_id=other.id, name="Cleric", class_type="support", role_id=888888888888888888)])
     other.party_channel_id = 555555555555555555
     s.commit()
-    data = json.loads(json.dumps(transfer.export(s)))
+    data = json.loads(json.dumps(transfer.export(s, GUILD)))
     assert [g["name"] for g in data["games"]] == ["AION 2", "Throne and Liberty"]
 
     db.init_engine(":memory:")
     with db.session() as fresh:
         seed(fresh)                       # a fresh install with just AION 2
-        changes = transfer.apply_import(fresh, data)
+        changes = transfer.apply_import(fresh, data, GUILD)
         assert "Game Throne and Liberty: added" in changes
         tl = fresh.scalar(select(games.Game).where(games.Game.name == "Throne and Liberty"))
         assert tl.party_channel_id == 555555555555555555 and tl.kind == "custom"

@@ -34,7 +34,10 @@ ID_FIELDS = {
     "tank_role_id", "support_role_id", "dps_role_id", "role_id",
 }
 # Access controls never travel in a file, so an import or a restore can't change them.
-SKIP_SETTINGS = {"id", "admin_password_hash", "admin_locked", "admin_grants"}
+SKIP_SETTINGS = {"id", "admin_locked", "admin_grants", "admin_role_ids", "session_epoch",
+                 # which server this is, and the roles channel's Discord messages
+                 "guild_id", "guild_name", "status", "joined_at", "reaction_message_id", "reaction_map",
+                 "reaction_messages", "roles_header_message_id", "roles_clear_message_id"}
 # Game columns that are identity or Discord bookkeeping, not settings.
 SKIP_GAME = {"id", "guild_id", "name", "kind", "enabled", "sort_order", "dashboard_message_id", "dashboard_hash",
              "roles_class_message_id", "roles_gear_message_id", "class_panel_message_id", "gear_panel_message_id",
@@ -54,18 +57,21 @@ def _out(value, key: str):
     return value
 
 
-def export(s: Session) -> dict:
-    st = get_settings(s)
+def export(s: Session, guild_id: int) -> dict:
+    """One Discord server's configuration."""
+    st = get_settings(s, guild_id)
     settings = {c.name: _out(getattr(st, c.name), c.name)
                 for c in Settings.__table__.columns if c.name not in SKIP_SETTINGS}
-    gnames = {g.id: g.name for g in s.scalars(select(ReactionGroup))}
+    gnames = {g.id: g.name for g in s.scalars(select(ReactionGroup).where(ReactionGroup.guild_id == guild_id))}
     return {
         "nyerk_export": FORMAT,
         "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "settings": settings,
         "role_messages": [{"name": g.name, "description": g.description, "sort_order": g.sort_order}
-                          for g in s.scalars(select(ReactionGroup).order_by(ReactionGroup.sort_order))],
-        "games": [_export_game(s, g, gnames) for g in s.scalars(select(Game).order_by(Game.sort_order, Game.id))],
+                          for g in s.scalars(select(ReactionGroup).where(ReactionGroup.guild_id == guild_id)
+                                             .order_by(ReactionGroup.sort_order))],
+        "games": [_export_game(s, g, gnames) for g in s.scalars(select(Game).where(Game.guild_id == guild_id)
+                                                                 .order_by(Game.sort_order, Game.id))],
     }
 
 
@@ -162,8 +168,9 @@ def _assign(row, data: dict, fields: tuple[str, ...], label: str, changes: list[
 
 def _named(s: Session, model, key: str, value, label: str, changes: list[str], **defaults):
     q = select(model).where(getattr(model, key) == value)
-    if "game_id" in defaults:
-        q = q.where(model.game_id == defaults["game_id"])
+    for scope in ("game_id", "guild_id"):  # a row only ever matches inside its own game or server
+        if scope in defaults:
+            q = q.where(getattr(model, scope) == defaults[scope])
     row = s.scalar(q)
     if row is None:
         row = model(**{key: value}, **defaults)
@@ -172,9 +179,10 @@ def _named(s: Session, model, key: str, value, label: str, changes: list[str], *
     return row
 
 
-def apply_import(s: Session, data: dict, game_id: int | None = None) -> list[str]:
-    """Merge `data` into the database. Returns readable change lines.
-    Raises ImportError_ on anything malformed; the caller rolls back."""
+def apply_import(s: Session, data: dict, guild_id: int, game_id: int | None = None) -> list[str]:
+    """Merge `data` into one Discord server's configuration. Returns
+    readable change lines. Raises ImportError_ on anything malformed; the
+    caller rolls back."""
     version = data.get("nyerk_export") if isinstance(data, dict) else None
     if version not in (1, FORMAT):
         raise ImportError_("Not a Nyerk settings file (missing \"nyerk_export\").")
@@ -183,7 +191,7 @@ def apply_import(s: Session, data: dict, game_id: int | None = None) -> list[str
     if "settings" in data:
         if not isinstance(data["settings"], dict):
             raise ImportError_("settings must be an object")
-        st = get_settings(s)
+        st = get_settings(s, guild_id)
         cols = Settings.__table__.columns
         legacy_game: dict = {}
         for key, value in data["settings"].items():
@@ -198,28 +206,30 @@ def apply_import(s: Session, data: dict, game_id: int | None = None) -> list[str
 
     for g in _list(data, "role_messages"):
         name = _name(g, "name", "role message")
-        row = _named(s, ReactionGroup, "name", name, f"Role message {name}", changes, sort_order=99)
+        row = _named(s, ReactionGroup, "name", name, f"Role message {name}", changes, sort_order=99,
+                     guild_id=guild_id)
         _assign(row, g, ("description", "sort_order"), f"Role message {name}", changes)
     s.flush()
-    groups = {g.name: g.id for g in s.scalars(select(ReactionGroup))}
+    groups = {g.name: g.id for g in s.scalars(select(ReactionGroup).where(ReactionGroup.guild_id == guild_id))}
 
     if version == 1:
         game = s.get(Game, game_id) if game_id else None
-        if game is None:
+        if game is None or game.guild_id != guild_id:
             raise ImportError_("Pick the game to import this older settings file into.")
         block = {k: data[k] for k in ("categories", "events", "party_finder") if k in data}
         if "settings" in data:
             block["settings"] = legacy_game
         _import_game(s, game, block, groups, changes, prefix="")
     else:
-        many = len(_list(data, "games")) > 1 or s.scalar(select(Game.id).limit(1).offset(1)) is not None
+        mine = select(Game).where(Game.guild_id == guild_id)
+        many = len(_list(data, "games")) > 1 or len(list(s.scalars(mine))) > 1
         for gdata in _list(data, "games"):
             name = _name(gdata, "name", "game")
-            game = s.scalar(select(Game).where(Game.name == name))
+            game = s.scalar(mine.where(Game.name == name))
             if game is None:
                 kind = gdata.get("kind") if gdata.get("kind") in ("aion2", "custom") else "custom"
-                order = (s.scalar(select(Game.sort_order).order_by(Game.sort_order.desc()).limit(1)) or 0) + 1
-                game = Game(name=name, kind=kind, sort_order=order)
+                order = max((g.sort_order for g in s.scalars(mine)), default=-1) + 1
+                game = Game(guild_id=guild_id, name=name, kind=kind, sort_order=order)
                 s.add(game)
                 s.flush()
                 changes.append(f"Game {name}: added")
@@ -358,26 +368,30 @@ def _import_event(s: Session, e: dict, cats: dict[str, int], changes: list[str],
             _assign(target, sl, ("enabled", "ping", "template"), f"{label} {lead} min slot", changes)
 
 
-def summary(s: Session) -> list[tuple[str, str, str]]:
+def summary(s: Session, guild_id: int) -> list[tuple[str, str, str]]:
     """(admin tab, what is exported, count) for the Settings page."""
     from sqlalchemy import func
+
+    games = select(Game.id).where(Game.guild_id == guild_id)
 
     def n(model, *where):
         return s.scalar(select(func.count()).select_from(model).where(*where)) or 0
 
-    events = n(Event, Event.overrides_event_id.is_(None))
+    events = n(Event, Event.overrides_event_id.is_(None), Event.game_id.in_(games))
     slots = s.scalar(select(func.count()).select_from(AlertSlot).join(Event)
-                     .where(Event.overrides_event_id.is_(None))) or 0
+                     .where(Event.overrides_event_id.is_(None), Event.game_id.in_(games))) or 0
+    game_count = n(Game, Game.guild_id == guild_id)
     return [
         ("Games", "Each game's channels, boss reports, dashboard, party timing and defaults source",
-         f"{n(Game)} game{'s' if n(Game) != 1 else ''}"),
+         f"{game_count} game{'s' if game_count != 1 else ''}"),
         ("Settings", "Roles and logs channels, time zone, link preview", "all"),
         ("Events", "Schedules, alert toggles, ping toggles, message templates, dashboard placement",
          f"{events} events, {slots} alert slots"),
         ("Roles", "Ping categories with role IDs, role messages, and each role's message and emoji",
-         f"{n(Category)} categories, {n(ReactionGroup)} role messages"),
+         f"{n(Category, Category.game_id.in_(games))} categories, "
+         f"{n(ReactionGroup, ReactionGroup.guild_id == guild_id)} role messages"),
         ("Party finder", "Classes and role IDs, type roles, standard makeup, content with dungeon roles, gear score options, time windows",
-         f"{n(PfClass)} classes, {n(PfContent)} content"),
+         f"{n(PfClass, PfClass.game_id.in_(games))} classes, {n(PfContent, PfContent.game_id.in_(games))} content"),
     ]
 
 

@@ -3,13 +3,13 @@ import itertools
 
 from sqlalchemy import select
 
-from nyerk.games import first as G
 from nyerk import bot as botmod
 from nyerk import reaction_roles
 from nyerk.db import get_settings, get_state
 from nyerk.models import Category, PfContent, ReactionGroup, RoleHolder
 
 from .test_bot import FakeChannel, FakeMessage
+from .conftest import GUILD, G  # noqa: F401
 
 
 def give_roles(s, n_dungeons=3):
@@ -22,7 +22,7 @@ def give_roles(s, n_dungeons=3):
 
 def test_event_and_dungeon_pings_are_separate_messages(s):
     give_roles(s)
-    msgs = reaction_roles.messages(s)
+    msgs = reaction_roles.messages(s, GUILD)
     assert [t.splitlines()[0] for t, _ in msgs] == ["## Event pings", "## Dungeon pings"]
     assert [e.emoji for e in msgs[0][1]] == ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"]
     assert [e.emoji for e in msgs[1][1]] == ["1️⃣", "2️⃣", "3️⃣"]  # numbering restarts per message
@@ -32,7 +32,7 @@ def test_event_and_dungeon_pings_are_separate_messages(s):
 def test_custom_emoji_and_letters_after_ten(s):
     give_roles(s, n_dungeons=13)
     s.scalar(select(PfContent).where(PfContent.name == "Dungeon 1")).react_emoji = "🔥"
-    msgs = reaction_roles.messages(s)
+    msgs = reaction_roles.messages(s, GUILD)
     dungeon = [e.emoji for e in msgs[1][1]]
     assert dungeon[:3] == ["1️⃣", "🔥", "2️⃣"] and dungeon[-1] == "🇧"  # 12 automatic: 1-10, A, B
     assert len(set(dungeon)) == len(dungeon)
@@ -40,11 +40,11 @@ def test_custom_emoji_and_letters_after_ten(s):
 
 def test_custom_role_message_and_split_past_twenty(s):
     give_roles(s, n_dungeons=22)
-    siege = ReactionGroup(name="Siege pings", description="", sort_order=5)
+    siege = ReactionGroup(guild_id=GUILD, name="Siege pings", description="", sort_order=5)
     s.add(siege)
     s.flush()
     s.scalar(select(Category).where(Category.name == "Shugo")).group_id = siege.id
-    msgs = reaction_roles.messages(s)
+    msgs = reaction_roles.messages(s, GUILD)
     assert [t.splitlines()[0] for t, _ in msgs] == [
         "## Event pings", "## Dungeon pings", "## Dungeon pings (continued)", "## Siege pings"]
     assert [len(c) for _, c in msgs] == [5, 20, 2, 1]
@@ -78,9 +78,9 @@ class ReactingChannel(FakeChannel):
 
 def test_post_roles_channel_order_and_mapping(s, monkeypatch):
     give_roles(s, n_dungeons=3)
-    get_settings(s).roles_channel_id = 1
+    get_settings(s, GUILD).roles_channel_id = 1
     s.commit()
-    roles = {e.role_id for e in reaction_roles.entries(s)}
+    roles = {e.role_id for e in reaction_roles.entries(s, GUILD)}
     ch = ReactingChannel()
     b = botmod.NyerkBot(0)
 
@@ -88,9 +88,9 @@ def test_post_roles_channel_order_and_mapping(s, monkeypatch):
         return ch
 
     monkeypatch.setattr(b, "_channel", fake_channel)
-    monkeypatch.setattr(b, "_guild", lambda: FakeGuild(roles))
+    monkeypatch.setattr(b, "_guild", lambda gid: FakeGuild(roles))
     monkeypatch.setattr(botmod, "REACTION_PAUSE", 0)
-    asyncio.run(b.post_roles_message())
+    asyncio.run(b.post_roles_message(GUILD))
     firsts = [m.content.splitlines()[0] for m, _ in ch.sent]
     assert firsts == ["# 🎭 Roles", "## AION 2 Classes", "## Gear score", "## Event pings", "## Dungeon pings",
                       "## Ping settings"]
@@ -98,7 +98,7 @@ def test_post_roles_channel_order_and_mapping(s, monkeypatch):
     assert [c.item.label for c in gear.view.children] == ["1400-1599", "1600-1899", "1900-2100", "2100+", "Clear"]
     assert events.reactions == ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"] and dungeons.reactions == ["1️⃣", "2️⃣", "3️⃣"]
     assert [c.custom_id for c in clear.view.children] == ["nyerk:roles:mine", "nyerk:roles:quiet", "nyerk:roles:quietoff", "nyerk:roles:clear"]
-    state = get_state(s)
+    state = get_settings(s, GUILD)  # the roles channel as posted
     s.refresh(state)
     assert state.reaction_messages[str(dungeons.id)]["1️⃣"] == 200_000_000_000_000_000
     assert G(s).roles_class_message_id == classes.id and state.roles_clear_message_id == clear.id
@@ -110,9 +110,9 @@ def test_create_missing_dungeon_roles(s, monkeypatch):
     s.commit()
     guild = FakeGuild(set())
     b = botmod.NyerkBot(0)
-    monkeypatch.setattr(b, "_guild", lambda: guild)
+    monkeypatch.setattr(b, "_guild", lambda gid: guild)
     ids = [c.id for c in s.scalars(select(PfContent))]
-    made = asyncio.run(b.create_content_roles(ids))
+    made = asyncio.run(b.create_content_roles(GUILD, ids))
     assert made == ["Fire Temple"] and guild.created == [("Fire Temple", True)]
     c = s.scalar(select(PfContent).where(PfContent.name == "Fire Temple"))
     s.refresh(c)
@@ -139,11 +139,11 @@ class FakeMember:
 
 def test_remove_all_pings_keeps_class_role(s, monkeypatch):
     give_roles(s, n_dungeons=2)
-    get_settings(s).roles_channel_id = 1
-    get_state(s).reaction_messages = {"555": {"1️⃣": 100_000_000_000_000_000}}
+    get_settings(s, GUILD).roles_channel_id = 1
+    get_settings(s, GUILD).reaction_messages = {"555": {"1️⃣": 100_000_000_000_000_000}}
     s.commit()
     member = FakeMember({100_000_000_000_000_000, 200_000_000_000_000_001, 1001})  # 1001 = a class role
-    interaction = type("I", (), {"user": member, "response": FakeResponse()})()
+    interaction = type("I", (), {"user": member, "response": FakeResponse(), "guild_id": GUILD})()
     ch = FakeChannel()
     removed_reactions = []
 
@@ -174,12 +174,12 @@ def test_my_roles_overview(s):
     cls = {c.name: c for c in party.classes(s, 1)}
     cls["Cleric"].role_id, cls["Ranger"].role_id = 1001, 1002
     s.flush()
-    quiet.set_hours(s, 7, "Rae", 23, 7, "America/New_York", set())
-    s.add(RoleHolder(user_id=7, user_name="Rae", role_id=200_000_000_000_000_001, kind="ping", since=0,
+    quiet.set_hours(s, GUILD, 7, "Rae", 23, 7, "America/New_York", set())
+    s.add(RoleHolder(guild_id=GUILD, user_id=7, user_name="Rae", role_id=200_000_000_000_000_001, kind="ping", since=0,
                      suspended=True))
     s.flush()
     held = {1001, 1002, 100_000_000_000_000_000, 200_000_000_000_000_000}
-    text = my_roles_text(s, 7, held, 0)
+    text = my_roles_text(s, GUILD, 7, held, 0)
     assert "Ranger (DPS)" in text and "Cleric (Support)" in text
     assert "**Event pings:** World Boss" in text
     assert "**Dungeon pings:** Dungeon 0, Dungeon 1 (paused)" in text

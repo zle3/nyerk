@@ -17,10 +17,10 @@ from typing import TYPE_CHECKING
 import discord
 from sqlalchemy import select
 
-from . import db, games, party, safety, tracking
+from . import db, games, party, safety, servers, tracking
 from .db import get_settings
-from .logbus import bus
-from .models import Game, PfInterest, PfParty
+from .logbus import bus, current_guild, for_guild
+from .models import Game, PfClass, PfContent, PfInterest, PfParty, PfWindow
 from .party import PartyError, Who
 
 if TYPE_CHECKING:
@@ -36,6 +36,7 @@ def now() -> int:
 
 def who_of(interaction: discord.Interaction) -> Who:
     user = interaction.user
+    current_guild.set(interaction.guild_id or 0)  # this click's log lines belong to its server
     finder = getattr(interaction.client, "pf", None)
     if finder is not None:
         finder.seen(interaction)
@@ -48,8 +49,19 @@ def pf(interaction: discord.Interaction) -> "PartyFinder":
 
 
 def game_here(s, interaction: discord.Interaction) -> Game | None:
-    """The game whose party channel the click came from (else the first game)."""
-    return games.by_party_channel(s, interaction.channel_id) or games.first(s)
+    """The game whose party channel the click came from (else the server's
+    first game); None in a server the host hasn't approved."""
+    if not servers.is_approved(s, interaction.guild_id):
+        return None
+    return games.by_party_channel(s, interaction.channel_id, interaction.guild_id) or \
+        games.first(s, interaction.guild_id)
+
+
+def check_here(s, interaction: discord.Interaction, game_id: int | None) -> None:
+    """A click may only touch its own server's games."""
+    g = s.get(Game, game_id) if game_id else None
+    if g is None or g.guild_id != interaction.guild_id or not servers.is_approved(s, g.guild_id):
+        raise PartyError("That isn't part of this server's party finder.")
 
 
 async def reply(interaction: discord.Interaction, text: str) -> None:
@@ -271,7 +283,7 @@ class PartyFinder:
         leader clicked something in the party channel recently. Nyerk never
         DMs anyone; otherwise the listing shows who is in."""
         with db.session() as s:
-            channels = {g.party_channel_id for g in games.all_games(s) if g.party_channel_id}
+            channels = {g.party_channel_id for g in games.all_games(s, None) if g.party_channel_id}
         click = self._last_click.get(leader_id)
         if click and time.monotonic() - click[1] < 14 * 60 and click[0].channel_id in channels:
             try:
@@ -315,11 +327,16 @@ class PartyFinder:
         who = who_of(interaction)
         try:
             with db.session() as s:
-                if class_id is None and game_id is None:
+                if class_id is not None:
+                    c = s.get(PfClass, class_id)
+                    game_id = c.game_id if c else None
+                elif game_id is None:
                     g = game_here(s, interaction)
                     game_id = g.id if g else None
+                check_here(s, interaction, game_id)
                 add, remove, text, held = party.class_change(s, who, class_id, game_id)
                 held_roles = {c.role_id for c in held}
+                game_roles = {c.role_id for c in party.classes(s, game_id) if c.role_id}
         except PartyError as exc:
             await reply(interaction, str(exc))
             return
@@ -335,7 +352,7 @@ class PartyFinder:
             return
         await reply(interaction, text)
         bus.info("party", f"{who.user_name}: {text}")
-        tracking.set_classes(who.user_id, who.user_name, held_roles)
+        tracking.set_classes(interaction.guild_id, who.user_id, who.user_name, held_roles, only=game_roles)
 
     async def on_reg(self, interaction) -> None:
         with db.session() as s:
@@ -362,6 +379,8 @@ class PartyFinder:
         who = who_of(interaction)
         try:
             with db.session() as s:
+                w = s.get(PfWindow, window_id)
+                check_here(s, interaction, w.game_id if w else None)
                 row = party.register(s, who, window_id, content_ids, now(), class_id)
                 names = ", ".join(party.party_title_for(x) for x in party.contents(s, row.game_id, False)
                                   if x.id in row.content_ids)
@@ -406,6 +425,8 @@ class PartyFinder:
         who = who_of(interaction)
         try:
             with db.session() as s:
+                c = s.get(PfContent, content_id)
+                check_here(s, interaction, c.game_id if c else None)
                 p = party.create(s, who, content_id, size, requirement, custom, description, now())
                 title, pid = party.party_title(p), p.id
         except PartyError as exc:
@@ -427,6 +448,7 @@ class PartyFinder:
                 p = s.get(PfParty, pid)
                 if p is None:
                     raise PartyError("That party no longer exists.")
+                check_here(s, interaction, p.game_id)
                 title = party.party_title(p)
                 if what == "join":
                     filled = party.join(s, p, who, t)
@@ -475,6 +497,7 @@ class PartyFinder:
                 p = s.get(PfParty, pid)
                 if p is None:
                     raise PartyError("That party no longer exists.")
+                check_here(s, interaction, p.game_id)
                 party.require_leader(p, who.user_id)
                 if user_id == who.user_id or not user_id:
                     raise PartyError("Use Leave to leave your own party.")
@@ -568,9 +591,10 @@ class PartyFinder:
             bus.info("party", f"{res.interests_expired} registration(s) expired.", discord=False)
         await self.sync()
         with db.session() as s:
-            ids = [g.id for g in games.all_games(s, enabled_only=True) if g.party_channel_id]
-        for game_id in ids:
-            await self.clean_chat(game_id)
+            ids = [(g.id, g.guild_id) for g in games.all_games(s, None, enabled_only=True) if g.party_channel_id]
+        for game_id, guild_id in ids:
+            with for_guild(guild_id):
+                await self.clean_chat(game_id)
 
     async def clean_chat(self, game_id: int) -> None:
         """Members may chat in a game's party channel to plan runs; their
@@ -614,18 +638,19 @@ class PartyFinder:
         """Make every enabled game's party channel match the database."""
         async with self._sync_lock:
             with db.session() as s:
-                ids = [g.id for g in games.all_games(s, enabled_only=True) if g.party_channel_id]
+                ids = [(g.id, g.guild_id) for g in games.all_games(s, None, enabled_only=True) if g.party_channel_id]
             sweep = not self._swept
             self._swept = True
-            for game_id in ids:
+            for game_id, guild_id in ids:
                 channel = await self._channel(game_id)
                 if channel is None:
                     continue
-                if sweep:
-                    await self._sweep_orphans(channel, game_id)
-                await self._sync_parties(channel, game_id)
-                await self._sync_panel(channel, game_id, "interest")
-                await self._sync_panel(channel, game_id, "status")
+                with for_guild(guild_id):
+                    if sweep:
+                        await self._sweep_orphans(channel, game_id)
+                    await self._sync_parties(channel, game_id)
+                    await self._sync_panel(channel, game_id, "interest")
+                    await self._sync_panel(channel, game_id, "status")
 
     async def _sweep_orphans(self, channel, game_id: int) -> None:
         """Once after start: delete Nyerk's own messages in a game's party
@@ -634,10 +659,13 @@ class PartyFinder:
         would otherwise sit there with dead buttons."""
         me = getattr(self.bot, "user", None)
         with db.session() as s:
-            st, g = get_settings(s), s.get(Game, game_id)
-            others = {st.roles_channel_id, st.log_channel_id} | {x.timer_channel_id for x in games.all_games(s)} \
-                | {x.party_channel_id for x in games.all_games(s) if x.id != game_id}
-            if me is None or g is None or g.party_channel_id in others:
+            g = s.get(Game, game_id)
+            if me is None or g is None:
+                return
+            st, here = get_settings(s, g.guild_id), games.all_games(s, g.guild_id)
+            others = {st.roles_channel_id, st.log_channel_id} | {x.timer_channel_id for x in here} \
+                | {x.party_channel_id for x in here if x.id != game_id}
+            if g.party_channel_id in others:
                 return  # shared channel: other messages of ours live there too
             known = {g.class_panel_message_id, g.gear_panel_message_id, g.interest_panel_message_id,
                      g.party_panel_message_id, g.party_status_message_id}

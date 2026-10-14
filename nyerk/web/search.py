@@ -81,8 +81,8 @@ PAGES = {
 _JINJA = re.compile(r"\{%.*?%\}|\{\{.*?\}\}|\{#.*?#\}", re.S)
 _TAG = re.compile(r"<[^>]+>")
 _LABEL = re.compile(r'<label for="([^"]+)">(.*?)</label>(.*?)(?=<label for=|<p class="section-label"|</form>|$)', re.S)
-# Owner-only even when Settings is opened to admins (see auth.NEVER_OPENED).
-OWNER_ONLY = {"Admin password", "Current", "New", "Confirm"}
+# The host's alone, whoever else can open Settings (see auth.HOST_PATHS).
+OWNER_ONLY = {"Host password", "Current", "New", "Confirm"}
 _HELP = re.compile(r'<div class="help">(.*?)</div>', re.S)
 _WORD = re.compile(r"[a-z0-9]+")
 _SECTION = re.compile(r'<p class="section-label"(?: id="([\w-]+)")?>(.*?)</p>', re.S)
@@ -135,49 +135,51 @@ def build_index(template_dir: Path) -> list[Entry]:
     return unique
 
 
-_cache: tuple[float, list[Entry]] = (0.0, [])
+_cache: dict[int, tuple[float, list[Entry]]] = {}
 
 
-def _data_entries(s) -> list[Entry]:
-    global _cache
-    if time.monotonic() - _cache[0] < DATA_TTL:
-        return _cache[1]
+def _data_entries(s, guild_id: int) -> list[Entry]:
+    """One server's games, events, ping roles, dungeons, classes and members."""
+    hit = _cache.get(guild_id)
+    if hit and time.monotonic() - hit[0] < DATA_TTL:
+        return hit[1]
     out = []
-    names = {g.id: g.name for g in s.scalars(select(Game))}
+    names = {g.id: g.name for g in s.scalars(select(Game).where(Game.guild_id == guild_id))}
     many = len(names) > 1
 
     def page(kind, game_id):  # "Event" or "AION 2 event" when there are several games
         return f"{names.get(game_id, '?')} {kind.lower()}" if many else kind
 
-    for g in s.scalars(select(Game).order_by(Game.sort_order, Game.id)):
+    for g in s.scalars(select(Game).where(Game.guild_id == guild_id).order_by(Game.sort_order, Game.id)):
         out.append(Entry("Game", f"/settings?game={g.id}#game", g.name, "", f"{g.name} game".lower()))
-    for e in s.scalars(select(Event).where(Event.overrides_event_id.is_(None)).order_by(Event.name)):
+    for e in s.scalars(select(Event).where(Event.overrides_event_id.is_(None), Event.game_id.in_(names))
+                       .order_by(Event.name)):
         out.append(Entry(page("Event", e.game_id), f"/events/{e.id}", e.name, "",
                          f"{e.name} event {names.get(e.game_id, '')}".lower()))
-    for c in s.scalars(select(Category).order_by(Category.name)):
+    for c in s.scalars(select(Category).where(Category.game_id.in_(names)).order_by(Category.name)):
         out.append(Entry(page("Ping role", c.game_id), f"/categories?game={c.game_id}", c.name, "",
                          f"{c.name} ping role category {names.get(c.game_id, '')}".lower()))
-    for c in party.contents(s, None, False):
+    for c in party.server_contents(s, guild_id, False):
         out.append(Entry(page("Dungeon", c.game_id), f"/party?game={c.game_id}#content", c.name, "",
                          f"{c.name} dungeon content {names.get(c.game_id, '')}".lower()))
-    for c in party.classes(s, None):
+    for c in party.server_classes(s, guild_id):
         out.append(Entry(page("Class", c.game_id), f"/party?game={c.game_id}#classes", c.name, "",
                          f"{c.name} class {names.get(c.game_id, '')}".lower()))
     people: dict[int, str] = {}
     for model in (MemberProfile, RoleHolder):
-        for uid, name in s.execute(select(model.user_id, model.user_name).limit(MAX_MEMBERS)):
+        for uid, name in s.execute(select(model.user_id, model.user_name).where(model.guild_id == guild_id)
+                                   .limit(MAX_MEMBERS)):
             if name and len(people) < MAX_MEMBERS:
                 people.setdefault(uid, name)
     for uid, name in sorted(people.items(), key=lambda x: x[1].lower()):
         out.append(Entry("Member", f"/members/{uid}", name, "", f"{name} {uid} member".lower()))
-    _cache = (time.monotonic(), out)
+    _cache[guild_id] = (time.monotonic(), out)
     return out
 
 
 def forget_data() -> None:
-    """For tests: reread the database on the next search."""
-    global _cache
-    _cache = (0.0, [])
+    """Reread the database on the next search (tests, and after Forget member)."""
+    _cache.clear()
 
 
 def clean_query(raw: str | None) -> list[str]:
@@ -231,13 +233,13 @@ def _word_score(word: str, e: Entry, label: str, label_tokens: set[str]) -> int 
 
 
 def search(s, index: list[Entry], words: list[str], visible, owner: bool = False,
-           limit: int = MAX_RESULTS) -> list[Entry]:
+           limit: int = MAX_RESULTS, guild_id: int = 0) -> list[Entry]:
     """Entries matching every word (allowing typos and synonyms), best first.
     `visible(url)` hides pages the signed-in person can't open."""
     if not words:
         return []
     scored = []
-    for e in index + _data_entries(s):
+    for e in index + (_data_entries(s, guild_id) if guild_id else []):
         if e.owner_only and not owner:
             continue
         label = e.label.lower()

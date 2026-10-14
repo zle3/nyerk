@@ -6,6 +6,7 @@
 - **Roles:** self-serve ping roles, class and gear score buttons, quiet hours and a one-click "remove all my pings".
 - **Party finder:** an interest list that pings people when a matching party opens, 5 or 20 player listings, and a channel to chat and plan runs.
 - **Games:** start from the AION 2 template or a blank game; run several side by side, each with its own timer and party channels, or switch.
+- **Servers:** one Nyerk can serve several Discord servers. Each has its own owner, admins, settings and data; new servers wait for your approval.
 - **Web page:** configure everything above, manage members, see stats, undo any change. Optionally open it to members with Discord sign-in.
 
 **[Quick start](#quick-start)** · **[Using it](#using-it)** · **[Updating](#updating)** · **[Wiki](https://github.com/zle3/nyerk/wiki)**
@@ -134,6 +135,7 @@ Click **Update** in Dockge, or run `docker compose pull && docker compose up -d`
 | [Discord permissions](https://github.com/zle3/nyerk/wiki/Discord-permissions) | [Public access](https://github.com/zle3/nyerk/wiki/Public-access) (your own domain) | [How Nyerk behaves](https://github.com/zle3/nyerk/wiki/How-Nyerk-behaves) |
 | [Settings export and import](https://github.com/zle3/nyerk/wiki/Settings-export-and-import) | [Access levels](https://github.com/zle3/nyerk/wiki/Access-levels) | [Development](https://github.com/zle3/nyerk/wiki/Development) |
 | [Games](https://github.com/zle3/nyerk/wiki/Games) (AION 2 and others) | [Security updates](https://github.com/zle3/nyerk/wiki/Security-updates) | |
+| | [Hosting other servers](https://github.com/zle3/nyerk/wiki/Hosting-other-servers) | |
 
 ## License
 

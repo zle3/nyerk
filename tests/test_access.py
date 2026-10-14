@@ -15,7 +15,7 @@ from nyerk.seed import seed, seed_party_finder, seed_reaction_groups
 from nyerk.web import app as webapp
 from nyerk.web import auth
 from nyerk.web.app import create_app, hash_password
-from nyerk.games import first as G
+from .conftest import GUILD, G  # noqa: F401
 
 OWNER, ADMIN, MEMBER, OUTSIDER = 11, 22, 33, 44
 ADMIN_ROLE = 555
@@ -28,16 +28,25 @@ class Bot:
     def is_ready(self):
         return True
 
-    def status(self):
-        return {"connected": True, "user": "Nyerk", "guild": "g", "latency_ms": 1, "last_tick": 0}
+    def status(self, guild_id=None):
+        return {"connected": True, "user": "Nyerk", "guild": "g", "guilds": 1, "latency_ms": 1, "last_tick": 0}
+
+    def server_ids(self):
+        return {GUILD}
+
+    async def member_access(self, guild_id, uid):
+        """(name, roles, is the server's owner, has Manage Server)."""
+        if guild_id != GUILD or uid not in self.roles:
+            return None
+        return f"user{uid}", set(self.roles[uid]), False, False
 
     def request_refresh(self, repost=False, game_id=None):
         pass
 
-    async def fetch_member(self, uid):
+    async def fetch_member(self, guild_id, uid):
         return (f"user{uid}", set(self.roles[uid])) if uid in self.roles else None
 
-    async def admin_apply_roles(self, uid, add, remove):
+    async def admin_apply_roles(self, guild_id, uid, add, remove):
         return []
 
     async def apply_quiet_hours(self, only=None):
@@ -52,8 +61,8 @@ def app(tmp_path, monkeypatch):
         monkeypatch.setenv(k, v)
     db.init_engine(":memory:")
     with db.session() as s:
-        seed(s), seed_party_finder(s), seed_reaction_groups(s)
-        get_settings(s).admin_password_hash = hash_password("pw")
+        seed(s), seed_party_finder(s), seed_reaction_groups(s, GUILD)
+        get_state(s).admin_password_hash = hash_password("pw")
     bot = Bot()
     a = create_app(Config(), bot)
     a.state.test_bot = bot
@@ -120,7 +129,7 @@ def test_outsider_is_turned_away(app, monkeypatch):
     monkeypatch.setattr(auth, "discord_identify", identify)
     c = TestClient(app, base_url="https://nyerk.example.com")
     state = re.search(r"state=([^&]+)", c.get("/auth/discord", follow_redirects=False).headers["location"])[1]
-    assert "member of the server" in c.get(f"/auth/callback?code=abc&state={state}").text
+    assert "in a server that uses Nyerk" in c.get(f"/auth/callback?code=abc&state={state}").text
     assert c.get("/me", follow_redirects=False).status_code == 303
 
 
@@ -134,10 +143,10 @@ def test_bad_oauth_state_rejected(app, monkeypatch):
 def test_admin_lock_and_sign_everyone_out(app, monkeypatch):
     c = sign_in(app, ADMIN, monkeypatch)
     with db.session() as s:
-        get_settings(s).admin_locked = True
+        get_settings(s, GUILD).admin_locked = True
     assert c.get("/events").status_code == 403  # demoted to member right away
     with db.session() as s:
-        get_settings(s).admin_locked = False
+        get_settings(s, GUILD).admin_locked = False
         get_state(s).session_epoch += 1
     assert c.get("/me", follow_redirects=False).status_code == 303  # signed out
 
@@ -315,10 +324,10 @@ def test_owner_opens_areas_to_admins(app, monkeypatch):
     assert admin.get("/settings").status_code == 403
     owner.post("/access/grants", data={"csrf": csrf(owner, "/access"), "area_settings": "1", "area_wording": "1"})
     with db.session() as s:
-        assert get_settings(s).admin_grants == "settings,wording"
+        assert get_settings(s, GUILD).admin_grants == "settings,wording"
     page = admin.get("/settings").text
     assert 'href="/settings"' in admin.get("/").text
-    assert "Admin password" not in page and 'href="/access"' not in page and 'href="/history"' not in page
+    assert "Host password" not in page and 'href="/access"' not in page and 'href="/history"' not in page
     assert 'action="/settings/import"' not in page                       # import also needs roles
     # Wording opened: an admin's template change is kept.
     with db.session() as s:
@@ -356,11 +365,11 @@ def test_history_restore_needs_every_area(app, monkeypatch):
 def test_import_cannot_change_access_controls(app, monkeypatch):
     from nyerk import transfer
     with db.session() as s:
-        data = transfer.export(s)
+        data = transfer.export(s, GUILD)
         assert "admin_grants" not in data["settings"] and "admin_locked" not in data["settings"]
         data["settings"].update(admin_grants="settings,wording,roles,history", admin_locked=True)
-        transfer.apply_import(s, data)
-        assert get_settings(s).admin_grants == "" and not get_settings(s).admin_locked
+        transfer.apply_import(s, data, GUILD)
+        assert get_settings(s, GUILD).admin_grants == "" and not get_settings(s, GUILD).admin_locked
 
 
 def test_search_finds_settings_the_viewer_may_open(app, monkeypatch):
@@ -371,11 +380,11 @@ def test_search_finds_settings_the_viewer_may_open(app, monkeypatch):
     assert "Shugo Festival" in admin.get("/search?q=shugo").text   # events by name
     owner = sign_in(app, OWNER, monkeypatch)
     assert 'href="/settings#party_lifetime_min"' in owner.get("/search?q=LIFETIME").text
-    assert "Admin password" in owner.get("/search?q=password").text
+    assert "Host password" in owner.get("/search?q=password").text
     owner.post("/access/grants", data={"csrf": csrf(owner, "/access"), "area_settings": "1"})
     page = admin.get("/search?q=lifetime").text
     assert "Listing lifetime" in page
-    assert "Admin password" not in admin.get("/search?q=password").text  # never opened to admins
+    assert "Host password" not in admin.get("/search?q=password").text  # never opened to admins
     member = sign_in(app, MEMBER, monkeypatch)
     assert member.get("/search?q=x").status_code == 403
 
@@ -420,7 +429,7 @@ def test_limit_warnings_do_not_flood_logs(app, monkeypatch):
 
 def test_live_suggestions(app, monkeypatch):
     from nyerk import tracking
-    tracking.add_ping(910000000000000005, "Raelin", 123)
+    tracking.add_ping(GUILD, 910000000000000005, "Raelin", 123)
     admin = sign_in(app, ADMIN, monkeypatch)
     r = admin.get("/search/suggest?q=chat")
     assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
@@ -465,7 +474,7 @@ def test_terms_privacy_and_footer_are_public(app, monkeypatch):
 def test_admin_forgets_a_member(app, monkeypatch):
     from nyerk import tracking
     from nyerk.models import LogEntry, RoleHolder
-    tracking.add_ping(910000000000000009, "Iska", 555)
+    tracking.add_ping(GUILD, 910000000000000009, "Iska", 555)
     admin = sign_in(app, ADMIN, monkeypatch)
     page = admin.get("/members/910000000000000009").text
     assert 'action="/members/910000000000000009/forget"' in page

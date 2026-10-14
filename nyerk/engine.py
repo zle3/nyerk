@@ -132,8 +132,10 @@ def due_slots(s: Session, now: int, last_tick: int) -> list[DueSlot]:
     """Slots whose send time falls in (last_tick, now], minus ones already in
     the sent ledger. Slots older than GRACE_SECONDS are marked skip."""
     last_tick = max(last_tick, now - MAX_CATCHUP_SECONDS)
-    live = set(s.scalars(select(Game.id).where(Game.enabled.is_(True))))
-    events = [e for e in load_events(s) if e.game_id in live]  # a switched-off game sends nothing
+    from . import servers
+    live = set(s.scalars(select(Game.id).where(Game.enabled.is_(True),
+                                               Game.guild_id.in_(servers.approved_ids(s)))))
+    events = [e for e in load_events(s) if e.game_id in live]  # switched-off games and waiting servers send nothing
     overrides = _overrides(events)
     timers = list(s.scalars(select(UserTimer).where(UserTimer.status == "active")))
     out: list[DueSlot] = []

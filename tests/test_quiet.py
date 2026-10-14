@@ -4,9 +4,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
+from nyerk.db import get_settings
 from nyerk import bot as botmod
 from nyerk import quiet, tracking
 from nyerk.models import Category, PfContent, QuietHours, RoleHolder
+from .conftest import GUILD, G  # noqa: F401
 
 NY = ZoneInfo("America/New_York")
 
@@ -35,32 +37,32 @@ def setup(s):
 def test_quiet_removes_only_dungeon_roles_then_restores(s):
     setup(s)
     with_held = {900, 901, 800}  # two dungeon roles and one event role
-    quiet.set_hours(s, 1, "Rae", 23, 7, "America/New_York", with_held)
+    quiet.set_hours(s, GUILD, 1, "Rae", 23, 7, "America/New_York", with_held)
     tracking_rows = {r.role_id for r in s.scalars(select(RoleHolder).where(RoleHolder.user_id == 1))}
     assert tracking_rows == {900, 901}  # current dungeon roles picked up on setup
-    [c] = quiet.transitions(s, at(23, 30))
+    [c] = quiet.transitions(s, at(23, 30), {GUILD})
     assert (c.to_state, c.role_ids) == ("quiet", {900, 901})
-    quiet.confirm(s, 1, "quiet", c.role_ids)
-    assert quiet.transitions(s, at(2)) == []          # nothing more to do overnight
-    [c] = quiet.transitions(s, at(7, 1))
+    quiet.confirm(s, GUILD, 1, "quiet", c.role_ids)
+    assert quiet.transitions(s, at(2), {GUILD}) == []          # nothing more to do overnight
+    [c] = quiet.transitions(s, at(7, 1), {GUILD})
     assert (c.to_state, c.role_ids) == ("active", {900, 901})
-    quiet.confirm(s, 1, "active", c.role_ids)
+    quiet.confirm(s, GUILD, 1, "active", c.role_ids)
     assert not any(r.suspended for r in s.scalars(select(RoleHolder)))
 
 
 def test_turn_off_restores_during_window(s):
     setup(s)
-    quiet.set_hours(s, 1, "Rae", 23, 7, "America/New_York", {900})
-    quiet.confirm(s, 1, "quiet", {900})
-    quiet.turn_off(s, 1)
-    [c] = quiet.transitions(s, at(1))
+    quiet.set_hours(s, GUILD, 1, "Rae", 23, 7, "America/New_York", {900})
+    quiet.confirm(s, GUILD, 1, "quiet", {900})
+    quiet.turn_off(s, GUILD, 1)
+    [c] = quiet.transitions(s, at(1), {GUILD})
     assert (c.to_state, c.role_ids) == ("active", {900})
 
 
 def test_same_start_and_end_rejected(s):
     import pytest
     with pytest.raises(ValueError):
-        quiet.set_hours(s, 1, "Rae", 5, 5, "UTC", set())
+        quiet.set_hours(s, GUILD, 1, "Rae", 5, 5, "UTC", set())
 
 
 class FakeHttp:
@@ -76,17 +78,17 @@ class FakeHttp:
 
 def test_bot_applies_and_confirms(s, monkeypatch):
     setup(s)
-    quiet.set_hours(s, 1, "Rae", 23, 7, "America/New_York", {900, 800})
+    quiet.set_hours(s, GUILD, 1, "Rae", 23, 7, "America/New_York", {900, 800})
     s.commit()
     b = botmod.NyerkBot(0)
     http = FakeHttp()
     monkeypatch.setattr(b, "http", http)
-    monkeypatch.setattr(b, "_guild", lambda: type("G", (), {"id": 5})())
+    monkeypatch.setattr(b, "_guild", lambda gid: type("G", (), {"id": gid})())
     monkeypatch.setattr(botmod, "now", lambda: at(23, 30))
     asyncio.run(b.apply_quiet_hours())
     assert http.calls == [("remove", 1, 900)]
     s.expire_all()
-    assert quiet.get(s, 1).state == "quiet"
+    assert quiet.get(s, GUILD, 1).state == "quiet"
     monkeypatch.setattr(botmod, "now", lambda: at(8))
     asyncio.run(b.apply_quiet_hours())
     assert http.calls[-1] == ("add", 1, 900)
@@ -94,16 +96,15 @@ def test_bot_applies_and_confirms(s, monkeypatch):
 
 def test_reaction_during_quiet_is_held_not_granted(s, monkeypatch):
     setup(s)
-    quiet.set_hours(s, 1, "Rae", 23, 7, "America/New_York", set())
-    quiet.confirm(s, 1, "quiet", set())
-    from nyerk.db import get_state
-    get_state(s).reaction_messages = {"42": {"1️⃣": 900}}
+    quiet.set_hours(s, GUILD, 1, "Rae", 23, 7, "America/New_York", set())
+    quiet.confirm(s, GUILD, 1, "quiet", set())
+    get_settings(s, GUILD).reaction_messages = {"42": {"1️⃣": 900}}
     s.commit()
     b = botmod.NyerkBot(0)
     http = FakeHttp()
     monkeypatch.setattr(b, "http", http)
     monkeypatch.setattr(b, "get_guild", lambda _gid: None)
-    payload = type("P", (), {"user_id": 1, "guild_id": 5, "message_id": 42, "emoji": "1️⃣",
+    payload = type("P", (), {"user_id": 1, "guild_id": GUILD, "message_id": 42, "emoji": "1️⃣",
                              "member": type("M", (), {"display_name": "Rae"})()})()
     asyncio.run(b._reaction(payload, True))
     assert http.calls == []

@@ -19,7 +19,7 @@ def s():
     with db.session() as session:
         seed(session)
         seed_party_finder(session)
-        seed_reaction_groups(session)
+        seed_reaction_groups(session, GUILD)
         session.flush()
         yield session
 
@@ -30,3 +30,12 @@ def _fresh_search_data():
     from nyerk.web import search
     search.forget_data()
     yield
+
+
+from nyerk.seed import TEST_GUILD as GUILD  # noqa: E402  the tests' Discord server
+
+
+def G(s):
+    """The test server's first game (AION 2, from seed)."""
+    from nyerk import games
+    return games.first(s, GUILD)

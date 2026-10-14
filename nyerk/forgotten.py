@@ -21,7 +21,7 @@ import secrets
 import time
 from pathlib import Path
 
-from . import db, members
+from . import db, members, servers
 from .config import Config
 from .db import get_state
 from .logbus import bus
@@ -41,7 +41,7 @@ def _keep_seconds(cfg: Config) -> int:
 def load(cfg: Config) -> list[dict]:
     try:
         data = json.loads(_path(cfg).read_text(encoding="utf-8"))
-        return [e for e in data if isinstance(e, dict) and {"id", "user_id", "at"} <= set(e)]
+        return [e for e in data if isinstance(e, dict) and {"id", "user_id", "at"} <= set(e)]  # guild_id since v2
     except FileNotFoundError:
         return []
     except (OSError, ValueError) as exc:
@@ -56,9 +56,9 @@ def _save(cfg: Config, entries: list[dict]) -> None:
     os.replace(tmp, path)  # never a half-written list
 
 
-def record(cfg: Config, s, user_id: int, now: int) -> None:
+def record(cfg: Config, s, guild_id: int, user_id: int, now: int) -> None:
     """After a forget: add it to the list and mark it applied to this database."""
-    entry = {"id": secrets.token_hex(8), "user_id": int(user_id), "at": int(now)}
+    entry = {"id": secrets.token_hex(8), "guild_id": int(guild_id), "user_id": int(user_id), "at": int(now)}
     _save(cfg, load(cfg) + [entry])
     state = get_state(s)
     state.forgets_applied = list(state.forgets_applied or []) + [entry["id"]]
@@ -77,11 +77,16 @@ def reapply(cfg: Config, now: int | None = None) -> int:
     with db.session() as s:
         state = get_state(s)
         applied = set(state.forgets_applied or [])
+        known = [x.guild_id for x in servers.all_servers(s)]
         for e in fresh:
-            if e["id"] not in applied:
-                members.forget(s, int(e["user_id"]), now)
-                applied.add(e["id"])
+            if e["id"] in applied:
+                continue
+            # Entries from before servers have no guild_id: they belong to the only server there was.
+            guild = int(e.get("guild_id") or (known[0] if len(known) == 1 else 0))
+            if guild:
+                members.forget(s, guild, int(e["user_id"]), now)
                 ran += 1
+            applied.add(e["id"])
         keep = {e["id"] for e in fresh}
         state.forgets_applied = sorted(applied & keep)
     if ran:

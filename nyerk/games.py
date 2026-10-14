@@ -25,35 +25,49 @@ class GameError(Exception):
     """Shown to the admin as is."""
 
 
-def all_games(s: Session, enabled_only: bool = False) -> list[Game]:
+def all_games(s: Session, guild_id: int | None, enabled_only: bool = False) -> list[Game]:
+    """A server's games. guild_id None = every approved server's (the
+    scheduler's view); enabled_only skips switched-off games."""
+    from . import servers
+
     q = select(Game).order_by(Game.sort_order, Game.id)
+    if guild_id is None:
+        q = q.where(Game.guild_id.in_(servers.approved_ids(s)))
+    else:
+        q = q.where(Game.guild_id == int(guild_id))
     if enabled_only:
         q = q.where(Game.enabled.is_(True))
     return list(s.scalars(q))
 
 
-def get(s: Session, game_id: int | None) -> Game | None:
-    return s.get(Game, game_id) if game_id else None
+def get(s: Session, game_id: int | None, guild_id: int | None = None) -> Game | None:
+    """A game by ID; with guild_id, only if it belongs to that server."""
+    g = s.get(Game, game_id) if game_id else None
+    if g is not None and guild_id is not None and g.guild_id != guild_id:
+        return None
+    return g
 
 
-def first(s: Session) -> Game | None:
-    games = all_games(s)
+def first(s: Session, guild_id: int) -> Game | None:
+    games = all_games(s, guild_id)
     return next((g for g in games if g.enabled), games[0] if games else None)
 
 
-def by_party_channel(s: Session, channel_id: int | None) -> Game | None:
-    if not channel_id:
+def by_party_channel(s: Session, channel_id: int | None, guild_id: int | None) -> Game | None:
+    if not channel_id or not guild_id:
         return None
-    return s.scalar(select(Game).where(Game.party_channel_id == channel_id).order_by(Game.id).limit(1))
+    return s.scalar(select(Game).where(Game.party_channel_id == channel_id, Game.guild_id == guild_id)
+                    .order_by(Game.id).limit(1))
 
 
-def by_timer_channel(s: Session, channel_id: int | None) -> Game | None:
-    if not channel_id:
+def by_timer_channel(s: Session, channel_id: int | None, guild_id: int | None) -> Game | None:
+    if not channel_id or not guild_id:
         return None
-    return s.scalar(select(Game).where(Game.timer_channel_id == channel_id).order_by(Game.id).limit(1))
+    return s.scalar(select(Game).where(Game.timer_channel_id == channel_id, Game.guild_id == guild_id)
+                    .order_by(Game.id).limit(1))
 
 
-def create(s: Session, name: str, kind: str) -> Game:
+def create(s: Session, guild_id: int, name: str, kind: str) -> Game:
     """A new game from a template: "aion2" brings the AION 2 events, boss
     timers, ping categories, classes and gear scores; "custom" starts blank
     apart from the party finder's availability windows."""
@@ -66,10 +80,10 @@ def create(s: Session, name: str, kind: str) -> Game:
         name = KINDS[kind] if kind == "aion2" else ""
     if not name:
         raise GameError("Give the game a name.")
-    if any(g.name.lower() == name.lower() for g in all_games(s)):
+    if any(g.name.lower() == name.lower() for g in all_games(s, guild_id)):
         raise GameError(f"There is already a game called {name}.")
-    order = max((g.sort_order for g in all_games(s)), default=-1) + 1
-    game = Game(name=name, kind=kind, sort_order=order)
+    order = max((g.sort_order for g in all_games(s, guild_id)), default=-1) + 1
+    game = Game(guild_id=int(guild_id), name=name, kind=kind, sort_order=order)
     if kind == "aion2":
         for k, v in AION2_SETTINGS.items():
             setattr(game, k, v)
@@ -85,7 +99,7 @@ def check_channels(s: Session, game: Game) -> None:
     """Two games can't share a timer or party channel: each keeps its own
     dashboard or panels at the bottom of its channel, and they'd take turns
     reposting forever."""
-    for other in all_games(s):
+    for other in all_games(s, game.guild_id):
         if other.id == game.id:
             continue
         if game.timer_channel_id and game.timer_channel_id in (other.timer_channel_id, other.party_channel_id):
