@@ -852,6 +852,16 @@ class NyerkBot(discord.Client):
             except discord.HTTPException:
                 pass
 
+    def guild_roles(self, guild_id: int) -> list[tuple[int, str, bool]]:
+        """A server's roles, highest first, as (id, name, Nyerk can hand it
+        out): not @everyone, not roles owned by bots or integrations."""
+        guild = self._guild(guild_id)
+        if guild is None:
+            return []
+        top = guild.me.top_role if guild.me is not None else None
+        return [(r.id, r.name, top is not None and r < top) for r in sorted(guild.roles, reverse=True)
+                if not r.is_default() and not r.managed]
+
     async def create_content_roles(self, guild_id: int, content_ids: list[int], game_id: int | None = None) -> list[str]:
         """Create a mentionable role for each of a server's dungeons without
         one. game_id: a linked game, whose dungeons are another server's;

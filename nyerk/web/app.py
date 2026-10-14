@@ -2065,9 +2065,12 @@ def create_app(cfg, bot=None) -> FastAPI:
                     RoleHolder.suspended.is_(True))) or 0
                 quiet_rows.append((q, quiet.window_text(q), paused))
             home_server = servers.get(s, home.guild_id) if home else None
+            bot = _bot_ready()
+            server_roles = bot.guild_roles(guild_of(request)) if home and bot and hasattr(bot, "guild_roles") else []
             ctx = dict(st=settings, state=settings, classes=party.classes_for(s, settings),
                        brackets=party.brackets(s, gid), quiet_rows=quiet_rows, home=home,
                        home_server=home_server.guild_name if home_server else "", tags=tags, linked_emoji=emoji,
+                       server_roles=server_roles, role_names={r[0]: r[1] for r in server_roles},
                        windows=party.windows(s, gid), contents=party.contents_for(s, settings, False), parties=parties,
                        interests=interests, content_names={c.id: c.name for c in party.contents(s, gid, False)},
                        TYPE_LABEL=party.TYPE_LABEL)
@@ -2122,6 +2125,84 @@ def create_app(cfg, bot=None) -> FastAPI:
             refresh()
         flash(request, f"Saved {changed} role{'s' if changed != 1 else ''}. Repost the class panel and the roles "
                        "channel to update their buttons." if changed else "No changes.")
+        return back("/party#linked")
+
+    def _norm(name: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+    @app.post("/party/linked/match")
+    async def party_linked_match(request: Request):
+        """A linked game: give every shared class and dungeon without a role
+        this server's role of the same name (or the same name as the home
+        server's role for it)."""
+        await form(request)
+        bot = _bot_ready()
+        if not bot:
+            flash(request, "Bot is not connected.", "err")
+            return back("/party#linked")
+        with db.session() as s:
+            g = game_of(request, s)
+            if not g.link_home_id:
+                return back("/party")
+            home = s.get(Game, g.link_home_id)
+            home_names = {rid: name for rid, name, _ in bot.guild_roles(home.guild_id)} if home else {}
+            mine = [(rid, name) for rid, name, ok in bot.guild_roles(guild_of(request)) if ok]
+            by_name = {}
+            for rid, name in mine:
+                by_name.setdefault(_norm(name), rid)
+            matched, unmatched = [], []
+            for kind, shared, theirs in (("class", party.classes_for(s, g), party.classes(s, g.link_home_id)),
+                                         ("content", party.contents_for(s, g, False),
+                                          party.contents(s, g.link_home_id, False))):
+                used = {c.role_id for c in shared if c.role_id}
+                home_role = {c.id: c.role_id for c in theirs}
+                for c in shared:
+                    if c.role_id:
+                        continue
+                    names = [_norm(c.name), _norm(home_names.get(home_role.get(c.id, 0), ""))]
+                    rid = next((by_name[n] for n in names if n and n in by_name and by_name[n] not in used), 0)
+                    if rid:
+                        linking.set_role(s, g, kind, c.id, rid)
+                        used.add(rid)
+                        matched.append(c.name)
+                    else:
+                        unmatched.append(c.name)
+        if matched:
+            bus.info("config", f"Shared party finder roles matched by name: {', '.join(matched)}.")
+            refresh()
+        flash(request, (f"Matched {len(matched)}: {', '.join(matched)}. " if matched else "Nothing matched. ")
+              + (f"No role of the same name for: {', '.join(unmatched)}." if unmatched else ""),
+              "ok" if matched else "err")
+        return back("/party#linked")
+
+    @app.post("/party/linked/create")
+    async def party_linked_create(request: Request):
+        """A linked game: create a role for every shared class and dungeon without one."""
+        await form(request)
+        bot = _bot_ready()
+        if not bot:
+            flash(request, "Bot is not connected.", "err")
+            return back("/party#linked")
+        with db.session() as s:
+            g = game_of(request, s)
+            if not g.link_home_id:
+                return back("/party")
+            game_id = g.id
+            classes = [c.id for c in party.classes_for(s, g) if not c.role_id]
+            dungeons = [c.id for c in party.contents_for(s, g, False) if not c.role_id]
+        if not classes and not dungeons:
+            flash(request, "Every class and dungeon already has a role.")
+            return back("/party#linked")
+        try:
+            made = await bot.create_class_roles(guild_of(request), classes, game_id=game_id)
+            made += await bot.create_content_roles(guild_of(request), dungeons, game_id=game_id)
+        except Exception as exc:
+            bus.error("roles", f"Creating shared party finder roles failed: {exc!r}")
+            flash(request, f"Discord refused: {exc}. Nyerk needs the Manage Roles permission.", "err")
+            return back("/party#linked")
+        refresh()
+        flash(request, f"Created {len(made)} role{'s' if len(made) != 1 else ''}: {', '.join(made)}. "
+                       "Repost the class panel and the roles channel to show them.")
         return back("/party#linked")
 
     @app.post("/party/classes/bulk")

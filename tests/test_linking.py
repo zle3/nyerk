@@ -310,3 +310,38 @@ def test_upgrade_moves_party_messages_to_posts(tmp_path):
         cleric.role_id = 1234
         p = party.create(s, Who(1, "Al", {1234}), content.id, 5, "none", "", "", T)  # the rebuilt table takes rows
         assert p.origin_game_id == g.id
+
+
+def test_shared_roles_match_by_name_and_mass_create(app, monkeypatch):  # noqa: F811
+    with db.session() as s:
+        a, b = games.first(s, A), games.first(s, B)
+        linking.join(s, b, linking.new_code(s, a))
+        s.add(PfContent(game_id=a.id, name="Fire Temple", role_id=7100))
+        home_cleric = next(c for c in party.classes(s, a.id) if c.name == "Cleric")
+        bid = b.id
+    roles = {A: [(home_cleric.role_id, "Healers", True), (7100, "Fire Temple", True)],
+             B: [(8001, "healers", True), (8002, "fire-temple", True), (8003, "Templar", False)]}
+    made = []
+    bot = app.state.bot
+    bot.guild_roles = lambda gid: roles.get(gid, [])
+
+    async def create(kind, guild_id, ids, game_id=None):
+        made.append((kind, list(ids), game_id))
+        return [f"{kind}{i}" for i in ids]
+    bot.create_class_roles = lambda g, ids, game_id=None: create("class", g, ids, game_id)
+    bot.create_content_roles = lambda g, ids, game_id=None: create("content", g, ids, game_id)
+
+    host = sign_in(app, HOST, monkeypatch)
+    host.post("/server/use", data={"csrf": csrf(host, "/"), "guild_id": str(B)})
+    page = host.get(f"/party?game={bid}").text
+    assert 'value="8001"' in page and "above Nyerk" in page            # a picker of this server's roles
+    r = host.post("/party/linked/match", data={"csrf": csrf(host, "/party")})
+    assert "Matched 2" in r.text
+    with db.session() as s:
+        got = {(x.kind, x.role_id) for x in s.scalars(select(LinkedRole).where(LinkedRole.game_id == bid))}
+    assert ("class", 8001) in got and ("content", 8002) in got           # by the home's role name, by name
+    assert not any(rid == 8003 for _, rid in got)                        # above Nyerk: never matched
+    host.post("/party/linked/create", data={"csrf": csrf(host, "/party")})
+    kinds = {k: ids for k, ids, gid in made}
+    assert set(kinds) == {"class", "content"} and kinds["content"] == [] and len(kinds["class"]) == 7
+    assert all(gid == bid for _, _, gid in made)

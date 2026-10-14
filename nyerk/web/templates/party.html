@@ -52,20 +52,34 @@
 
 </fieldset>
 
+{% macro role_pick(name, current, label) %}
+{% if server_roles %}<select name="{{ name }}" aria-label="{{ label }}">
+  <option value="">No role</option>
+  {% if current and current not in role_names %}<option value="{{ current }}" selected>Unknown role {{ current }}</option>{% endif %}
+  {% for rid, rname, ok in server_roles %}<option value="{{ rid }}" {{ 'selected' if rid == current }}>{{ rname }}{{ '' if ok else " (above Nyerk: it can't hand this out)" }}</option>{% endfor %}
+</select>{% else %}<input type="text" name="{{ name }}" value="{{ current or '' }}" placeholder="Role ID" class="mono" aria-label="{{ label }}">{% endif %}
+{% endmacro %}
 {% if home %}
 <p class="section-label" id="linked">Shared party finder</p>
 <p>This game uses <strong>{{ home_server or 'another server' }}</strong>'s <strong>{{ home.name }}</strong> party finder: its classes, dungeons, gear scores, availability windows and timings are set there, and its parties and sign-ups show here too. Pings and mentions stay in each member's own server. Unlink on the <a href="/games#links">Games</a> page.</p>
-<p class="small muted">Give each shared class and dungeon a role in this server. Members pick classes with this server's class panel; a party for a dungeon pings this server's role for it. Classes without a role are left off the panel. Tank, Support and DPS roles above are this server's.</p>
+<p class="small muted">Give each shared class and dungeon a role in this server: pick an existing role, or let Nyerk create them. Members pick classes with this server's class panel; a party for a dungeon pings this server's role for it. Classes without a role are left off the panel. Tank, Support and DPS roles above are this server's.</p>
+<div class="actions">
+  <button class="btn secondary" type="submit" form="linked-match" {{ 'disabled' if not can.roles }}>Match existing roles by name</button>
+  <button class="btn secondary" type="submit" form="linked-create" {{ 'disabled' if not can.roles }}>Create all missing roles</button>
+  <span class="small muted">Matching fills empty rows with this server's role of the same name as the class or dungeon (or as the home server's role for it). Nothing already set is changed.</span>
+</div>
+<form method="post" action="/party/linked/match" id="linked-match" hidden>{{ csrf_field() }}</form>
+<form method="post" action="/party/linked/create" id="linked-create" data-confirm="Create a Discord role for every shared class and dungeon that has none?" hidden>{{ csrf_field() }}</form>
 <form method="post" action="/party/linked">
   {{ csrf_field() }}
   <fieldset {{ 'disabled' if not can.roles }} class="{{ '' if can.roles else 'owner-only' }}">
   <div class="table-wrap">
   <table>
-    <thead><tr><th>Class</th><th>Type</th><th>Class role ID in this server</th></tr></thead>
+    <thead><tr><th>Class</th><th>Type</th><th>Class role in this server</th></tr></thead>
     <tbody>
     {% for c in classes %}
       <tr><td>{{ c.emoji }} {{ c.name }}</td><td>{{ TYPE_LABEL[c.class_type] }}</td>
-        <td><div class="inline"><input type="text" name="role_class_{{ c.id }}" value="{{ c.role_id or '' }}" placeholder="Role ID" class="mono" aria-label="Role ID for {{ c.name }}">{% if not c.role_id %}<button class="btn small secondary" type="submit" form="mk-class-{{ c.id }}">Create role</button>{% endif %}</div></td></tr>
+        <td><div class="inline">{{ role_pick('role_class_' ~ c.id, c.role_id, 'Role for ' ~ c.name) }}{% if not c.role_id %}<button class="btn small secondary" type="submit" form="mk-class-{{ c.id }}">Create role</button>{% endif %}</div></td></tr>
     {% else %}
       <tr><td colspan="3" class="muted">The home server has no classes yet.</td></tr>
     {% endfor %}
@@ -74,11 +88,11 @@
   </div>
   <div class="table-wrap mt">
   <table>
-    <thead><tr><th>Dungeon</th><th>Min gear</th><th>Ping role ID in this server</th></tr></thead>
+    <thead><tr><th>Dungeon</th><th>Min gear</th><th>Ping role in this server</th></tr></thead>
     <tbody>
     {% for c in contents %}
       <tr class="{{ '' if c.active else 'off' }}"><td>{{ c.emoji }} {{ c.name }}</td><td class="num">{{ c.min_gear_score or '' }}</td>
-        <td><div class="inline"><input type="text" name="role_content_{{ c.id }}" value="{{ c.role_id or '' }}" placeholder="Role ID" class="mono" aria-label="Ping role ID for {{ c.name }}">{% if not c.role_id %}<button class="btn small secondary" type="submit" form="mk-role-{{ c.id }}">Create role</button>{% endif %}</div></td></tr>
+        <td><div class="inline">{{ role_pick('role_content_' ~ c.id, c.role_id, 'Ping role for ' ~ c.name) }}{% if not c.role_id %}<button class="btn small secondary" type="submit" form="mk-role-{{ c.id }}">Create role</button>{% endif %}</div></td></tr>
     {% else %}
       <tr><td colspan="3" class="muted">The home server has no dungeons yet.</td></tr>
     {% endfor %}
