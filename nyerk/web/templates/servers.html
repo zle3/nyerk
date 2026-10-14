@@ -4,7 +4,23 @@
 {% block content %}
 <h1>Servers</h1>
 <p class="lede">Every Discord server that added this Nyerk. A new server waits here until you approve it; until then Nyerk does nothing there. Each approved server has its own owner, admins, settings, games and data, and none of it is shared.</p>
-{% if invite %}<div class="card"><p class="small muted">Link to add Nyerk to another server (the server's owner opens it):</p><p class="mono small">{{ invite }}</p></div>{% endif %}
+<p class="section-label" id="invite">Add Nyerk to a server</p>
+{% if invite %}
+<div class="card invite-card">
+  <div class="copy-row">
+    <input type="text" id="invite-link" class="mono" value="{{ invite }}" readonly aria-label="Invite link">
+    <button class="btn secondary" type="button" data-copy="#invite-link">Copy</button>
+    <a class="btn" href="{{ invite }}" target="_blank" rel="noopener">Open invite</a>
+  </div>
+  <ol class="small">
+    <li>Send this link to the server's owner (or anyone with Manage Server there). They open it, pick their server and click <strong>Authorize</strong>. Use this link, not Discord's <em>Add App</em> button, which may add only the commands.</li>
+    <li>The server appears below as <strong>waiting</strong>. Click <strong>Approve</strong>; until then Nyerk does nothing there.</li>
+    <li>Their owner signs in to this page with Discord and the <strong>setup guide</strong> walks them through the rest: game, channels, permissions, roles and posting.</li>
+  </ol>
+</div>
+{% else %}
+<div class="card"><p class="small muted">The invite link appears here once the bot is connected (or set <code>DISCORD_CLIENT_ID</code>).</p></div>
+{% endif %}
 
 <p class="section-label">Servers</p>
 <div class="list">

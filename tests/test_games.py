@@ -245,7 +245,8 @@ def test_first_start_asks_which_game(tmp_path, monkeypatch):
     assert r.status_code == 200 and "Throne and Liberty" in r.text
     with db.session() as s:
         assert [g.name for g in games.all_games(s, GUILD)] == ["Throne and Liberty"]
-    assert c.get("/setup", follow_redirects=False).headers["location"] == "/"   # only once
+    page = c.get("/setup").text   # picked once; afterwards the setup guide
+    assert "Setup guide" in page and "Which game is this for?" not in page
 
 
 def test_games_page_add_switch_rename_and_delete(tmp_path, monkeypatch):
