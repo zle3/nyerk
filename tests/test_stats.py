@@ -4,6 +4,7 @@ from nyerk import party, stats, tracking
 from nyerk.models import Category, PfClass, PfContent
 
 from .test_party import T, reg, who
+from .conftest import GUILD, G  # noqa: F401
 
 
 def setup(s):
@@ -50,17 +51,17 @@ def test_class_and_ping_tracking(s):
     s.commit()
     cleric = s.scalar(select(PfClass).where(PfClass.name == "Cleric"))
     templar = s.scalar(select(PfClass).where(PfClass.name == "Templar"))
-    tracking.set_class(1, "a", cleric.role_id)
-    tracking.set_class(2, "b", cleric.role_id)
-    tracking.set_class(2, "b", templar.role_id)  # switching class replaces it
-    tracking.set_class(3, "c", cleric.role_id)
-    tracking.set_class(3, "c", None)             # cleared
+    tracking.set_class(GUILD, 1, "a", cleric.role_id)
+    tracking.set_class(GUILD, 2, "b", cleric.role_id)
+    tracking.set_class(GUILD, 2, "b", templar.role_id)  # switching class replaces it
+    tracking.set_class(GUILD, 3, "c", cleric.role_id)
+    tracking.set_class(GUILD, 3, "c", None)             # cleared
     s.scalar(select(Category).where(Category.name == "Shugo")).role_id = 555  # stats count this game's ping roles
     s.commit()
-    tracking.add_ping(1, "a", 555)
-    tracking.add_ping(1, "a", 555)               # no double count
-    tracking.add_ping(2, "b", 555)
-    tracking.remove_pings(2, {555})
+    tracking.add_ping(GUILD, 1, "a", 555)
+    tracking.add_ping(GUILD, 1, "a", 555)               # no double count
+    tracking.add_ping(GUILD, 2, "b", 555)
+    tracking.remove_pings(GUILD, 2, {555})
     st = stats.compute(s, "all", T, "UTC", 1)
     counts = {x.label.split(" ", 1)[-1]: (x.value, x.note) for x in st.classes}
     assert counts["Cleric"] == (1, "50%") and counts["Templar"] == (1, "50%")

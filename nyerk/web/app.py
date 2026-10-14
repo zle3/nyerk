@@ -25,10 +25,10 @@ from . import auth
 from . import search as websearch
 from . import security as websecurity
 
-from .. import db, engine, forgotten, games, history, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
+from .. import db, engine, forgotten, games, history, servers, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
-from ..logbus import bus
+from ..logbus import bus, current_guild
 from ..models import (
     AlertSlot, Category, ConfigChange, Event, Game, LogEntry, PfBracket, PfClass, PfContent, PfInterest, PfParty,
     PfWindow, QuietHours, ReactionGroup, RoleHolder, UserTimer,
@@ -96,6 +96,10 @@ class NoGame(Exception):
     """No game set up yet: the owner picks one on /setup first."""
 
 
+class NoServer(Exception):
+    """No approved server to show: the host approves one on /servers first."""
+
+
 class BlockedText(Exception):
     pass
 
@@ -109,6 +113,8 @@ ADMIN_CHANGES_PER_HOUR = 30
 def create_app(cfg, bot=None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     safety.protect_guild(cfg.guild_id)
+    with db.session() as s:
+        servers.protect_all(s)
     app.state.bot = bot
     app.state.fails: dict[str, tuple[int, float]] = {}
     @app.middleware("http")
@@ -118,8 +124,9 @@ def create_app(cfg, bot=None) -> FastAPI:
         change things."""
         user = request.session.get("user") if "session" in request.scope else None
         path = request.url.path
-        if request.method != "POST" or not user or user.get("level") not in ("admin", "owner") \
-                or any(path == p or path.startswith(p + "/") for p in AUDIT_SKIP):
+        gid = getattr(request.state, "guild_id", 0)
+        if request.method != "POST" or not user or not gid or user.get("level") not in ("admin", "owner", "host") \
+                or any(path == p or path.startswith(p + "/") for p in AUDIT_SKIP + ("/servers", "/server/use")):
             return await call_next(request)
         if user["level"] == "admin" and not app.state.limiter.allow(
                 str(user["uid"]), "admin-changes", ADMIN_CHANGES_PER_HOUR, 3600):
@@ -128,12 +135,16 @@ def create_app(cfg, bot=None) -> FastAPI:
             from starlette.responses import PlainTextResponse
             return PlainTextResponse("Too many changes this hour. Ask the owner if you need more.", status_code=429)
         with db.session() as s:
-            before = history.snapshot(s)
+            if servers.get(s, gid) is None:
+                return await call_next(request)
+            before = history.snapshot(s, gid)
         response = await call_next(request)
         with db.session() as s:
-            lines = history.diff(before, history.snapshot(s))
+            if servers.get(s, gid) is None:  # the change removed the server itself
+                return response
+            lines = history.diff(before, history.snapshot(s, gid))
             if lines:
-                history.record(s, int(time.time()), user, path, before, lines)
+                history.record(s, gid, int(time.time()), user, path, before, lines)
         if lines:
             more = f" (+{len(lines) - 3} more)" if len(lines) > 3 else ""
             bus.info("config", f"{user['name']} ({user['level']}) changed: " + "; ".join(lines[:3]) + more)
@@ -142,35 +153,53 @@ def create_app(cfg, bot=None) -> FastAPI:
     @app.middleware("http")
     async def _user(request: Request, call_next):
         """Keep the signed-in user current: drop sessions from before a
-        "sign everyone out", re-read Discord roles every few minutes and
-        apply the owner's admin lock."""
+        "sign everyone out", pick the server this browser is looking at, re-
+        read their Discord roles there every few minutes and apply that
+        server's admin lock. Sets request.state.guild_id (0: no server)."""
         user = request.session.get("user")
+        gid = 0
+        if user and "servers" not in user:
+            request.session.clear()  # a session from before servers: sign in again
+            user = None
         if user:
             with db.session() as s:
-                epoch, locked = get_state(s).session_epoch, get_settings(s).admin_locked
-            bot = app.state.bot
+                epoch = get_state(s).session_epoch
+                approved = {x.guild_id: x for x in servers.approved(s)}
+                epochs = {g: x.session_epoch for g, x in approved.items()}
+                locks = {g: x.admin_locked for g, x in approved.items()}
+                admin_roles = {g: auth.parse_ids(x.admin_role_ids) | set(cfg.admin_role_ids)
+                               for g, x in approved.items()}
             if user.get("epoch") != epoch:
                 request.session.clear()
                 user = None
-            elif user["via"] == "discord" and time.time() - user["checked"] > auth.RECHECK_SECONDS \
-                    and bot and bot.is_ready():
-                found = await bot.fetch_member(user["uid"])
-                if found is None and user["uid"] not in cfg.owner_ids:
-                    request.session.clear()
-                    user = None
+        if user:
+            mine = {int(g): lvl for g, lvl in user["servers"].items()
+                    if int(g) in approved and user["epochs"].get(g) == epochs.get(int(g))}
+            choices = sorted(approved) if user.get("host") else sorted(mine)
+            wanted = request.session.get("guild_id")
+            gid = wanted if wanted in choices else (choices[0] if choices else 0)
+            bot = app.state.bot
+            if gid and user["via"] == "discord" and not user.get("host") \
+                    and time.time() - user["checked"] > auth.RECHECK_SECONDS and bot and bot.is_ready():
+                found = await bot.member_access(gid, user["uid"])
+                if found is None:
+                    mine.pop(gid, None)
                 else:
-                    name, roles = found or (user["name"], set())
-                    user.update(name=name, role_level=auth.level_for(user["uid"], roles, cfg, False),
-                                checked=int(time.time()))
-            if user:
-                # The admin lock applies on top of what the roles give, so
-                # locking and unlocking both take effect immediately.
-                base = user.get("role_level", user["level"])
-                effective = "member" if base == "admin" and locked else base
-                if user.get("role_level") != base or user["level"] != effective:
-                    user.update(role_level=base, level=effective)
-                request.session["user"] = user
-        request.state.user = user
+                    name, roles, is_owner, can_manage = found
+                    mine[gid] = auth.server_level(is_owner, can_manage, roles, admin_roles.get(gid, set()))
+                    user["name"] = name
+                user["checked"] = int(time.time())
+                choices = sorted(mine)
+                gid = gid if gid in choices else (choices[0] if choices else 0)
+            if not user.get("host") and not mine:
+                request.session.clear()  # no server left that they can use
+                user = None
+            else:
+                user["servers"] = {str(g): lvl for g, lvl in mine.items()}
+                user["level"] = "host" if user.get("host") else auth.effective(mine.get(gid), locks.get(gid, False))
+                request.session["user"], request.session["guild_id"] = user, gid
+        request.state.user, request.state.guild_id = user, gid
+        current_guild.set(gid)  # log lines from this request belong to this server
         return await call_next(request)
 
     secret = cfg.session_secret or _persistent_secret(cfg)
@@ -196,6 +225,15 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def _no_game(request: Request, exc: NoGame):
         return RedirectResponse("/setup", status_code=303)
 
+    @app.exception_handler(NoServer)
+    async def _no_server(request: Request, exc: NoServer):
+        user = request.session.get("user") or {}
+        if user.get("host"):
+            return RedirectResponse("/servers", status_code=303)
+        resp = render(request, "forbidden.html", reason="Nyerk isn't set up in any of your servers yet.")
+        resp.status_code = 403
+        return resp
+
     @app.exception_handler(TooMany)
     async def _too_many(request: Request, exc: TooMany):
         from starlette.responses import PlainTextResponse
@@ -217,6 +255,13 @@ def create_app(cfg, bot=None) -> FastAPI:
     def current(request: Request) -> dict | None:
         return request.session.get("user")
 
+    def guild_of(request: Request) -> int:
+        """The Discord server this browser is looking at."""
+        gid = getattr(request.state, "guild_id", 0)
+        if not gid:
+            raise NoServer()
+        return gid
+
     def tell_leader(note: tuple[int, str] | None, actor_id: int) -> None:
         bot = app.state.bot
         if note and bot is not None and bot.is_ready():
@@ -225,44 +270,74 @@ def create_app(cfg, bot=None) -> FastAPI:
     def game_of(request: Request, s) -> Game:
         """The game this browser is looking at (remembered in the session);
         the first game when none is picked. No game at all: go to setup."""
+        gid = guild_of(request)
         wanted = request.query_params.get("game", "")
-        if wanted.isdigit() and games.get(s, int(wanted)):  # a link to another game's page
+        if wanted.isdigit() and games.get(s, int(wanted), gid):  # a link to another game's page
             request.session["game_id"] = int(wanted)
-        g = games.get(s, request.session.get("game_id"))
+        g = games.get(s, request.session.get("game_id"), gid)
         if g is None:
-            g = games.first(s)
+            g = games.first(s, gid)
             if g is None:
                 raise NoGame()
             request.session["game_id"] = g.id
         return g
+
+    def mine(request: Request, s, row):
+        """`row` if it belongs to the server this browser is looking at, else
+        404: an admin of one server can't reach another's rows by their ID."""
+        if row is None or servers.row_guild(s, row) != guild_of(request):
+            raise HTTPException(404)
+        return row
+
+    def own_game_id(request: Request, s, data) -> int:
+        """A game ID from a form, only if it is one of this server's games."""
+        g = games.get(s, _int(data, "game_id", 0, 0, 10**9), guild_of(request))
+        if g is None:
+            raise HTTPException(404)
+        return g.id
+
+    def own_gear_target(request: Request, s, data, raw: str) -> tuple[int, int | None]:
+        """(game, bracket or None to clear) from a gear score form, inside this server."""
+        gid = own_game_id(request, s, data)
+        if not raw.isdigit():
+            return gid, None
+        bracket = mine(request, s, s.get(PfBracket, int(raw)))
+        if bracket.game_id != gid:
+            raise HTTPException(404)
+        return gid, bracket.id
 
     def look_at(request: Request, game_id: int) -> None:
         """Switch the browser to a game, e.g. when opening one of its events."""
         if request.session.get("game_id") != game_id:
             request.session["game_id"] = game_id
 
-    def grants() -> frozenset[str]:
+    def grants(request: Request) -> frozenset[str]:
+        gid = getattr(request.state, "guild_id", 0)
+        if not gid:
+            return frozenset()
         with db.session() as s:
-            return auth.parse_grants(get_settings(s).admin_grants)
+            row = servers.get(s, gid)
+            return auth.parse_grants(row.admin_grants) if row else frozenset()
 
     def may(request: Request, area: str) -> bool:
         """Owner, or an admin the owner has opened this area to."""
         level = (current(request) or {}).get("level")
-        return auth.allows(level, "owner") or (level == "admin" and area in grants())
+        return auth.allows(level, "owner") or (level == "admin" and area in grants(request))
 
     def require(request: Request) -> dict:
         user = current(request)
         if not user:
             raise Login()
         need = auth.needed_level(request.url.path, request.method)
-        g = grants() if need == "owner" else frozenset()
+        g = grants(request) if need == "owner" else frozenset()
         if not auth.may_use(user.get("level"), need, request.url.path, request.method, g):
-            raise Forbidden("Only the owner can change this." if need == "owner"
-                            else "This page is for Nyerk admins.")
-        if need == "owner" and request.method == "POST" and time.time() - user["issued"] > auth.FRESH_SECONDS:
+            raise Forbidden({"owner": "Only the server's owner can change this.",
+                             "host": "Only the host of this Nyerk can do that."}.get(need,
+                                                                                 "This page is for Nyerk admins."))
+        if need in ("owner", "host") and request.method == "POST" and time.time() - user["issued"] > auth.FRESH_SECONDS:
             request.session["after_login"] = str(request.headers.get("referer") or "/")
             raise Login()  # sensitive change: sign in again first
-        if user.get("level") != "owner" and not getattr(request.state, "limited", False):
+        if user.get("level") not in ("owner", "host") and not getattr(request.state, "limited", False):
             request.state.limited = True  # count each request once, however often require() runs
             limit_user(request, user)
         return user
@@ -310,13 +385,21 @@ def create_app(cfg, bot=None) -> FastAPI:
         if "csrf" not in request.session:
             request.session["csrf"] = secrets.token_urlsafe(32)
         user = current(request) or {}
+        gid = getattr(request.state, "guild_id", 0)
         with db.session() as s:
-            st = get_settings(s)
-            preview = dict(title=st.link_preview_title or "Nyerk", description=st.link_preview_description or "")
-            game_rows = games.all_games(s)
-            cur = games.get(s, request.session.get("game_id")) or games.first(s)
+            # Signed out (no server yet): the first server's link preview.
+            st = servers.get(s, gid) if gid else next(iter(servers.approved(s)), None)
+            preview = dict(title=(st.link_preview_title if st else "") or "Nyerk",
+                           description=st.link_preview_description if st else "")
+            game_rows = games.all_games(s, gid) if gid else []
+            cur = (games.get(s, request.session.get("game_id"), gid) or games.first(s, gid)) if gid else None
             pending = cur.pending_import if cur else None
             game_list = [dict(id=g.id, name=g.name, enabled=g.enabled) for g in game_rows]
+            # The servers this person can switch between (every approved one for the host).
+            names = {x.guild_id: x.guild_name or str(x.guild_id) for x in servers.approved(s)}
+            mine = sorted(names) if user.get("host") else sorted(int(g) for g in user.get("servers", {})
+                                                                  if int(g) in names)
+            server_list = [dict(id=g, name=names[g]) for g in mine]
         base = cfg.public_url or str(request.base_url).rstrip("/")
         preview.update(url=base + "/", image=base + "/static/og.png")
         ctx.update(
@@ -326,7 +409,9 @@ def create_app(cfg, bot=None) -> FastAPI:
             can={a: may(request, a) for a in auth.AREAS},
             request=request, csrf=request.session["csrf"], flashes=request.session.pop("flash", []),
             nav=name.split(".")[0], pending_changes=len((pending or {}).get("changes", [])),
-            bot_status=app.state.bot.status() if app.state.bot else None,
+            bot_status=app.state.bot.status(gid) if app.state.bot else None,
+            servers_list=server_list, current_server=dict(id=gid, name=names.get(gid, "")) if gid else None,
+            many_servers=len(server_list) > 1, is_host=bool(user.get("host")),
             games_list=game_list, current_game=dict(id=cur.id, name=cur.name, kind=cur.kind) if cur else None,
             many_games=len(game_list) > 1,
             REPO_URL=REPO_URL, LEGAL_UPDATED=LEGAL_UPDATED, version=VERSION,
@@ -351,7 +436,9 @@ def create_app(cfg, bot=None) -> FastAPI:
             return get_state(s).session_epoch
 
     def landing(user: dict) -> str:
-        return "/" if auth.allows(user["level"], "admin") else "/me"
+        if user.get("host"):
+            return "/"
+        return "/" if any(auth.allows(lv, "admin") for lv in user["servers"].values()) else "/me"
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request):
@@ -370,15 +457,15 @@ def create_app(cfg, bot=None) -> FastAPI:
         if not secrets.compare_digest(str(data.get("csrf", "")), request.session.get("csrf", "-")):
             return back("/login")
         with db.session() as s:
-            hashed = get_settings(s).admin_password_hash
+            hashed = get_state(s).admin_password_hash
         pw = str(data.get("password", "")).encode()
         if hashed and bcrypt.checkpw(pw, hashed.encode()):
             app.state.fails.pop(ip, None)
             after = request.session.get("after_login", "/")
             request.session.clear()
-            request.session.update(user=auth.new_session(0, "Owner (password)", "owner", "password", epoch_now()),
+            request.session.update(user=auth.new_session(0, "Host (password)", True, {}, {}, "password", epoch_now()),
                                    csrf=secrets.token_urlsafe(32))
-            bus.info("admin", f"Owner signed in with the password from {ip}.", discord=False)
+            bus.info("admin", f"Host signed in with the password from {ip}.", discord=False)
             return back(after if after.startswith("/") else "/")
         fails += 1
         app.state.fails[ip] = (fails, time.time() + LOCKOUT if fails >= MAX_FAILS else 0.0)
@@ -409,23 +496,30 @@ def create_app(cfg, bot=None) -> FastAPI:
             flash(request, "Couldn't reach Discord. Try again in a moment.", "err")
             return back("/login")
         bot = app.state.bot
-        found = await bot.fetch_member(uid) if bot and bot.is_ready() else None
-        if found is None and uid not in cfg.owner_ids:
-            flash(request, "You need to be a member of the server to use Nyerk." if bot and bot.is_ready()
+        host = uid in cfg.owner_ids
+        levels: dict[str, str] = {}
+        epochs: dict[str, int] = {}
+        if bot and bot.is_ready():
+            with db.session() as s:
+                rows = [(x.guild_id, x.session_epoch, auth.parse_ids(x.admin_role_ids) | set(cfg.admin_role_ids))
+                        for x in servers.approved(s) if x.guild_id in bot.server_ids()]
+            for gid, server_epoch, admin_roles in rows:  # every approved server they're in
+                found = await bot.member_access(gid, uid)
+                if found:
+                    name = found[0]
+                    levels[str(gid)] = auth.server_level(found[2], found[3], found[1], admin_roles)
+                    epochs[str(gid)] = server_epoch
+        if not levels and not host:
+            flash(request, "You need to be in a server that uses Nyerk." if bot and bot.is_ready()
                   else "Nyerk is offline right now, so it can't check your server roles. Try again later.", "err")
             return back("/login")
-        name, roles = found or (name, set())
-        with db.session() as s:
-            locked = get_settings(s).admin_locked
-        role_level = auth.level_for(uid, roles, cfg, False)
-        level = auth.level_for(uid, roles, cfg, locked)
         after = request.session.get("after_login", "")
         request.session.clear()
-        user = auth.new_session(uid, name, level, "discord", epoch_now())
-        user["role_level"] = role_level
+        user = auth.new_session(uid, name, host, levels, epochs, "discord", epoch_now())
         request.session.update(user=user, csrf=secrets.token_urlsafe(32))
-        bus.info("admin", f"{name} signed in with Discord as {level}.", discord=level != "member")
-        return back(after if after.startswith("/") and level != "member" else landing(user))
+        top = "host" if host else max(levels.values(), key=lambda lv: auth.LEVELS[lv])
+        bus.info("admin", f"{name} signed in with Discord ({top}).", discord=False)
+        return back(after if after.startswith("/") and top != "member" else landing(user))
 
     @app.post("/logout")
     async def logout(request: Request):
@@ -441,7 +535,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         with db.session() as s:
             game, state = game_of(request, s), get_state(s)
             dash = engine.build_dashboard(s, game, int(time.time()))
-            logs = list(s.scalars(select(LogEntry).order_by(LogEntry.id.desc()).limit(25)))
+            logs = list(s.scalars(select(LogEntry).where(LogEntry.guild_id == guild_of(request)).order_by(LogEntry.id.desc()).limit(25)))
             active = s.scalar(select(func.count()).select_from(UserTimer).join(Event).where(
                 UserTimer.status == "active", Event.game_id == game.id))
             ctx = dict(dash=dash, logs=logs, active=active, state=state, settings=game)
@@ -456,6 +550,83 @@ def create_app(cfg, bot=None) -> FastAPI:
         flash(request, "Dashboard will be reposted in a moment." if app.state.bot else "Bot is not running.")
         return back("/")
 
+    # -- servers ---------------------------------------------------------------------------
+
+    @app.post("/server/use")
+    async def server_use(request: Request):
+        """The server picker in the top bar."""
+        data = await form(request)
+        user = current(request) or {}
+        gid = _int(data, "guild_id", 0, 0, 10**20)
+        with db.session() as s:
+            row = servers.get(s, gid)
+            ok = row is not None and row.status == servers.APPROVED and \
+                (user.get("host") or str(gid) in user.get("servers", {}))
+            name = row.guild_name if row else ""
+        if not ok:
+            raise HTTPException(404)
+        request.session["guild_id"] = gid
+        request.session.pop("game_id", None)
+        flash(request, f"Now showing {name or gid}.")
+        return back("/" if auth.allows(auth.effective((user.get("servers") or {}).get(str(gid)), False) or
+                                       ("host" if user.get("host") else None), "admin") else "/me")
+
+    @app.get("/servers", response_class=HTMLResponse)
+    async def servers_page(request: Request):
+        """The host's view: every server that added Nyerk."""
+        require(request)
+        bot = app.state.bot
+        present = bot.server_ids() if bot and bot.is_ready() else None
+        with db.session() as s:
+            rows = []
+            for x in servers.all_servers(s):
+                if x.guild_id == servers.LEGACY:
+                    continue
+                rows.append(dict(row=x, games=len(games.all_games(s, x.guild_id)),
+                                 here=present is None or x.guild_id in present))
+            logs = list(s.scalars(select(LogEntry).where(LogEntry.guild_id == 0)
+                                  .order_by(LogEntry.id.desc()).limit(50)))
+        return render(request, "servers.html", rows=rows, logs=logs, bot_online=present is not None,
+                      invite=_invite_url(cfg, app.state.bot))
+
+    @app.post("/servers/{gid}/approve")
+    async def server_approve(request: Request, gid: int):
+        await form(request)
+        try:
+            with db.session() as s:
+                name = servers.approve(s, gid).guild_name
+        except servers.ServerError as exc:
+            flash(request, str(exc), "err")
+            return back("/servers")
+        bot = _bot_ready()
+        if bot:
+            asyncio.create_task(bot.sync_commands(gid))
+        bus.warn("servers", f"Server {name or gid} approved by the host.")
+        flash(request, f"Approved {name or gid}. Its owner can now sign in and pick a game.")
+        return back("/servers")
+
+    @app.post("/servers/{gid}/remove")
+    async def server_remove(request: Request, gid: int):
+        """Delete everything Nyerk keeps for a server, and leave it."""
+        data = await form(request)
+        with db.session() as s:
+            row = servers.get(s, gid) or _404()
+            label = row.guild_name or str(gid)
+            if str(data.get("confirm", "")).strip().lower() != label.lower():
+                flash(request, f"Type {label} to confirm. Nothing was deleted.", "err")
+                return back("/servers")
+            servers.remove(s, gid)
+        websearch.forget_data()
+        bot = _bot_ready()
+        if bot and data.get("leave"):
+            guild = bot.get_guild(gid)
+            if guild is not None:
+                asyncio.create_task(guild.leave())
+        bus.warn("servers", f"Server {label} removed by the host, with all its data"
+                            + (", and Nyerk left it." if data.get("leave") else "."))
+        flash(request, f"Removed {label}." + (" Nyerk is leaving it." if data.get("leave") else ""))
+        return back("/servers")
+
     # -- games ---------------------------------------------------------------------------
 
     def _same_site(url: str, fallback: str = "/") -> str:
@@ -469,7 +640,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         """The game picker in the top bar."""
         data = await form(request)
         with db.session() as s:
-            g = games.get(s, _int(data, "game_id", 0, 0, 10**9)) or _404()
+            g = games.get(s, _int(data, "game_id", 0, 0, 10**9), guild_of(request)) or _404()
             request.session["game_id"], name = g.id, g.name
         flash(request, f"Now showing {name}.")
         return back(_same_site(str(request.headers.get("referer") or "/")))
@@ -478,7 +649,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def setup_page(request: Request):
         require(request)
         with db.session() as s:
-            if games.all_games(s):
+            if games.all_games(s, guild_of(request)):
                 return back("/")
         return render(request, "setup.html", kinds=games.KINDS)
 
@@ -488,9 +659,9 @@ def create_app(cfg, bot=None) -> FastAPI:
         kind = str(data.get("kind", ""))
         try:
             with db.session() as s:
-                if games.all_games(s):
+                if games.all_games(s, guild_of(request)):
                     return back("/")
-                g = games.create(s, str(data.get("name", "")), kind)
+                g = games.create(s, guild_of(request), str(data.get("name", "")), kind)
                 request.session["game_id"], name = g.id, g.name
         except games.GameError as exc:
             flash(request, str(exc), "err")
@@ -504,7 +675,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         require(request)
         with db.session() as s:
             rows = []
-            for g in games.all_games(s):
+            for g in games.all_games(s, guild_of(request)):
                 rows.append(dict(g=g, events=s.scalar(select(func.count()).select_from(Event).where(
                     Event.game_id == g.id, Event.overrides_event_id.is_(None))) or 0,
                     classes=len(party.classes(s, g.id)), contents=len(party.contents(s, g.id, False))))
@@ -515,7 +686,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         try:
             with db.session() as s:
-                g = games.create(s, str(data.get("name", "")), str(data.get("kind", "")))
+                g = games.create(s, guild_of(request), str(data.get("name", "")), str(data.get("kind", "")))
                 request.session["game_id"], name = g.id, g.name
         except games.GameError as exc:
             flash(request, str(exc), "err")
@@ -529,11 +700,11 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         name = " ".join(str(data.get("name", "")).split())[:64]
         with db.session() as s:
-            g = games.get(s, game_id) or _404()
+            g = games.get(s, game_id, guild_of(request)) or _404()
             if not name:
                 flash(request, "Give the game a name.", "err")
                 return back("/games")
-            if any(o.id != g.id and o.name.lower() == name.lower() for o in games.all_games(s)):
+            if any(o.id != g.id and o.name.lower() == name.lower() for o in games.all_games(s, guild_of(request))):
                 flash(request, f"There is already a game called {name}.", "err")
                 return back("/games")
             was_on = g.enabled
@@ -550,13 +721,13 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def game_delete(request: Request, game_id: int):
         data = await form(request)
         with db.session() as s:
-            g = games.get(s, game_id) or _404()
+            g = games.get(s, game_id, guild_of(request)) or _404()
             name = g.name
             if str(data.get("confirm", "")).strip().lower() != name.lower():
                 flash(request, f"Type {name} to confirm. Nothing was deleted.", "err")
                 return back("/games")
             # Nyerk's messages for this game, so the bot can take them down.
-            roles_ch = get_settings(s).roles_channel_id
+            roles_ch = get_settings(s, guild_of(request)).roles_channel_id
             msgs = [(g.timer_channel_id, g.dashboard_message_id), (roles_ch, g.roles_class_message_id),
                     (roles_ch, g.roles_gear_message_id)]
             msgs += [(g.party_channel_id, x) for x in (g.class_panel_message_id, g.gear_panel_message_id,
@@ -579,8 +750,8 @@ def create_app(cfg, bot=None) -> FastAPI:
 
     search_index = websearch.build_index(HERE / "templates")
 
-    def run_search(user: dict, q: str, limit: int) -> list:
-        g = grants()
+    def run_search(request: Request, user: dict, q: str, limit: int) -> list:
+        g = grants(request)
 
         def visible(url: str) -> bool:
             path = url.split("#", 1)[0].split("?", 1)[0]
@@ -588,7 +759,8 @@ def create_app(cfg, bot=None) -> FastAPI:
 
         with db.session() as s:
             return websearch.search(s, search_index, websearch.clean_query(q), visible,
-                                    owner=auth.allows(user.get("level"), "owner"), limit=limit)
+                                    owner=bool(user.get("host")), limit=limit,
+                                    guild_id=getattr(request.state, "guild_id", 0))
 
     # -- public: terms and privacy (linked from the footer and Discord's developer portal) --
 
@@ -604,7 +776,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def search_page(request: Request, q: str = ""):
         user = require(request)
         q = q[:websearch.MAX_QUERY]
-        results = run_search(user, q, websearch.MAX_RESULTS)
+        results = run_search(request, user, q, websearch.MAX_RESULTS)
         return render(request, "search.html", q=q.strip(), results=results, max_query=websearch.MAX_QUERY,
                       max_results=websearch.MAX_RESULTS)
 
@@ -614,7 +786,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         from fastapi.responses import JSONResponse
         user = require(request)
         q = q[:websearch.MAX_QUERY]
-        items = run_search(user, q, websearch.MAX_SUGGESTIONS) if len(q.strip()) >= 2 else []
+        items = run_search(request, user, q, websearch.MAX_SUGGESTIONS) if len(q.strip()) >= 2 else []
         return JSONResponse([{"label": e.label, "page": e.page, "url": e.url,
                               "detail": "" if e.detail == "Section" else e.detail[:120]} for e in items])
 
@@ -622,7 +794,8 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def history_page(request: Request):
         require(request)
         with db.session() as s:
-            rows = list(s.scalars(select(ConfigChange).order_by(ConfigChange.id.desc()).limit(200)))
+            rows = list(s.scalars(select(ConfigChange).where(ConfigChange.guild_id == guild_of(request))
+                                  .order_by(ConfigChange.id.desc()).limit(200)))
             items = [dict(id=r.id, at=r.at, who=r.user_name, level=r.level, path=r.path,
                           lines=r.summary.splitlines()) for r in rows]
         return render(request, "history.html", items=items)
@@ -632,7 +805,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         await form(request)
         try:
             with db.session() as s:
-                lines = history.restore(s, cid)
+                lines = history.restore(s, guild_of(request), cid)
         except (ValueError, transfer.ImportError_) as exc:
             flash(request, str(exc), "err")
             return back("/history")
@@ -644,12 +817,15 @@ def create_app(cfg, bot=None) -> FastAPI:
     @app.get("/access", response_class=HTMLResponse)
     async def access_page(request: Request):
         require(request)
-        granted = grants()
+        granted = grants(request)
         with db.session() as s:
-            locked = get_settings(s).admin_locked
-            logins = list(s.scalars(select(LogEntry).where(LogEntry.kind == "admin", LogEntry.text.like("% signed in%"))
+            server = get_settings(s, guild_of(request))
+            locked, admin_roles = server.admin_locked, sorted(auth.parse_ids(server.admin_role_ids))
+            logins = list(s.scalars(select(LogEntry).where(LogEntry.guild_id == server.guild_id, LogEntry.kind == "admin",
+                                                           LogEntry.text.like("% signed in%"))
                                     .order_by(LogEntry.id.desc()).limit(30)))
         return render(request, "access.html", locked=locked, logins=logins, cfg_public=cfg.public_url,
+                      server_admin_roles=admin_roles,
                       AREAS=auth.AREAS, granted=granted,
                       opened=[auth.AREAS[a][0] for a in auth.AREAS if a in granted],
                       closed=[auth.AREAS[a][0] for a in auth.AREAS if a not in granted],
@@ -661,7 +837,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         lock = bool(data.get("lock"))
         with db.session() as s:
-            get_settings(s).admin_locked = lock
+            get_settings(s, guild_of(request)).admin_locked = lock
         bus.warn("admin", "Admin access LOCKED by the owner." if lock else "Admin access unlocked by the owner.")
         flash(request, "Admin access locked: admin-role holders now only see their own page." if lock
               else "Admin access unlocked.")
@@ -672,21 +848,45 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         chosen = [a for a in auth.AREAS if data.get(f"area_{a}")]
         with db.session() as s:
-            get_settings(s).admin_grants = ",".join(chosen)
+            get_settings(s, guild_of(request)).admin_grants = ",".join(chosen)
         names = ", ".join(auth.AREAS[a][0] for a in chosen) or "none"
         bus.warn("admin", f"The owner set what admins may change. Opened to admins: {names}.")
         flash(request, f"Saved. Admins may now use: {names}.")
         return back("/access#areas")
 
+    @app.post("/access/admin-roles")
+    async def access_admin_roles(request: Request):
+        """The server owner picks which roles make their members admins
+        (Manage Server always does)."""
+        data = await form(request)
+        ids = auth.parse_ids(str(data.get("admin_role_ids", "")).replace("\n", ","))
+        for rid in ids:
+            try:
+                safety.check_role(rid)
+            except ValueError as exc:
+                flash(request, str(exc), "err")
+                return back("/access#admins")
+        with db.session() as s:
+            get_settings(s, guild_of(request)).admin_role_ids = ",".join(str(r) for r in sorted(ids))[:400]
+        bus.warn("admin", f"Admin roles set to {', '.join(str(r) for r in sorted(ids)) or 'none'} "
+                          "(plus Manage Server). Takes effect at people's next sign-in or within 5 minutes.")
+        flash(request, "Saved. People get or lose admin at their next sign-in, or within 5 minutes.")
+        return back("/access#admins")
+
     @app.post("/access/signout-all")
     async def access_signout_all(request: Request):
+        """Signs everyone out of this server's pages (the host: of everything)."""
         await form(request)
+        user = current(request) or {}
         with db.session() as s:
-            st = get_state(s)
+            st = get_state(s) if data_wants_everything(request, user) else get_settings(s, guild_of(request))
             st.session_epoch = (st.session_epoch or 0) + 1
-        bus.warn("admin", "The owner signed everyone out of the web page.")
+        bus.warn("admin", f"{user.get('name')} signed everyone out of the web page.")
         request.session.clear()
         return back("/login")
+
+    def data_wants_everything(request: Request, user: dict) -> bool:
+        return bool(user.get("host")) and request.query_params.get("all") == "1"
 
     # -- member self-service (/me) -------------------------------------------------------
 
@@ -702,11 +902,11 @@ def create_app(cfg, bot=None) -> FastAPI:
         user = me(request)
         uid = user["uid"]
         bot = _bot_ready()
-        live = await bot.fetch_member(uid) if bot else None
+        live = await bot.fetch_member(guild_of(request), uid) if bot else None
         with db.session() as s:
-            info = members.detail(s, uid)
-            options = members.role_options(s)
-            ctx = dict(gears=_gears(s, uid), default_tz=get_settings(s).default_tz)
+            info = members.detail(s, guild_of(request), uid)
+            options = members.role_options(s, guild_of(request))
+            ctx = dict(gears=_gears(s, guild_of(request), uid), default_tz=get_settings(s, guild_of(request)).default_tz)
         info.pop("name", None)
         return render(request, "me.html", uid=uid, live=live is not None,
                       held=live[1] if live else info["tracked"], options=options, zones=quiet.ZONES,
@@ -717,18 +917,18 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         user = me(request)
         bot = _bot_ready()
-        live = await bot.fetch_member(user["uid"]) if bot else None
+        live = await bot.fetch_member(guild_of(request), user["uid"]) if bot else None
         if live is None:
             flash(request, "Nyerk is offline right now, so roles can't be changed. Try again later.", "err")
             return back("/me")
         name, held = live
         chosen = {int(v) for v in data.getlist("role") if str(v).isdigit()}
         with db.session() as s:
-            add, remove, hold = members.plan_roles(s, user["uid"], held, chosen)
-            labels = {o.role_id: o.label for o in members.role_options(s)}
-        errors = await bot.admin_apply_roles(user["uid"], add, remove)
+            add, remove, hold = members.plan_roles(s, guild_of(request), user["uid"], held, chosen)
+            labels = {o.role_id: o.label for o in members.role_options(s, guild_of(request))}
+        errors = await bot.admin_apply_roles(guild_of(request), user["uid"], add, remove)
         with db.session() as s:
-            members.record(s, user["uid"], name, chosen, hold)
+            members.record(s, guild_of(request), user["uid"], name, chosen, hold)
         changed = [f"+{labels.get(r, 'type role')}" for r in add] + [f"-{labels.get(r, 'type role')}" for r in remove]
         if changed:
             bus.info("roles", f"{name} changed their roles on the web: {', '.join(changed)}.", discord=False)
@@ -743,8 +943,8 @@ def create_app(cfg, bot=None) -> FastAPI:
         raw = str(data.get("bracket", ""))
         with db.session() as s:
             try:
-                b = party.set_gear(s, user["uid"], user["name"], int(raw) if raw.isdigit() else None,
-                                   int(time.time()), _int(data, "game_id", 0, 0, 10**9) or None)
+                gid, bid = own_gear_target(request, s, data, raw)
+                b = party.set_gear(s, user["uid"], user["name"], bid, int(time.time()), gid)
             except party.PartyError as exc:
                 flash(request, str(exc), "err")
                 return back("/me#gear")
@@ -757,30 +957,30 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         user = me(request)
         bot = _bot_ready()
-        live = await bot.fetch_member(user["uid"]) if bot else None
+        live = await bot.fetch_member(guild_of(request), user["uid"]) if bot else None
         try:
             with db.session() as s:
                 if data.get("enabled"):
                     tz = str(data.get("tz", "UTC"))
                     if tz not in dict(quiet.ZONES):
                         raise ValueError("Pick a time zone from the list.")
-                    q = quiet.set_hours(s, user["uid"], user["name"], _int(data, "start", 23, 0, 23),
+                    q = quiet.set_hours(s, guild_of(request), user["uid"], user["name"], _int(data, "start", 23, 0, 23),
                                         _int(data, "end", 7, 0, 23), tz, live[1] if live else set())
                     msg = f"Quiet hours set: {quiet.window_text(q)}."
                 else:
-                    q = quiet.turn_off(s, user["uid"])
+                    q = quiet.turn_off(s, guild_of(request), user["uid"])
                     msg = "Quiet hours turned off." if q else "Quiet hours are off."
         except ValueError as exc:
             flash(request, str(exc), "err")
             return back("/me#quiet")
         if bot:
-            await bot.apply_quiet_hours(only=user["uid"])
+            await bot.apply_quiet_hours(only=(guild_of(request), user["uid"]))
         flash(request, msg)
         return back("/me#quiet")
 
-    def _own_timer_row(s, user: dict, tid: int) -> UserTimer:
-        t = s.get(UserTimer, tid)
-        if t is None or t.user_id != user["uid"]:
+    def _own_timer_row(request: Request, s, user: dict, tid: int) -> UserTimer:
+        t = mine(request, s, s.get(UserTimer, tid))
+        if t.user_id != user["uid"]:
             raise HTTPException(404)
         _ = t.event
         return t
@@ -790,7 +990,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         user = me(request)
         with db.session() as s:
-            result = timers.edit(s, _own_timer_row(s, user, tid), int(time.time()),
+            result = timers.edit(s, _own_timer_row(request, s, user, tid), int(time.time()),
                                  str(data.get("killed_at", ""))[:40], str(data.get("respawns_in", ""))[:40],
                                  user["name"])
         if result.ok:
@@ -804,7 +1004,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         await form(request)
         user = me(request)
         with db.session() as s:
-            result = timers.cancel(_own_timer_row(s, user, tid), user["name"])
+            result = timers.cancel(_own_timer_row(request, s, user, tid), user["name"])
         if result.ok:
             bus.info("timer", result.log + " (web)")
             refresh()
@@ -816,7 +1016,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         user = me(request)
         with db.session() as s:
-            row = party.cancel_registration(s, user["uid"], _int(data, "game_id", 0, 0, 10**9) or None)
+            row = party.cancel_registration(s, user["uid"], own_game_id(request, s, data))
         if row:
             refresh()
         flash(request, "Registration cancelled." if row else "You weren't registered.")
@@ -828,8 +1028,8 @@ def create_app(cfg, bot=None) -> FastAPI:
         user = me(request)
         try:
             with db.session() as s:
-                p = s.get(PfParty, _int(data, "party_id", 0, 0, 10**12))
-                if p is None or p.status not in party.LIVE or all(m.user_id != user["uid"] for m in p.members):
+                p = mine(request, s, s.get(PfParty, _int(data, "party_id", 0, 0, 10**12)))
+                if p.status not in party.LIVE or all(m.user_id != user["uid"] for m in p.members):
                     raise party.PartyError("You're not in that party.")
                 title = party.party_title(p)
                 res = party.remove_member(s, p, user["uid"], int(time.time()))
@@ -854,7 +1054,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def members_page(request: Request, q: str = ""):
         require(request)
         with db.session() as s:
-            rows = members.known(s, q)
+            rows = members.known(s, guild_of(request), q)
         lookup = q.strip() if re.fullmatch(r"\d{15,21}", q.strip()) else ""
         return render(request, "members.html", rows=rows, q=q, lookup=lookup)
 
@@ -862,11 +1062,11 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def member_page(request: Request, uid: int):
         require(request)
         bot = _bot_ready()
-        live = await bot.fetch_member(uid) if bot else None
+        live = await bot.fetch_member(guild_of(request), uid) if bot else None
         with db.session() as s:
-            info = members.detail(s, uid)
-            options = members.role_options(s)
-            default_tz = get_settings(s).default_tz
+            info = members.detail(s, guild_of(request), uid)
+            options = members.role_options(s, guild_of(request))
+            default_tz = get_settings(s, guild_of(request)).default_tz
         if live is None and bot is not None and not info["name"]:
             flash(request, f"No member with ID {uid} in the server.", "err")
             return back("/members")
@@ -874,7 +1074,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         info["member_name"] = live[0] if live else (info.pop("name") or f"User {uid}")
         info.pop("name", None)
         with db.session() as s:
-            info["gears"] = _gears(s, uid)
+            info["gears"] = _gears(s, guild_of(request), uid)
         return render(request, "member.html", uid=uid, live=live is not None, held=held, backup_days=cfg.backup_keep,
                       options=options, zones=quiet.ZONES, default_tz=default_tz,
                       hours=[(h, quiet.hour_label(h)) for h in range(24)], **info)
@@ -886,19 +1086,19 @@ def create_app(cfg, bot=None) -> FastAPI:
         notes = []
         bot = _bot_ready()
         if data.get("remove_roles"):
-            live = await bot.fetch_member(uid) if bot else None
+            live = await bot.fetch_member(guild_of(request), uid) if bot else None
             if bot is None:
                 notes.append("the bot isn't connected, so their Discord roles were left alone")
             elif live is not None:
                 with db.session() as s:
-                    doomed = members.managed_role_ids(s) & live[1]
-                errors = await bot.admin_apply_roles(uid, set(), doomed)
+                    doomed = members.managed_role_ids(s, guild_of(request)) & live[1]
+                errors = await bot.admin_apply_roles(guild_of(request), uid, set(), doomed)
                 notes += errors
                 if doomed and not errors:
                     notes.append(f"removed {len(doomed)} Discord role(s)")
         with db.session() as s:
-            res = members.forget(s, uid, int(time.time()))
-            forgotten.record(cfg, s, uid, int(time.time()))  # so a restored backup can't bring them back
+            res = members.forget(s, guild_of(request), uid, int(time.time()))
+            forgotten.record(cfg, s, guild_of(request), uid, int(time.time()))  # so a restored backup can't bring them back
         websearch.forget_data()  # gone from search suggestions right away
         who = res.name or f"User {uid}"
         what = ", ".join(f"{n} {k}" for k, n in res.removed.items()) or "nothing was stored"
@@ -918,18 +1118,18 @@ def create_app(cfg, bot=None) -> FastAPI:
         if bot is None:
             flash(request, "The bot must be connected to change roles.", "err")
             return back(f"/members/{uid}")
-        live = await bot.fetch_member(uid)
+        live = await bot.fetch_member(guild_of(request), uid)
         if live is None:
             flash(request, "That member isn't in the server.", "err")
             return back(f"/members/{uid}")
         name, held = live
         chosen = {int(v) for v in data.getlist("role") if str(v).isdigit()}
         with db.session() as s:
-            add, remove, hold = members.plan_roles(s, uid, held, chosen)
-            labels = {o.role_id: o.label for o in members.role_options(s)}
-        errors = await bot.admin_apply_roles(uid, add, remove)
+            add, remove, hold = members.plan_roles(s, guild_of(request), uid, held, chosen)
+            labels = {o.role_id: o.label for o in members.role_options(s, guild_of(request))}
+        errors = await bot.admin_apply_roles(guild_of(request), uid, add, remove)
         with db.session() as s:
-            members.record(s, uid, name, chosen, hold)
+            members.record(s, guild_of(request), uid, name, chosen, hold)
         changed = [f"+{labels.get(r, 'type role')}" for r in add] + [f"-{labels.get(r, 'type role')}" for r in remove]
         changed += [f"+{labels[r]} (paused for quiet hours)" for r in hold if r not in held and r in labels]
         if changed:
@@ -945,10 +1145,10 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         raw = str(data.get("bracket", ""))
         with db.session() as s:
-            name = members.detail(s, uid)["name"] or f"User {uid}"
+            name = members.detail(s, guild_of(request), uid)["name"] or f"User {uid}"
             try:
-                b = party.set_gear(s, uid, name, int(raw) if raw.isdigit() else None, int(time.time()),
-                                   _int(data, "game_id", 0, 0, 10**9) or None)
+                gid, bid = own_gear_target(request, s, data, raw)
+                b = party.set_gear(s, uid, name, bid, int(time.time()), gid)
             except party.PartyError as exc:
                 flash(request, str(exc), "err")
                 return back(f"/members/{uid}#gear")
@@ -962,23 +1162,23 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def member_quiet(request: Request, uid: int):
         data = await form(request)
         bot = _bot_ready()
-        live = await bot.fetch_member(uid) if bot else None
+        live = await bot.fetch_member(guild_of(request), uid) if bot else None
         try:
             with db.session() as s:
                 if data.get("enabled"):
-                    name = live[0] if live else (members.detail(s, uid)["name"] or f"User {uid}")
-                    q = quiet.set_hours(s, uid, name, _int(data, "start", 23, 0, 23), _int(data, "end", 7, 0, 23),
+                    name = live[0] if live else (members.detail(s, guild_of(request), uid)["name"] or f"User {uid}")
+                    q = quiet.set_hours(s, guild_of(request), uid, name, _int(data, "start", 23, 0, 23), _int(data, "end", 7, 0, 23),
                                         str(data.get("tz", "UTC")), live[1] if live else set())
                     msg = f"Quiet hours for {name}: {quiet.window_text(q)}."
                 else:
-                    q = quiet.turn_off(s, uid)
+                    q = quiet.turn_off(s, guild_of(request), uid)
                     msg = "Quiet hours turned off." if q else "No quiet hours to turn off."
         except ValueError as exc:
             flash(request, str(exc), "err")
             return back(f"/members/{uid}#quiet")
         bus.info("admin", f"{msg} (admin, member {uid})")
         if bot:
-            await bot.apply_quiet_hours(only=uid)
+            await bot.apply_quiet_hours(only=(guild_of(request), uid))
         flash(request, msg)
         return back(f"/members/{uid}#quiet")
 
@@ -986,8 +1186,8 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def member_timer_cancel(request: Request, uid: int, tid: int):
         await form(request)
         with db.session() as s:
-            t = s.get(UserTimer, tid)
-            if t is None or t.user_id != uid:
+            t = mine(request, s, s.get(UserTimer, tid))
+            if t.user_id != uid:
                 raise HTTPException(404)
             result = timers.cancel(t, "admin")
         if result.ok:
@@ -1000,7 +1200,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def member_registration_cancel(request: Request, uid: int):
         data = await form(request)
         with db.session() as s:
-            row = party.cancel_registration(s, uid, _int(data, "game_id", 0, 0, 10**9) or None)
+            row = party.cancel_registration(s, uid, own_game_id(request, s, data))
             name = row.user_name if row else ""
         if row:
             bus.info("party", f"Registration of {name} cancelled by admin.")
@@ -1014,8 +1214,8 @@ def create_app(cfg, bot=None) -> FastAPI:
         try:
             with db.session() as s:
                 pid = _int(data, "party_id", 0, 0, 10**12)
-                p = s.get(PfParty, pid) if pid else party.live_party_for(s, uid, None)
-                if p is None or p.status not in party.LIVE or all(m.user_id != uid for m in p.members):
+                p = mine(request, s, s.get(PfParty, pid))
+                if p.status not in party.LIVE or all(m.user_id != uid for m in p.members):
                     raise party.PartyError("Not in that party.")
                 title = party.party_title(p)
                 name = next((m.user_name for m in p.members if m.user_id == uid), str(uid))
@@ -1035,7 +1235,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def stats_page(request: Request, range: str = "30"):
         require(request)
         with db.session() as s:
-            data = stats.compute(s, range, int(time.time()), get_settings(s).default_tz, game_of(request, s).id)
+            data = stats.compute(s, range, int(time.time()), get_settings(s, guild_of(request)).default_tz, game_of(request, s).id)
         return render(request, "stats.html", st=data, ranges=stats.RANGES, days=stats.DAYS,
                       heat_level=stats.heat_level)
 
@@ -1043,7 +1243,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def logs_page(request: Request):
         require(request)
         with db.session() as s:
-            logs = list(s.scalars(select(LogEntry).order_by(LogEntry.id.desc()).limit(500)))
+            logs = list(s.scalars(select(LogEntry).where(LogEntry.guild_id == guild_of(request)).order_by(LogEntry.id.desc()).limit(500)))
         return render(request, "logs.html", logs=logs, log_days=cfg.log_keep_days)
 
     # -- events ---------------------------------------------------------------------
@@ -1072,7 +1272,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         defaults = {lead: engine.default_template(e or Event(schedule_type="hourly"), lead) for lead in (15, 5, 0)}
         return dict(e=e, cats=cats, types=schedules.REGISTRY, error=error, preview=preview,
                     template_fields=TEMPLATE_FIELDS, default_templates=defaults, values=values or {},
-                    tz_default=get_settings(s).default_tz)
+                    tz_default=get_settings(s, s.get(Game, game_id).guild_id).default_tz)
 
     @app.get("/events/new", response_class=HTMLResponse)
     async def event_new(request: Request):
@@ -1085,8 +1285,8 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def event_edit(request: Request, event_id: int):
         require(request)
         with db.session() as s:
-            e = s.get(Event, event_id)
-            if e is None or e.overrides_event_id:
+            e = mine(request, s, s.get(Event, event_id))
+            if e.overrides_event_id:
                 raise HTTPException(404)
             _ = e.slots, e.category
             look_at(request, e.game_id)
@@ -1104,10 +1304,8 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def _save_event(request: Request, event_id: int | None):
         data = await form(request)
         with db.session() as s:
-            e = s.get(Event, event_id) if event_id else Event(game_id=game_of(request, s).id, slots=make_slots(NONE),
-                                                             source="manual")
-            if e is None:
-                raise HTTPException(404)
+            e = mine(request, s, s.get(Event, event_id)) if event_id else \
+                Event(game_id=game_of(request, s).id, slots=make_slots(NONE), source="manual")
             game_id = e.game_id
             try:
                 changes = _apply_event_form(s, e, data, owner=may(request, "wording"))
@@ -1131,7 +1329,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def event_toggle(request: Request, event_id: int):
         await form(request)
         with db.session() as s:
-            e = s.get(Event, event_id) or _404()
+            e = mine(request, s, s.get(Event, event_id))
             e.enabled = not e.enabled
             name, on = e.name, e.enabled
         bus.info("config", f"Event {name} {'enabled' if on else 'disabled'}.")
@@ -1142,7 +1340,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def event_delete(request: Request, event_id: int):
         await form(request)
         with db.session() as s:
-            e = s.get(Event, event_id) or _404()
+            e = mine(request, s, s.get(Event, event_id))
             name = e.name
             s.delete(e)
         bus.info("config", f"Event {name} deleted.")
@@ -1160,20 +1358,20 @@ def create_app(cfg, bot=None) -> FastAPI:
             cats = list(s.scalars(select(Category).where(Category.game_id == game.id)
                                   .order_by(Category.sort_order, Category.id)))
             counts = dict(s.execute(select(Event.category_id, func.count()).group_by(Event.category_id)).all())
-            state = get_state(s)
-            groups = reaction_roles.groups(s)
-            emoji_of = {(e.kind, e.ref_id): e.emoji for e in reaction_roles.entries(s)}
+            state = get_settings(s, guild_of(request))  # the roles channel as posted
+            groups = reaction_roles.groups(s, guild_of(request))
+            emoji_of = {(e.kind, e.ref_id): e.emoji for e in reaction_roles.entries(s, guild_of(request))}
             default_group = {g.default_for: g.id for g in groups if g.default_for}
             assign = [("category", c.id, c.name, c.role_id, c.emoji, c.group_id or default_group.get("category"))
                       for c in cats]
             assign += [("content", c.id, c.name, c.role_id, c.react_emoji, c.group_id or default_group.get("content"))
                        for c in party.contents(s, game.id, False)]
-            previews = [text for text, _ in reaction_roles.messages(s)]
+            previews = [text for text, _ in reaction_roles.messages(s, guild_of(request))]
             ctx = dict(cats=cats, counts=counts, groups=groups, assign=assign, emoji_of=emoji_of,
-                       roles_header=get_settings(s).roles_header,
+                       roles_header=get_settings(s, guild_of(request)).roles_header,
                        previews=previews, class_preview=party.class_panel_text(game),
                        clear_preview=reaction_roles.CLEAR_TEXT,
-                       gear_preview=party.gear_panel_text(game, len(games.all_games(s)) > 1),
+                       gear_preview=party.gear_panel_text(game, len(games.all_games(s, guild_of(request))) > 1),
                        gear_labels=[b.label for b in party.brackets(s, game.id)],
                        posted=bool(state.reaction_messages or state.reaction_message_id))
         return render(request, "categories.html", **ctx)
@@ -1204,7 +1402,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             flash(request, "Keep the header under 500 characters.", "err")
             return back("/categories#header")
         with db.session() as s:
-            get_settings(s).roles_header = text
+            get_settings(s, guild_of(request)).roles_header = text
         bus.info("config", "Roles channel header saved.")
         flash(request, "Header saved. Repost the roles channel to apply.")
         return back("/categories#header")
@@ -1214,7 +1412,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         try:
             with db.session() as s:
-                rows = reaction_roles.groups(s)
+                rows = reaction_roles.groups(s, guild_of(request))
                 names = []
                 for g in rows:
                     name = str(data.get(f"gname_{g.id}", "")).strip()[:64]
@@ -1241,11 +1439,12 @@ def create_app(cfg, bot=None) -> FastAPI:
             flash(request, "Give the role message a title.", "err")
             return back("/categories#messages")
         with db.session() as s:
-            if s.scalar(select(ReactionGroup).where(ReactionGroup.name == name)):
+            if s.scalar(select(ReactionGroup).where(ReactionGroup.name == name,
+                                                    ReactionGroup.guild_id == guild_of(request))):
                 flash(request, f"{name} already exists.", "err")
                 return back("/categories#messages")
             top = s.scalar(select(func.max(ReactionGroup.sort_order))) or 0
-            s.add(ReactionGroup(name=name, description=str(data.get("description", "")).strip()[:200],
+            s.add(ReactionGroup(guild_id=guild_of(request), name=name, description=str(data.get("description", "")).strip()[:200],
                                 sort_order=top + 1))
         bus.info("config", f"Role message {name} added.")
         flash(request, f"Added {name}. Assign roles to it below.")
@@ -1255,7 +1454,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def roles_group_delete(request: Request, gid: int):
         await form(request)
         with db.session() as s:
-            g = s.get(ReactionGroup, gid) or _404()
+            g = mine(request, s, s.get(ReactionGroup, gid))
             if g.default_for:
                 flash(request, f"{g.name} is a default role message and can't be removed. Rename it instead.", "err")
                 return back("/categories#messages")
@@ -1268,10 +1467,11 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def roles_assign(request: Request):
         data = await form(request)
         with db.session() as s:
-            valid = {g.id for g in reaction_roles.groups(s)}
+            valid = {g.id for g in reaction_roles.groups(s, guild_of(request))}
             changed = 0
+            here = select(Game.id).where(Game.guild_id == guild_of(request))
             for model, kind, attr in ((Category, "category", "emoji"), (PfContent, "content", "react_emoji")):
-                for row in s.scalars(select(model)):
+                for row in s.scalars(select(model).where(model.game_id.in_(here))):
                     gid = data.get(f"group_{kind}_{row.id}")
                     gid = int(gid) if gid and str(gid).isdigit() and int(gid) in valid else row.group_id
                     emoji = str(data.get(f"emoji_{kind}_{row.id}", getattr(row, attr) or "")).strip()[:64]
@@ -1292,10 +1492,11 @@ def create_app(cfg, bot=None) -> FastAPI:
         if not bot or not bot.is_ready():
             flash(request, "Bot is not connected.", "err")
             return back("/categories")
+        gid = guild_of(request)
 
         async def _run():
             try:
-                await bot.post_roles_message()
+                await bot.post_roles_message(gid)
             except Exception as exc:
                 bus.error("roles", f"Reaction roles repost failed: {exc!r}")
 
@@ -1312,7 +1513,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             flash(request, str(exc), "err")
             return back("/categories")
         with db.session() as s:
-            c = s.get(Category, cat_id) or _404()
+            c = mine(request, s, s.get(Category, cat_id))
             c.name = str(data.get("name", c.name)).strip() or c.name
             c.role_id = role_id
             name = c.name
@@ -1326,7 +1527,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         step = -1 if data.get("dir") == "up" else 1
         with db.session() as s:
-            moved = s.get(Category, cat_id) or _404()
+            moved = mine(request, s, s.get(Category, cat_id))
             cats = list(s.scalars(select(Category).where(Category.game_id == moved.game_id)
                                   .order_by(Category.sort_order, Category.id)))
             idx = next(i for i, c in enumerate(cats) if c.id == cat_id)
@@ -1341,7 +1542,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def category_delete(request: Request, cat_id: int):
         await form(request)
         with db.session() as s:
-            c = s.get(Category, cat_id) or _404()
+            c = mine(request, s, s.get(Category, cat_id))
             if s.scalar(select(func.count()).select_from(Event).where(Event.category_id == cat_id)):
                 flash(request, f"{c.name} still has events. Move them first.", "err")
                 return back("/categories")
@@ -1365,7 +1566,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             for t in active + recent:
                 _ = t.event
             bosses = timers.boss_events(s, enabled_only=False, game_id=st.id)
-            tz = get_settings(s).default_tz
+            tz = get_settings(s, guild_of(request)).default_tz
             ctx = dict(button_label=st.boss_button_label, custom_label=st.custom_button_label)
         return render(request, "timers.html", active=active, recent=recent, bosses=bosses, tz=tz, **ctx)
 
@@ -1393,7 +1594,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def timer_cancel(request: Request, timer_id: int):
         await form(request)
         with db.session() as s:
-            t = s.get(UserTimer, timer_id) or _404()
+            t = mine(request, s, s.get(UserTimer, timer_id))
             result = timers.cancel(t, "admin")
         if result.ok:
             bus.info("timer", result.log)
@@ -1415,7 +1616,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         t = int(time.time())
         with db.session() as s:
             m = _maint(s, game_of(request, s).id)
-            settings = get_settings(s)
+            settings = get_settings(s, guild_of(request))
             if m is None:
                 return render(request, "maintenance.html", m=None)
             overrides = list(s.scalars(select(Event).where(Event.overrides_event_id == m.id).order_by(Event.id)))
@@ -1492,8 +1693,8 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def maintenance_override_delete(request: Request, event_id: int):
         await form(request)
         with db.session() as s:
-            o = s.get(Event, event_id)
-            if o is None or not o.overrides_event_id:
+            o = mine(request, s, s.get(Event, event_id))
+            if not o.overrides_event_id:
                 raise HTTPException(404)
             s.delete(o)
         bus.info("config", "Maintenance override removed; that week uses the regular window again.")
@@ -1506,8 +1707,8 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def settings_page(request: Request):
         require(request)
         with db.session() as s:
-            settings, game = get_settings(s), game_of(request, s)
-            counts = transfer.summary(s)
+            settings, game = get_settings(s, guild_of(request)), game_of(request, s)
+            counts = transfer.summary(s, guild_of(request))
         return render(request, "settings.html", st=settings, g=game, export_counts=counts)
 
     @app.post("/settings")
@@ -1515,7 +1716,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         try:
             with db.session() as s:
-                server, st = get_settings(s), game_of(request, s)  # st: this game's settings
+                server, st = get_settings(s, guild_of(request)), game_of(request, s)  # st: this game's settings
                 for key in ("roles_channel_id", "log_channel_id"):
                     setattr(server, key, _snowflake(data.get(key)))
                 for key in ("timer_channel_id", "party_channel_id"):
@@ -1565,7 +1766,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         data = await form(request)
         new, confirm = str(data.get("new", "")), str(data.get("confirm", ""))
         with db.session() as s:
-            st = get_settings(s)
+            st = get_state(s)  # the host password
             if not bcrypt.checkpw(str(data.get("current", "")).encode(), st.admin_password_hash.encode()):
                 flash(request, "Current password is wrong.", "err")
                 return back("/settings")
@@ -1573,7 +1774,7 @@ def create_app(cfg, bot=None) -> FastAPI:
                 flash(request, "New password must be at least 10 characters and match the confirmation.", "err")
                 return back("/settings")
             st.admin_password_hash = hash_password(new)
-        bus.info("admin", "Admin password changed.")
+        bus.info("admin", "Host password changed.")
         flash(request, "Password changed.")
         return back("/settings")
 
@@ -1635,7 +1836,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         from fastapi.responses import Response
 
         with db.session() as s:
-            data = transfer.export(s)
+            data = transfer.export(s, guild_of(request))
         bus.info("admin", "Settings exported.", discord=False)
         return Response(json.dumps(data, indent=2, ensure_ascii=False), media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{transfer.filename()}"'})
@@ -1659,7 +1860,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         try:
             parsed = json.loads(raw)
             with db.session() as s:
-                changes = transfer.apply_import(s, parsed, game_id=game_of(request, s).id)
+                changes = transfer.apply_import(s, parsed, guild_of(request), game_id=game_of(request, s).id)
                 s.rollback()  # preview only
         except (json.JSONDecodeError, transfer.ImportError_) as exc:
             flash(request, f"Can't import: {exc}", "err")
@@ -1673,7 +1874,7 @@ def create_app(cfg, bot=None) -> FastAPI:
 
         try:
             with db.session() as s:
-                changes = transfer.apply_import(s, json.loads(str(data.get("raw", ""))),
+                changes = transfer.apply_import(s, json.loads(str(data.get("raw", ""))), guild_of(request),
                                                 game_id=game_of(request, s).id)
         except (json.JSONDecodeError, transfer.ImportError_) as exc:
             flash(request, f"Can't import: {exc}", "err")
@@ -1730,9 +1931,12 @@ def create_app(cfg, bot=None) -> FastAPI:
             for r in interests:
                 _ = r.pf_class, r.bracket
             quiet_rows = []
-            for q in s.scalars(select(QuietHours).where(QuietHours.enabled.is_(True)).order_by(QuietHours.user_name)):
+            for q in s.scalars(select(QuietHours).where(QuietHours.enabled.is_(True),
+                                                        QuietHours.guild_id == guild_of(request))
+                               .order_by(QuietHours.user_name)):
                 paused = s.scalar(select(func.count()).select_from(RoleHolder).where(
-                    RoleHolder.user_id == q.user_id, RoleHolder.suspended.is_(True))) or 0
+                    RoleHolder.guild_id == q.guild_id, RoleHolder.user_id == q.user_id,
+                    RoleHolder.suspended.is_(True))) or 0
                 quiet_rows.append((q, quiet.window_text(q), paused))
             ctx = dict(st=settings, state=settings, classes=party.classes(s, gid), brackets=party.brackets(s, gid),
                        quiet_rows=quiet_rows,
@@ -1838,7 +2042,7 @@ def create_app(cfg, bot=None) -> FastAPI:
             flash(request, "Every dungeon already has a role.")
             return back("/party#content")
         try:
-            made = await bot.create_content_roles(ids)
+            made = await bot.create_content_roles(guild_of(request), ids)
         except Exception as exc:
             bus.error("roles", f"Creating dungeon roles failed: {exc!r}")
             flash(request, f"Discord refused: {exc}. Nyerk needs the Manage Roles permission.", "err")
@@ -1876,7 +2080,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         try:
             values = _pf_values(kind, data)
             with db.session() as s:
-                row = s.get(model, row_id) or _404()
+                row = mine(request, s, s.get(model, row_id))
                 for k, v in values.items():
                     setattr(row, k, v)
         except ValueError as exc:
@@ -1898,7 +2102,7 @@ def create_app(cfg, bot=None) -> FastAPI:
         if kind not in PF_KINDS:
             raise HTTPException(404)
         with db.session() as s:
-            row = s.get(PF_KINDS[kind][0], row_id) or _404()
+            row = mine(request, s, s.get(PF_KINDS[kind][0], row_id))
             s.delete(row)
         bus.info("config", f"Party finder {kind}: removed #{row_id}.")
         refresh()
@@ -1946,7 +2150,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def party_close(request: Request, pid: int):
         await form(request)
         with db.session() as s:
-            p = s.get(PfParty, pid) or _404()
+            p = mine(request, s, s.get(PfParty, pid))
             if p.status in party.LIVE:
                 party.end(p, "closed", int(time.time()))
                 title = party.party_title(p)
@@ -1961,7 +2165,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def party_quiet_off(request: Request, qid: int):
         await form(request)
         with db.session() as s:
-            q = s.get(QuietHours, qid) or _404()
+            q = mine(request, s, s.get(QuietHours, qid))
             q.enabled = False
             name = q.user_name
         bus.info("roles", f"Quiet hours for {name} turned off by admin.")
@@ -1973,7 +2177,7 @@ def create_app(cfg, bot=None) -> FastAPI:
     async def party_interest_cancel(request: Request, rid: int):
         await form(request)
         with db.session() as s:
-            r = s.get(PfInterest, rid) or _404()
+            r = mine(request, s, s.get(PfInterest, rid))
             name = r.user_name
             if r.status == "active":
                 r.status = "cancelled"
@@ -2018,10 +2222,22 @@ def _role_id(raw) -> int:
     return safety.check_role(_snowflake(raw))
 
 
-def _gears(s, uid: int) -> list[dict]:
-    """A member's gear score in each game that has gear score options."""
+INVITE_PERMISSIONS = 2415995968  # the Quick start's permission set
+
+
+def _invite_url(cfg, bot) -> str:
+    """The link that adds this Nyerk's bot to another server."""
+    app_id = cfg.discord_client_id or (str(bot.user.id) if bot is not None and getattr(bot, "user", None) else "")
+    if not app_id:
+        return ""
+    return ("https://discord.com/oauth2/authorize?client_id=" + app_id +
+            f"&scope=bot+applications.commands&permissions={INVITE_PERMISSIONS}")
+
+
+def _gears(s, guild_id: int, uid: int) -> list[dict]:
+    """A member's gear score in each of a server's games that has gear score options."""
     out = []
-    for g in games.all_games(s, enabled_only=True):
+    for g in games.all_games(s, guild_id, enabled_only=True):
         brackets = party.brackets(s, g.id)
         if brackets:
             gear = party.gear_of(s, uid, g.id)

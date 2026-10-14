@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import schedules
-from .db import get_settings, get_state
+from .db import get_state
 from .models import AlertSlot, Category, Event, Game, PfBracket, PfClass, PfWindow, ReactionGroup
 
 NY = "America/New_York"
@@ -51,17 +51,21 @@ def make_slots(spec) -> list[AlertSlot]:
     return [AlertSlot(lead_minutes=lead, enabled=en, ping=ping) for lead, (en, ping) in zip(LEADS, spec)]
 
 
-def seed(s: Session) -> bool:
-    """Make sure the server-wide rows exist and there is at least one game;
-    a database with none gets the AION 2 game. For tests and the demo: a
-    real first start waits for the owner to pick a game on the web page."""
-    from . import games
+TEST_GUILD = 900000000000000001  # the demo and tests' server
 
-    get_settings(s)
+
+def seed(s: Session, guild_id: int = TEST_GUILD) -> bool:
+    """An approved server with the AION 2 game, for tests and the demo. A
+    real server is added when the bot joins it, and its owner picks the
+    game on the web page."""
+    from . import games, servers
+
     get_state(s)
-    if games.all_games(s):
+    servers.seen(s, guild_id, "Your Server", auto_approve=True)
+    seed_reaction_groups(s, guild_id)
+    if games.all_games(s, guild_id):
         return False
-    games.create(s, "AION 2", "aion2")
+    games.create(s, guild_id, "AION 2", "aion2")
     return True
 
 
@@ -112,17 +116,19 @@ def upgrade_defaults(s: Session) -> list[str]:
     anything the admin customised."""
     from . import games
 
-    server = get_settings(s)
+    from . import servers
+
     done = []
     state = get_state(s)
     applied = list(state.upgrades_done or [])
-    if server.roles_header == "# 🎭 Roles\nPick your class, then the pings you want. Change them any time.":
-        server.roles_header = "# 🎭 Roles\nPick your classes and gear score, then the pings you want. Change them any time."
-        done.append("roles channel header")
-    if "\\n" in (server.roles_header or ""):  # older upgrades stored "\n" as two characters
-        server.roles_header = server.roles_header.replace("\\n", "\n")
-        done.append("roles header")
-    for st in games.all_games(s):
+    for server in servers.all_servers(s):
+        if server.roles_header == "# 🎭 Roles\nPick your class, then the pings you want. Change them any time.":
+            server.roles_header = "# 🎭 Roles\nPick your classes and gear score, then the pings you want. Change them any time."
+            done.append("roles channel header")
+        if "\\n" in (server.roles_header or ""):  # older upgrades stored "\n" as two characters
+            server.roles_header = server.roles_header.replace("\\n", "\n")
+            done.append("roles header")
+    for st in s.scalars(select(Game)):
         if st.kind == "aion2":
             done += _upgrade_aion2(s, st, applied)
     state.upgrades_done = applied
@@ -190,14 +196,15 @@ def seed_party_finder(s: Session) -> bool:
     return False
 
 
-def seed_reaction_groups(s: Session) -> bool:
-    """The two default role messages: event pings and dungeon pings."""
-    if s.scalar(select(ReactionGroup).limit(1)) is not None:
+def seed_reaction_groups(s: Session, guild_id: int) -> bool:
+    """A server's two default role messages: event pings and dungeon pings."""
+    if s.scalar(select(ReactionGroup).where(ReactionGroup.guild_id == guild_id).limit(1)) is not None:
         return False
     s.add_all([
-        ReactionGroup(name="Event pings", description="Timers and server events.", sort_order=0,
+        ReactionGroup(guild_id=guild_id, name="Event pings", description="Timers and server events.", sort_order=0,
                       default_for="category"),
-        ReactionGroup(name="Dungeon pings", description="Get pinged when a party opens for these.", sort_order=1,
-                      default_for="content"),
+        ReactionGroup(guild_id=guild_id, name="Dungeon pings", description="Get pinged when a party opens for these.",
+                      sort_order=1, default_for="content"),
     ])
+    s.flush()
     return True

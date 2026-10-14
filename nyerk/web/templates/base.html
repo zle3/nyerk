@@ -42,6 +42,19 @@
                 + ([("/history", "Change history", ("history",))] if can.history or is_owner else [])),
     ] %}
     <nav class="nav" aria-label="Sections">
+      {% if current_server and (many_servers or is_host) %}
+      <details class="menu game-pick server-pick">
+        <summary title="Showing {{ current_server.name }}. Switch server">{{ current_server.name }}</summary>
+        <div class="menu-list">
+          {% for x in servers_list %}
+          <form method="post" action="/server/use"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="guild_id" value="{{ x.id }}">
+            <button type="submit"{% if x.id == current_server.id %} aria-current="true"{% endif %}>{{ x.name }}</button></form>
+          {% endfor %}
+          {% if is_host %}<a href="/servers">All servers</a>{% endif %}
+        </div>
+      </details>
+      {% elif is_host %}<a href="/servers" class="{{ 'active' if nav == 'servers' }}">Servers</a>
+      {% endif %}
       {% if is_admin and current_game %}
       <details class="menu game-pick">
         <summary title="Showing {{ current_game.name }}. Switch game">{{ current_game.name }}</summary>

@@ -56,6 +56,21 @@ def classes(s: Session, game_id: int | None) -> list[PfClass]:
     return list(s.scalars(q if game_id is None else q.where(PfClass.game_id == game_id)))
 
 
+def server_classes(s: Session, guild_id: int) -> list[PfClass]:
+    """Every game's classes in one Discord server."""
+    return list(s.scalars(select(PfClass).join(Game, PfClass.game_id == Game.id).where(Game.guild_id == guild_id)
+                          .order_by(Game.sort_order, PfClass.sort_order, PfClass.id)))
+
+
+def server_contents(s: Session, guild_id: int, active_only: bool = True) -> list[PfContent]:
+    """Every game's dungeons in one Discord server."""
+    q = select(PfContent).join(Game, PfContent.game_id == Game.id).where(Game.guild_id == guild_id) \
+        .order_by(Game.sort_order, PfContent.sort_order, PfContent.name)
+    if active_only:
+        q = q.where(PfContent.active.is_(True))
+    return list(s.scalars(q))
+
+
 def brackets(s: Session, game_id: int) -> list[PfBracket]:
     return list(s.scalars(select(PfBracket).where(PfBracket.game_id == game_id)
                           .order_by(PfBracket.sort_order, PfBracket.id)))
@@ -119,9 +134,10 @@ def live_party_for(s: Session, user_id: int, game_id: int | None) -> PfParty | N
     return s.scalar(q.order_by(PfParty.id).limit(1))
 
 
-def live_parties_for(s: Session, user_id: int) -> list[PfParty]:
-    return list(s.scalars(select(PfParty).join(PfPartyMember).where(
-        PfPartyMember.user_id == user_id, PfParty.status.in_(LIVE)).order_by(PfParty.id)))
+def live_parties_for(s: Session, user_id: int, guild_id: int) -> list[PfParty]:
+    """The member's open or full parties in every game of one server."""
+    return list(s.scalars(select(PfParty).join(PfPartyMember).join(Game, PfParty.game_id == Game.id).where(
+        PfPartyMember.user_id == user_id, PfParty.status.in_(LIVE), Game.guild_id == guild_id).order_by(PfParty.id)))
 
 
 def active_interest(s: Session, user_id: int, game_id: int | None) -> PfInterest | None:
@@ -199,9 +215,10 @@ def set_gear(s: Session, user_id: int, user_name: str, bracket_id: int | None, n
     gid = bracket.game_id if bracket else game_id
     if gid is None:
         raise PartyError("Which game's gear score?")
-    p = s.scalar(select(MemberProfile).where(MemberProfile.user_id == user_id))
+    guild_id = game(s, gid).guild_id
+    p = s.scalar(select(MemberProfile).where(MemberProfile.guild_id == guild_id, MemberProfile.user_id == user_id))
     if p is None:
-        p = MemberProfile(user_id=user_id)
+        p = MemberProfile(guild_id=guild_id, user_id=user_id)
         s.add(p)
     p.user_name, p.updated_at = user_name or p.user_name, now
     row = s.scalar(select(MemberGear).where(MemberGear.user_id == user_id, MemberGear.game_id == gid))
@@ -256,10 +273,10 @@ def register(s: Session, who: Who, window_id: int, content_ids: list[int], now: 
     return row
 
 
-def cancel_registration(s: Session, user_id: int, game_id: int | None) -> PfInterest | None:
-    """Cancel the member's registration in a game; None = in every game."""
-    rows = list(s.scalars(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active")))
-    rows = [r for r in rows if game_id is None or r.game_id == game_id]
+def cancel_registration(s: Session, user_id: int, game_id: int) -> PfInterest | None:
+    """Cancel the member's registration in a game."""
+    rows = list(s.scalars(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active",
+                                                   PfInterest.game_id == game_id)))
     for row in rows:
         row.status = "cancelled"
     return rows[0] if rows else None

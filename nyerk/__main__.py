@@ -12,11 +12,11 @@ import sys
 
 import uvicorn
 
-from . import db, forgotten, games, housekeeping
+from . import db, forgotten, housekeeping, servers
 from .config import Config
-from .db import get_settings, get_state
+from .db import get_state
 from .logbus import bus
-from .seed import seed_reaction_groups, upgrade_defaults
+from .seed import upgrade_defaults
 from .web.app import create_app, hash_password
 
 log = logging.getLogger("nyerk")
@@ -24,7 +24,7 @@ log = logging.getLogger("nyerk")
 
 def init_password(cfg: Config) -> None:
     with db.session() as s:
-        st = get_settings(s)
+        st = get_state(s)  # the host's password: one for the whole Nyerk
         reset = os.environ.get("NYERK_RESET_PASSWORD") in ("1", "true", "yes")
         if st.admin_password_hash and not reset:
             return
@@ -156,13 +156,16 @@ def main() -> None:
     bus.setup(cfg.log_file, cfg.log_keep_days)
     db.init_engine(cfg.db_path)
     with db.session() as s:
-        get_settings(s), get_state(s)
+        get_state(s)
+        if cfg.guild_id:
+            # An install from before servers hands its data to GUILD_ID; otherwise
+            # GUILD_ID is simply approved from the start.
+            if servers.claim_legacy(s, cfg.guild_id):
+                log.info("Data from before servers now belongs to server %s.", cfg.guild_id)
+            servers.seen(s, cfg.guild_id, "", auto_approve=True)
+        servers.protect_all(s)
         for what in upgrade_defaults(s):
             log.info("Updated default %s.", what)
-        seed_reaction_groups(s)
-        if not games.all_games(s):
-            # A fresh install: the owner picks the game on the web page first.
-            log.warning("No game set up yet: open the web page to choose one.")
     init_password(cfg)
     forgotten.reapply(cfg)  # a restored backup must not bring forgotten members back
     try:

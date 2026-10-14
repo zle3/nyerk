@@ -7,6 +7,8 @@ from nyerk import engine, safety, shugo, transfer
 from nyerk.models import Category
 from nyerk.web import security
 
+from .conftest import GUILD as TEST_GUILD
+
 GUILD = 999_999_999_999_999_999
 
 
@@ -43,7 +45,7 @@ def test_everyone_role_is_never_accepted_or_pinged(s):
     assert safety.pingable(GUILD) == 0 and safety.pingable(123) == 123
     with pytest.raises(transfer.ImportError_, match="@everyone"):
         transfer.apply_import(s, {"nyerk_export": 1, "categories": [{"name": "Shugo", "role_id": str(GUILD)}]},
-                              game_id=1)
+                              TEST_GUILD, game_id=1)
 
 
 def test_everyone_alert_does_not_ping(s, monkeypatch):

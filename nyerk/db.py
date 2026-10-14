@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -70,20 +70,29 @@ def _migrate(engine: Engine, db_path: Path | str) -> None:
     with engine.connect() as conn:
         version = conn.exec_driver_sql("PRAGMA user_version").scalar() or 0
         has_data = conn.exec_driver_sql("SELECT COUNT(*) FROM settings").scalar()
-    if version >= 1:
+    for target, step in ((1, _migrate_games), (2, _migrate_servers)):
+        if version >= target:
+            continue
+        if has_data:
+            _copy_before(db_path, target)
+        step(engine)
+        version = target
+
+
+def _copy_before(db_path: Path | str, version: int) -> None:
+    """A copy first: SQLite commits schema changes as it goes, so a crash
+    mid-upgrade can't be rolled back. It stays until removed by hand."""
+    if str(db_path) == ":memory:":
         return
-    if has_data and str(db_path) != ":memory:":
-        # A copy first: SQLite commits schema changes as it goes, so a crash
-        # mid-upgrade can't be rolled back. It stays until removed by hand.
-        import sqlite3
-        copy = Path(db_path).with_name(Path(db_path).stem + "-before-v1.db")
-        if not copy.exists():
-            src, dst = sqlite3.connect(db_path), sqlite3.connect(copy)
-            with dst:
-                src.backup(dst)
-            src.close()
-            dst.close()
-    _migrate_games(engine)
+    import sqlite3
+    copy = Path(db_path).with_name(Path(db_path).stem + f"-before-v{version}.db")
+    if copy.exists():
+        return
+    src, dst = sqlite3.connect(db_path), sqlite3.connect(copy)
+    with dst:
+        src.backup(dst)
+    src.close()
+    dst.close()
 
 
 def _columns(conn, table: str) -> list[str]:
@@ -138,6 +147,61 @@ def _migrate_games(engine: Engine) -> None:
         conn.commit()
 
 
+# Tables that belong to a Discord server from version 2 on.
+SERVER_TABLES = ("settings", "reaction_groups", "log_entries", "role_holders", "quiet_hours", "member_profiles",
+                 "config_changes")
+# bot_state columns that became per server (onto the settings row).
+MOVED_TO_SERVER = ("reaction_message_id", "reaction_map", "reaction_messages", "roles_header_message_id",
+                   "roles_clear_message_id")
+
+
+def _migrate_servers(engine: Engine) -> None:
+    """Version 2: one Nyerk, many Discord servers. Every row of an existing
+    install belongs to server 0, a placeholder that is claimed as the real
+    server (GUILD_ID, or the one server the bot is in) on the next start.
+    The roles channel's message IDs move from bot_state onto the server's
+    settings row, and the admin password from settings to bot_state: it is
+    the host's, not one server's."""
+    with engine.connect() as conn:
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        conn.commit()
+        legacy = "guild_id" not in _columns(conn, "settings")
+        password = ""
+        moved: dict = {}
+        if legacy:
+            if "admin_password_hash" in _columns(conn, "settings"):
+                password = conn.exec_driver_sql("SELECT admin_password_hash FROM settings ORDER BY id LIMIT 1") \
+                    .scalar() or ""
+            have = [c for c in MOVED_TO_SERVER if c in _columns(conn, "bot_state")]
+            if have:
+                row = conn.exec_driver_sql(f"SELECT {', '.join(have)} FROM bot_state WHERE id = 1").mappings().first()
+                moved = {k: v for k, v in (row or {}).items() if v is not None}
+        for name in SERVER_TABLES:
+            if "guild_id" not in _columns(conn, name):
+                extra = {"guild_id": "0"}
+                if name == "settings":
+                    extra["status"] = "'approved'"  # the install's own server keeps working
+                _rebuild(conn, Base.metadata.tables[name], extra=extra)
+        from sqlalchemy.schema import CreateIndex
+        for index in Base.metadata.tables["games"].indexes:  # games.guild_id existed, its index didn't
+            conn.exec_driver_sql(str(CreateIndex(index).compile(conn)).replace(
+                "CREATE INDEX", "CREATE INDEX IF NOT EXISTS", 1))
+        if legacy:
+            if "admin_password_hash" not in _columns(conn, "bot_state"):
+                conn.exec_driver_sql("ALTER TABLE bot_state ADD COLUMN admin_password_hash VARCHAR(255) DEFAULT ''")
+            if password:
+                conn.execute(text("UPDATE bot_state SET admin_password_hash = :p WHERE id = 1"), {"p": password})
+            if moved:
+                import json
+                sets = ", ".join(f'"{k}" = :{k}' for k in moved)
+                conn.execute(text(f"UPDATE settings SET {sets} WHERE guild_id = 0"),
+                             {k: json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in moved.items()})
+        conn.exec_driver_sql("PRAGMA user_version = 2")
+        conn.commit()
+        conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+        conn.commit()
+
+
 def _rebuild(conn, table, extra: dict[str, str]) -> None:
     """Recreate `table` from the current model and copy its rows across:
     the SQLite way to change constraints. `extra` fills new columns."""
@@ -149,6 +213,15 @@ def _rebuild(conn, table, extra: dict[str, str]) -> None:
     conn.exec_driver_sql(ddl)
     keep = [c.name for c in table.columns if c.name in old]
     fill = {k: v for k, v in extra.items() if k not in old}
+    for c in table.columns:  # new required columns the old table lacks get the model's default
+        if c.name in old or c.name in fill or c.nullable or c.primary_key:
+            continue
+        arg = c.default.arg if c.default is not None else None
+        if callable(arg):  # JSON columns: default=dict or list, wrapped by SQLAlchemy to take a context
+            import json
+            fill[c.name] = _sql_literal(json.dumps(arg(None)))
+        elif arg is not None:
+            fill[c.name] = _sql_literal(arg)
     cols = ", ".join(f'"{c}"' for c in keep + list(fill))
     vals = ", ".join([f'"{c}"' for c in keep] + list(fill.values()))
     conn.exec_driver_sql(f'INSERT INTO {tmp} ({cols}) SELECT {vals} FROM "{table.name}"')
@@ -202,12 +275,16 @@ def session() -> Iterator[Session]:
         s.close()
 
 
-def get_settings(s: Session) -> Settings:
-    row = s.get(Settings, 1)
+class NoServer(LookupError):
+    """Nyerk has no settings for that Discord server (not joined, or removed)."""
+
+
+def get_settings(s: Session, guild_id: int) -> Settings:
+    """One server's settings. Rows are made when the bot sees a server
+    (servers.seen), never here, so a stray ID can't create one."""
+    row = s.scalar(select(Settings).where(Settings.guild_id == int(guild_id)))
     if row is None:
-        row = Settings(id=1)
-        s.add(row)
-        s.flush()
+        raise NoServer(f"No server {guild_id}")
     return row
 
 

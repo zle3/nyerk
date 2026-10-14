@@ -13,7 +13,7 @@ from nyerk import db, games, party, quiet, timers, tracking
 from nyerk.db import get_settings, get_state
 from nyerk.models import Category, Event, LogEntry, PfContent, ReactionGroup
 from nyerk.party import Who
-from nyerk.seed import seed, seed_party_finder, seed_reaction_groups, upgrade_defaults
+from nyerk.seed import seed, upgrade_defaults
 from nyerk.web.app import hash_password
 
 NY = ZoneInfo("America/New_York")
@@ -49,9 +49,10 @@ def build(path) -> dict:
     rnd = random.Random(14)
     db.init_engine(path)
     with db.session() as s:
-        seed(s), seed_party_finder(s), seed_reaction_groups(s), upgrade_defaults(s)
-        st, game = get_settings(s), games.first(s)
-        st.admin_password_hash = hash_password(PASSWORD)
+        seed(s, GUILD_ID), upgrade_defaults(s)
+        get_settings(s, GUILD_ID).guild_name = "Your Server"
+        get_state(s).admin_password_hash = hash_password(PASSWORD)
+        st, game = get_settings(s, GUILD_ID), games.first(s, GUILD_ID)
         for k in ("roles_channel_id", "log_channel_id"):
             setattr(st, k, ids.next())
         for k in ("timer_channel_id", "party_channel_id", "tank_role_id", "support_role_id", "dps_role_id"):
@@ -72,14 +73,14 @@ def build(path) -> dict:
                 [c.role_id for c in s.scalars(select(PfContent))]
         brackets = [b.id for b in party.brackets(s, 1)]
     for i, name in enumerate(MEMBERS):
-        tracking.set_classes(uid(i), name, set(rnd.sample(classes, rnd.choice([1, 1, 2]))))
+        tracking.set_classes(GUILD_ID, uid(i), name, set(rnd.sample(classes, rnd.choice([1, 1, 2]))))
         for r in rnd.sample(pings, rnd.randint(1, 4)):
-            tracking.add_ping(uid(i), name, r)
+            tracking.add_ping(GUILD_ID, uid(i), name, r)
     with db.session() as s:
         for i, name in enumerate(MEMBERS):
             party.set_gear(s, uid(i), name, rnd.choice(brackets), NOW)
         for i in (3, 8):
-            quiet.set_hours(s, uid(i), MEMBERS[i], 23, 7, "America/New_York", set())
+            quiet.set_hours(s, GUILD_ID, uid(i), MEMBERS[i], 23, 7, "America/New_York", set())
 
     def who(s, i):
         held = {h for h in tracking_roles(s, uid(i))}
@@ -146,7 +147,7 @@ def build(path) -> dict:
             (NOW - 1800, "party", "Ferocious Horn Den party is full."),
             (NOW - 3600, "startup", "Nyerk online as Nyerk#0000 in Your Server."),
         ]:
-            s.add(LogEntry(at=at, level="INFO", kind=kind, text=text))
+            s.add(LogEntry(guild_id=GUILD_ID, at=at, level="INFO", kind=kind, text=text))
     return ctx
 
 

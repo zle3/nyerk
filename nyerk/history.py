@@ -16,8 +16,8 @@ KEEP = 300
 KEYS = ("name", "label", "minutes", "lead_minutes")
 
 
-def snapshot(s: Session) -> dict:
-    data = transfer.export(s)
+def snapshot(s: Session, guild_id: int) -> dict:
+    data = transfer.export(s, guild_id)
     data.pop("exported_at", None)
     return data
 
@@ -47,25 +47,28 @@ def diff(before: dict, after: dict) -> list[str]:
     return lines
 
 
-def record(s: Session, at: int, user: dict, path: str, before: dict, lines: list[str]) -> ConfigChange:
-    row = ConfigChange(at=at, user_id=user.get("uid", 0), user_name=user.get("name", ""),
+def record(s: Session, guild_id: int, at: int, user: dict, path: str, before: dict,
+           lines: list[str]) -> ConfigChange:
+    row = ConfigChange(guild_id=guild_id, at=at, user_id=user.get("uid", 0), user_name=user.get("name", ""),
                        level=user.get("level", ""), path=path[:200],
                        summary="\n".join(lines[:40]) + (f"\n… and {len(lines) - 40} more" if len(lines) > 40 else ""),
                        before=before)
     s.add(row)
     s.flush()
-    cutoff = s.scalar(select(ConfigChange.id).order_by(ConfigChange.id.desc()).offset(KEEP).limit(1))
+    cutoff = s.scalar(select(ConfigChange.id).where(ConfigChange.guild_id == guild_id)
+                      .order_by(ConfigChange.id.desc()).offset(KEEP).limit(1))
     if cutoff:
-        s.execute(delete(ConfigChange).where(ConfigChange.id <= cutoff))
+        s.execute(delete(ConfigChange).where(ConfigChange.guild_id == guild_id, ConfigChange.id <= cutoff))
     return row
 
 
-def restore(s: Session, change_id: int) -> list[str]:
+def restore(s: Session, guild_id: int, change_id: int) -> list[str]:
+    """Put one server's settings back to how they were before a change."""
     row = s.get(ConfigChange, change_id)
-    if row is None or not row.before:
+    if row is None or row.guild_id != guild_id or not row.before:
         raise ValueError("That change can't be restored.")
     data = dict(row.before)
     data.setdefault("nyerk_export", 1)
     # Saved before games existed: it all belonged to the first game.
-    first = s.scalar(select(Game.id).order_by(Game.id).limit(1))
-    return transfer.apply_import(s, data, game_id=first)
+    first = s.scalar(select(Game.id).where(Game.guild_id == guild_id).order_by(Game.id).limit(1))
+    return transfer.apply_import(s, data, guild_id, game_id=first)

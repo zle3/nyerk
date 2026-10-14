@@ -9,8 +9,7 @@ from nyerk import timers
 from nyerk.db import get_state
 from nyerk.models import Event, SentMessage
 
-from .conftest import ny
-from nyerk.games import first as G
+from .conftest import ny, GUILD, G  # noqa: F401
 
 _ids = itertools.count(1000)
 
@@ -152,7 +151,7 @@ class _Resp:
 
 def _interaction(uid, name):
     user = type("U", (), {"id": uid, "display_name": name})()
-    return type("I", (), {"user": user, "response": _Resp()})()
+    return type("I", (), {"user": user, "response": _Resp(), "guild_id": GUILD})()
 
 
 def test_override_prompt_then_confirm(s, monkeypatch):
@@ -206,8 +205,9 @@ def test_logs_queue_is_bounded():
 
     async def run():
         bus.attach_queue()
-        for i in range(logbus.QUEUE_MAX + 50):
-            bus.warn("test", f"line {i}")
+        with logbus.for_guild(GUILD):  # lines without a server never go to a #logs channel
+            for i in range(logbus.QUEUE_MAX + 50):
+                bus.warn("test", f"line {i}")
         return bus.queue.qsize(), bus.take_dropped(), bus.take_dropped()
     assert asyncio.run(run()) == (logbus.QUEUE_MAX, 50, 0)
 
@@ -217,8 +217,8 @@ def test_logs_are_deleted_after_keep_days(s, tmp_path):
     from nyerk import logbus
     from nyerk.models import LogEntry
     now = 2_000_000_000
-    s.add_all([LogEntry(at=now - 20 * 86400, level="INFO", kind="t", text="old"),
-               LogEntry(at=now - 3600, level="INFO", kind="t", text="new")])
+    s.add_all([LogEntry(guild_id=GUILD, at=now - 20 * 86400, level="INFO", kind="t", text="old"),
+               LogEntry(guild_id=GUILD, at=now - 3600, level="INFO", kind="t", text="new")])
     s.commit()
     assert logbus.prune_old_rows(14, now) == 1
     assert [r.text for r in s.scalars(select(LogEntry))] == ["new"]

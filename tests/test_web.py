@@ -6,11 +6,11 @@ from sqlalchemy import select
 
 from nyerk import db
 from nyerk.config import Config
-from nyerk.db import get_settings
+from nyerk.db import get_settings, get_state
 from nyerk.models import Category, Event, PfClass, PfContent, QuietHours, ReactionGroup, UserTimer
 from nyerk.seed import seed, seed_party_finder, seed_reaction_groups
 from nyerk.web.app import create_app, hash_password
-from nyerk.games import first as G
+from .conftest import GUILD, G  # noqa: F401
 
 
 @pytest.fixture()
@@ -21,8 +21,8 @@ def client(tmp_path, monkeypatch):
     with db.session() as s:
         seed(s)
         seed_party_finder(s)
-        seed_reaction_groups(s)
-        get_settings(s).admin_password_hash = hash_password("correct horse")
+        seed_reaction_groups(s, GUILD)
+        get_state(s).admin_password_hash = hash_password("correct horse")
     c = TestClient(create_app(Config()))
     page = c.get("/login")
     csrf = re.search(r'name="csrf" value="([^"]+)"', page.text)[1]
@@ -49,7 +49,7 @@ def test_wrong_password(tmp_path, monkeypatch):
     db.init_engine(":memory:")
     with db.session() as s:
         seed(s)
-        get_settings(s).admin_password_hash = hash_password("right")
+        get_state(s).admin_password_hash = hash_password("right")
     c = TestClient(create_app(Config()))
     csrf = re.search(r'name="csrf" value="([^"]+)"', c.get("/login").text)[1]
     c.post("/login", data={"csrf": csrf, "password": "wrong"})
@@ -141,7 +141,7 @@ def test_settings_validation(client):
     r = client.post("/settings", data={**base, "default_tz": "Nowhere/Land"})
     assert "Unknown time zone" in r.text
     with db.session() as s:
-        assert get_settings(s).default_tz == "America/New_York"
+        assert get_settings(s, GUILD).default_tz == "America/New_York"
 
 
 def test_repost_roles_route_not_shadowed(client):
@@ -237,7 +237,7 @@ def test_roles_header(client):
     r = client.post("/roles/header", data={"csrf": csrf, "roles_header": "# Pick roles\nhi"})
     assert "Header saved" in r.text and 'class="h1">Pick roles' in r.text
     with db.session() as s:
-        assert get_settings(s).roles_header == "# Pick roles\nhi"
+        assert get_settings(s, GUILD).roles_header == "# Pick roles\nhi"
 
 
 @pytest.mark.parametrize("rng", ["7", "30", "all", "bogus"])
@@ -249,7 +249,7 @@ def test_stats_page(client, rng):
 def test_quiet_hours_admin(client):
     from nyerk import quiet
     with db.session() as s:
-        q = quiet.set_hours(s, 9, "Rae", 23, 7, "America/New_York", set())
+        q = quiet.set_hours(s, GUILD, 9, "Rae", 23, 7, "America/New_York", set())
         qid = q.id
     page = client.get("/party").text
     assert "Rae" in page and "11 PM (23:00) to 7 AM (07:00), Eastern (New York)" in page

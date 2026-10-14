@@ -12,9 +12,9 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import db, forgotten, games, logbus, shugo
+from . import db, forgotten, games, logbus, servers, shugo
 from .config import Config
-from .db import get_settings, get_state
+from .db import get_state
 from .models import Game
 from .logbus import bus
 
@@ -42,38 +42,45 @@ async def run_import_check(game_id: int | None = None) -> str:
     """Check shugo.gg for every AION 2 game (or just game_id). Returns the
     last error, "" when all went well."""
     with db.session() as s:
-        targets = [(g.id, g.name, g.shugo_url, g.shugo_region) for g in games.all_games(s)
+        targets = [(g.id, g.guild_id, g.name, g.shugo_url, g.shugo_region) for g in games.all_games(s, None)
                    if g.kind == "aion2" and (game_id is None or g.id == game_id)]
     last_error = ""
-    for gid, name, url, region in targets:
-        pending, error = await shugo.check(db.session, url, region, gid)
-        with db.session() as s:
-            game = s.get(Game, gid)
-            if game is None:
-                continue
-            game.last_import_at = int(time.time())
-            if error:
-                game.last_import_error = error
-            else:
-                game.last_import_error = ""
-                game.pending_import = pending if pending["changes"] else None
-        if error:
-            bus.warn("defaults", f"shugo.gg check for {name} failed, keeping last good values. {error}")
-            last_error = error
-            continue
-        n = len(pending["changes"])
-        bus.info("defaults", f"shugo.gg check for {name}: {pending['parsed']} events read, {n} change(s) to review.",
-                 discord=n > 0)
+    for gid, guild_id, name, url, region in targets:
+        with logbus.for_guild(guild_id):  # its log lines belong to the game's server
+            last_error = await _check_game(gid, name, url, region) or last_error
     return last_error
+
+
+async def _check_game(gid: int, name: str, url: str, region: str) -> str:
+    pending, error = await shugo.check(db.session, url, region, gid)
+    with db.session() as s:
+        game = s.get(Game, gid)
+        if game is None:
+            return ""
+        game.last_import_at = int(time.time())
+        if error:
+            game.last_import_error = error
+        else:
+            game.last_import_error = ""
+            game.pending_import = pending if pending["changes"] else None
+    if error:
+        bus.warn("defaults", f"shugo.gg check for {name} failed, keeping last good values. {error}")
+        return error
+    n = len(pending["changes"])
+    bus.info("defaults", f"shugo.gg check for {name}: {pending['parsed']} events read, {n} change(s) to review.",
+             discord=n > 0)
+    return ""
 
 
 async def loop(cfg: Config) -> None:
     while True:
         try:
             with db.session() as s:
-                settings, state = get_settings(s), get_state(s)
-                tz, last_backup = settings.default_tz, state.last_backup_day
-                last_import = min((g.last_import_at for g in games.all_games(s) if g.kind == "aion2"),
+                state = get_state(s)
+                # Backups run at 04:00 in the first server's time zone (UTC before there is one).
+                first = servers.approved(s)
+                tz, last_backup = (first[0].default_tz if first else "UTC"), state.last_backup_day
+                last_import = min((g.last_import_at for g in games.all_games(s, None) if g.kind == "aion2"),
                                   default=int(time.time()))
             local = dt.datetime.now(ZoneInfo(tz))
             today = local.date().isoformat()

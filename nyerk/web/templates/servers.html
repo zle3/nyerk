@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
+{% block title %}Servers{% endblock %}
+{% block content %}
+<h1>Servers</h1>
+<p class="lede">Every Discord server that added this Nyerk. A new server waits here until you approve it; until then Nyerk does nothing there. Each approved server has its own owner, admins, settings, games and data, and none of it is shared.</p>
+{% if invite %}<div class="card"><p class="small muted">Link to add Nyerk to another server (the server's owner opens it):</p><p class="mono small">{{ invite }}</p></div>{% endif %}
+
+<p class="section-label">Servers</p>
+<div class="list">
+  {% for r in rows %}{% set x = r.row %}
+  <div class="row">
+    <div class="grow">
+      <div class="title">{{ x.guild_name or 'Unnamed server' }} {% if x.status == 'approved' %}<span class="pill ok">approved</span>{% else %}<span class="pill warn">waiting</span>{% endif %}{% if not r.here %} <span class="pill err">Nyerk isn't in it</span>{% endif %}</div>
+      <div class="sub mono">{{ x.guild_id }} · {{ r.games }} game{{ 's' if r.games != 1 }}{% if x.joined_at %} · added <time data-ts="{{ x.joined_at }}" data-style="D"></time>{% endif %}</div>
+    </div>
+    {% if x.status != 'approved' %}
+    <form method="post" action="/servers/{{ x.guild_id }}/approve" class="inline-form">{{ csrf_field() }}<button class="btn small" type="submit">Approve</button></form>
+    {% endif %}
+    <details class="danger-zone">
+      <summary class="btn small danger">Remove</summary>
+      <form method="post" action="/servers/{{ x.guild_id }}/remove" class="inline mt">
+        {{ csrf_field() }}
+        <input type="text" name="confirm" placeholder="Type {{ x.guild_name or x.guild_id }}" aria-label="Type the server name to confirm" required>
+        <label class="switch small"><input type="checkbox" name="leave" value="1" checked><span class="track"></span>Also leave the server</label>
+        <button class="btn small danger" type="submit">Remove for good</button>
+      </form>
+      <p class="small muted">Deletes everything Nyerk keeps for this server: settings, games, events, timers, roles setup, party finder, members, logs and history.</p>
+    </details>
+  </div>
+  {% else %}
+  <div class="row"><span class="muted">No servers yet. Add Nyerk to a server with the link above.</span></div>
+  {% endfor %}
+</div>
+
+<p class="section-label">Host log</p>
+{% include "_logs.html" %}
+{% endblock %}

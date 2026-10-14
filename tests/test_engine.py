@@ -3,8 +3,7 @@ from sqlalchemy import select
 from nyerk import engine, timers
 from nyerk.models import Category, Event, SentMessage
 
-from .conftest import ny
-from nyerk.games import first as G
+from .conftest import ny, GUILD, G  # noqa: F401
 
 
 def boss(s, name="Soul Ruler Kashapa"):
@@ -195,13 +194,15 @@ def test_upgrade_adds_text_columns_with_real_newlines(tmp_path):
     con.close()
     db.init_engine(path)
     with db.session() as s:
-        assert get_settings(s).roles_header.splitlines()[1].startswith("Pick your class")
+        from nyerk import servers
+        assert servers.claim_legacy(s, GUILD)  # what the next start does with GUILD_ID set
+        assert get_settings(s, GUILD).roles_header.splitlines()[1].startswith("Pick your class")
 
 
 def test_upgrade_repairs_escaped_newlines(s):
     from nyerk.db import get_settings
     from nyerk.seed import upgrade_defaults
-    st = get_settings(s)
+    st = get_settings(s, GUILD)
     st.roles_header = "# Roles\\nPick"
     assert "roles header" in upgrade_defaults(s)
     assert st.roles_header == "# Roles\nPick"
@@ -278,6 +279,8 @@ def test_new_text_setting_with_apostrophe_reaches_old_databases(tmp_path):
     con.close()
     db.init_engine(path)
     with db.session() as s:
+        from nyerk import servers
+        servers.claim_legacy(s, GUILD)
         assert "(Laborer's Rest Stop)" in G(s).dashboard_boss_note
 
 

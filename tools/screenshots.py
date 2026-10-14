@@ -54,7 +54,7 @@ def names(s):
     roles = {c.role_id: c.name for c in s.scalars(select(Category))}
     roles |= {c.role_id: c.name for c in party.contents(s, 1, False)}
     roles |= {c.role_id: c.name for c in party.classes(s, 1)}
-    st = games.first(s)
+    st = games.first(s, demo.GUILD_ID)
     roles |= {st.tank_role_id: "Tank", st.support_role_id: "Support", st.dps_role_id: "DPS"}
     users = {demo.uid(i): n for i, n in enumerate(demo.MEMBERS)}
     return roles, users
@@ -63,7 +63,7 @@ def names(s):
 def class_panel(s, at):
     btns = [Button(c.name, emoji=c.emoji) for c in party.classes(s, 1) if c.role_id][:23]
     btns += [Button("My roles", "primary", "📋"), Button("Clear classes", "danger")]
-    return Message(at, party.class_panel_text(games.first(s)), buttons_in_rows(btns))
+    return Message(at, party.class_panel_text(games.first(s, demo.GUILD_ID)), buttons_in_rows(btns))
 
 
 def gear_panel(s, at):
@@ -91,7 +91,7 @@ def timer_channel(s):
         alert("Silent Dartan", t(14, 45), 15, orrin),
         alert("Silent Dartan", t(14, 45), 0, orrin),
     ]
-    dash = engine.build_dashboard(s, games.first(s), NOW)
+    dash = engine.build_dashboard(s, games.first(s, demo.GUILD_ID), NOW)
     btns = [Button(label, "primary" if bid == 0 else "secondary") for bid, label in dash.bosses]
     msgs.append(Message(t(14, 45), dash.text, buttons_in_rows(btns), edited=True))
     return msgs
@@ -99,12 +99,12 @@ def timer_channel(s):
 
 def roles_channel(s):
     at = NOW - 2 * 86400
-    st = get_settings(s)
+    st = get_settings(s, demo.GUILD_ID)
     msgs = [Message(at, st.roles_header), class_panel(s, at), gear_panel(s, at)]
     holders = {}
     for h in s.scalars(select(RoleHolder)):
         holders[h.role_id] = holders.get(h.role_id, 0) + 1
-    for text, chunk in reaction_roles.messages(s):
+    for text, chunk in reaction_roles.messages(s, demo.GUILD_ID):
         msgs.append(Message(at, text, reactions=[(e.emoji, holders.get(e.role_id, 0) + 1) for e in chunk]))
     msgs.append(Message(at, reaction_roles.CLEAR_TEXT, [[
         Button("My roles", "primary", "📋"), Button("Quiet hours", "primary", "🌙"),
@@ -112,13 +112,13 @@ def roles_channel(s):
     from nyerk.bot import my_roles_text
     lyra = demo.uid(MEMBER_FOR_ME)
     held = {h.role_id for h in s.scalars(select(RoleHolder).where(RoleHolder.user_id == lyra))}
-    msgs.append(Message(NOW, my_roles_text(s, lyra, held, NOW), ephemeral=True))
+    msgs.append(Message(NOW, my_roles_text(s, demo.GUILD_ID, lyra, held, NOW), ephemeral=True))
     return msgs
 
 
 def party_channel(s, ctx):
     at = NOW - 2 * 86400
-    st = games.first(s)
+    st = games.first(s, demo.GUILD_ID)
     full = party.live_parties(s, 1, "full")
     open_p = s.get(PfParty, ctx["open_party_id"])
     msgs = [
@@ -150,13 +150,24 @@ class ShotBot:
     def is_ready(self):
         return True
 
-    def status(self):
-        return {"connected": True, "user": "Nyerk#0000", "guild": "Your Server", "latency_ms": 42, "last_tick": NOW}
+    def status(self, guild_id=None):
+        return {"connected": True, "user": "Nyerk#0000", "guild": "Your Server", "guilds": 1, "latency_ms": 42,
+                "last_tick": NOW}
 
-    def request_refresh(self, repost=False):
+    def request_refresh(self, repost=False, game_id=None):
         pass
 
-    async def fetch_member(self, user_id):
+    def server_ids(self):
+        return {demo.GUILD_ID}
+
+    async def sync_commands(self, guild_id):
+        pass
+
+    async def member_access(self, guild_id, user_id):
+        found = await self.fetch_member(guild_id, user_id)
+        return (found[0], found[1], False, False) if found else None
+
+    async def fetch_member(self, guild_id, user_id):
         if user_id == demo.OWNER_ID:
             return "Owner", set()
         with db.session() as s:
@@ -164,7 +175,7 @@ class ShotBot:
         name = dict((demo.uid(i), n) for i, n in enumerate(demo.MEMBERS)).get(user_id)
         return (name, held) if name else None
 
-    async def admin_apply_roles(self, uid, add, remove):
+    async def admin_apply_roles(self, guild_id, uid, add, remove):
         return []
 
     async def apply_quiet_hours(self, only=None):

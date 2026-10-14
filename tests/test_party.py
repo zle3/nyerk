@@ -1,11 +1,11 @@
 import pytest
 from sqlalchemy import select
 
-from nyerk.games import first as G
 from nyerk import party
 from nyerk.db import get_settings
 from nyerk.models import PfClass, PfContent, PfInterest
 from nyerk.party import PartyError, Who
+from .conftest import GUILD, G  # noqa: F401
 
 T = 1_800_000_000
 

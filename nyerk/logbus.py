@@ -1,8 +1,16 @@
 """One place to log: local file, recent-log table for the admin page, and a
-queue the bot drains into #logs."""
+queue the bot drains into #logs.
+
+Every line belongs to the Discord server in `current_guild`, which the bot
+sets for each click and scheduler step and the web page for each request
+(see `for_guild`). Lines with no server (0: startup, backups) are the
+host's: they show on the host's Logs page and in no server's #logs.
+"""
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import logging
 import time
 from logging.handlers import TimedRotatingFileHandler
@@ -14,13 +22,25 @@ from . import db
 from .models import LogEntry
 
 logger = logging.getLogger("nyerk")
-KEEP_DB_ROWS = 500
+KEEP_DB_ROWS = 500  # per server
 QUEUE_MAX = 200  # lines waiting for #logs
+
+current_guild: contextvars.ContextVar[int] = contextvars.ContextVar("nyerk_guild", default=0)
+
+
+@contextlib.contextmanager
+def for_guild(guild_id: int | None):
+    """Log lines inside belong to this server."""
+    token = current_guild.set(int(guild_id or 0))
+    try:
+        yield
+    finally:
+        current_guild.reset(token)
 
 
 class LogBus:
     def __init__(self) -> None:
-        self.queue: asyncio.Queue[str] | None = None
+        self.queue: asyncio.Queue[tuple[int, str]] | None = None
         self.dropped = 0
 
     def setup(self, log_file: Path, keep_days: int = 14) -> None:
@@ -39,27 +59,29 @@ class LogBus:
         logging.getLogger("discord").setLevel(logging.WARNING)
         logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
-    def attach_queue(self) -> asyncio.Queue[str]:
+    def attach_queue(self) -> asyncio.Queue[tuple[int, str]]:
         # Bounded: a flood of log lines can't grow memory or keep the bot
         # posting to #logs for hours. Extra lines still reach the Logs page.
         self.queue = asyncio.Queue(maxsize=QUEUE_MAX)
         return self.queue
 
     def _emit(self, level: str, kind: str, text: str, discord: bool) -> None:
-        getattr(logger, level.lower())(f"[{kind}] {text}")
+        guild = current_guild.get()
+        getattr(logger, level.lower())(f"[{guild or 'host'}] [{kind}] {text}")
         try:
             with db.session() as s:
-                s.add(LogEntry(at=int(time.time()), level=level, kind=kind, text=text))
+                s.add(LogEntry(guild_id=guild, at=int(time.time()), level=level, kind=kind, text=text))
                 s.flush()
-                cutoff = s.scalar(select(LogEntry.id).order_by(LogEntry.id.desc()).offset(KEEP_DB_ROWS).limit(1))
+                cutoff = s.scalar(select(LogEntry.id).where(LogEntry.guild_id == guild)
+                                  .order_by(LogEntry.id.desc()).offset(KEEP_DB_ROWS).limit(1))
                 if cutoff:
-                    s.execute(delete(LogEntry).where(LogEntry.id <= cutoff))
+                    s.execute(delete(LogEntry).where(LogEntry.guild_id == guild, LogEntry.id <= cutoff))
         except Exception:  # never let logging take the bot down
             logger.exception("could not store log entry")
-        if discord and self.queue is not None:
+        if discord and guild and self.queue is not None:
             prefix = {"INFO": "", "WARNING": "⚠️ ", "ERROR": "❌ "}.get(level, "")
             try:
-                self.queue.put_nowait(f"{prefix}**{kind}** {text}")
+                self.queue.put_nowait((guild, f"{prefix}**{kind}** {text}"))
             except asyncio.QueueFull:
                 self.dropped += 1
 

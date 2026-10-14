@@ -20,7 +20,7 @@ from nyerk.party import PartyError, Who
 from nyerk.seed import seed_reaction_groups
 from nyerk.web.app import create_app, hash_password
 
-from .conftest import ny
+from .conftest import ny, GUILD, G  # noqa: F401
 from .test_bot import FakeChannel
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -29,8 +29,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def two_games(s) -> tuple[Game, Game]:
     """AION 2 (from the conftest seed) plus a custom game with a class, a
     bracket, a dungeon and a boss of its own; same names as AION 2's on purpose."""
-    aion = games.first(s)
-    tl = games.create(s, "Throne and Liberty", "custom")
+    aion = games.first(s, GUILD)
+    tl = games.create(s, GUILD, "Throne and Liberty", "custom")
     cat = Category(game_id=tl.id, name="World Boss", role_id=700000000000000001)
     s.add_all([cat, PfClass(game_id=tl.id, name="Cleric", class_type="support", role_id=700000000000000002),
                PfBracket(game_id=tl.id, label="2100+", min_score=2100, max_score=9999),
@@ -50,19 +50,19 @@ def two_games(s) -> tuple[Game, Game]:
 
 
 def test_templates(s):
-    aion = games.first(s)
+    aion = games.first(s, GUILD)
     assert aion.kind == "aion2" and aion.dashboard_title == "⏱️ AION 2 Timers"
-    tl = games.create(s, "Throne and Liberty", "custom")
+    tl = games.create(s, GUILD, "Throne and Liberty", "custom")
     assert tl.dashboard_title == "⏱️ Throne and Liberty Timers" and tl.dashboard_boss_note == ""
     assert not engine.load_events(s, tl.id) and not party.classes(s, tl.id) and not party.brackets(s, tl.id)
     assert len(party.windows(s, tl.id)) == 5                       # availability windows come with every game
     assert len(engine.load_events(s, aion.id)) == 10
     with pytest.raises(games.GameError, match="already a game"):
-        games.create(s, "", "aion2")                               # blank name with the template: AION 2 again
+        games.create(s, GUILD, "", "aion2")                               # blank name with the template: AION 2 again
     with pytest.raises(games.GameError, match="already a game"):
-        games.create(s, "throne and liberty", "custom")
+        games.create(s, GUILD, "throne and liberty", "custom")
     with pytest.raises(games.GameError, match="name"):
-        games.create(s, "  ", "custom")
+        games.create(s, GUILD, "  ", "custom")
 
 
 def test_each_game_needs_its_own_channels(s):
@@ -118,13 +118,13 @@ def test_bot_sends_each_games_alerts_and_dashboard_to_its_channel(s, monkeypatch
     assert aion_texts[-1].startswith("━") and "AION 2 Timers" in aion_texts[-1]
     assert len(tl_texts) == 1 and "Throne and Liberty Timers" in tl_texts[0]  # just its own dashboard
     s.expire_all()
-    assert games.first(s).dashboard_message_id and s.get(Game, tl.id).dashboard_message_id
-    assert s.get(Game, tl.id).dashboard_message_id != games.first(s).dashboard_message_id
+    assert games.first(s, GUILD).dashboard_message_id and s.get(Game, tl.id).dashboard_message_id
+    assert s.get(Game, tl.id).dashboard_message_id != games.first(s, GUILD).dashboard_message_id
 
 
 def test_boss_choices_name_the_game_when_there_are_several(s):
     aion, tl = two_games(s)
-    labels = [label for label, _ in botmod.boss_choices(s)]
+    labels = [label for label, _ in botmod.boss_choices(s, GUILD)]
     assert "Throne and Liberty: Morokai" in labels and "AION 2: Eternal Gartua" in labels
 
 
@@ -147,7 +147,7 @@ def test_one_party_and_registration_per_game(s):
     with pytest.raises(PartyError, match="already in a party"):
         party.create(s, me, tl_fire.id, 5, "none", "", "", t)
     assert party.live_party_for(s, 5, aion.id) is p1 and party.live_party_for(s, 5, tl.id) is p2
-    assert len(party.live_parties_for(s, 5)) == 2
+    assert len(party.live_parties_for(s, 5, GUILD)) == 2
     # Gear is per game; a game's dungeons, windows and classes only count in that game.
     party.set_gear(s, 6, "Kai", party.brackets(s, tl.id)[0].id, t)
     assert party.gear_of(s, 6, tl.id).label == "2100+" and party.gear_of(s, 6, aion.id) is None
@@ -159,7 +159,7 @@ def test_one_party_and_registration_per_game(s):
 
 
 def test_a_game_without_gear_scores_still_registers(s):
-    tl = games.create(s, "Lost Ark", "custom")
+    tl = games.create(s, GUILD, "Lost Ark", "custom")
     s.add_all([PfClass(game_id=tl.id, name="Bard", class_type="support", role_id=700000000000000010),
                PfContent(game_id=tl.id, name="Valtan")])
     s.flush()
@@ -194,17 +194,17 @@ def test_roles_channel_and_member_roles_cover_every_game(s):
     aion_cat = s.scalar(select(Category).where(Category.game_id == aion.id, Category.name == "World Boss"))
     aion_cat.role_id = 600000000000000099
     s.flush()
-    labels = [e.label for e in reaction_roles.entries(s)]
+    labels = [e.label for e in reaction_roles.entries(s, GUILD)]
     assert "AION 2: World Boss" in labels and "Throne and Liberty: World Boss" in labels
-    opts = {o.role_id: o.label for o in members.role_options(s)}
+    opts = {o.role_id: o.label for o in members.role_options(s, GUILD)}
     tl_cleric = next(c for c in party.classes(s, tl.id))
     assert opts[tl_cleric.role_id] == "Throne and Liberty: Cleric"
     tl.support_role_id = 700000000000000020
-    assert 700000000000000020 in members.desired_roles(s, {tl_cleric.role_id})
+    assert 700000000000000020 in members.desired_roles(s, GUILD, {tl_cleric.role_id})
     # Switching a game off drops its roles from the roles channel.
     tl.enabled = False
     s.flush()
-    assert all(not e.label.startswith("Throne") for e in reaction_roles.entries(s))
+    assert all(not e.label.startswith("Throne") for e in reaction_roles.entries(s, GUILD))
 
 
 # -- web page -------------------------------------------------------------------------------
@@ -218,9 +218,11 @@ def _owner(tmp_path, monkeypatch, with_game=True):
         if with_game:
             from nyerk.seed import seed
             seed(s)
-        get_settings(s), get_state(s)
-        seed_reaction_groups(s)
-        get_settings(s).admin_password_hash = hash_password("correct horse")
+        else:
+            from nyerk import servers
+            servers.seen(s, GUILD, "Your Server", auto_approve=True)  # the bot is in an approved server, no game yet
+        get_state(s)
+        get_state(s).admin_password_hash = hash_password("correct horse")
     c = TestClient(create_app(Config()))
     csrf = re.search(r'name="csrf" value="([^"]+)"', c.get("/login").text)[1]
     c.post("/login", data={"csrf": csrf, "password": "correct horse"})
@@ -242,7 +244,7 @@ def test_first_start_asks_which_game(tmp_path, monkeypatch):
     r = c.post("/setup", data={"csrf": tok, "kind": "custom", "name": "Throne and Liberty"})
     assert r.status_code == 200 and "Throne and Liberty" in r.text
     with db.session() as s:
-        assert [g.name for g in games.all_games(s)] == ["Throne and Liberty"]
+        assert [g.name for g in games.all_games(s, GUILD)] == ["Throne and Liberty"]
     assert c.get("/setup", follow_redirects=False).headers["location"] == "/"   # only once
 
 
@@ -288,8 +290,8 @@ def test_settings_page_saves_server_and_game_settings_apart(tmp_path, monkeypatc
                 time_style_near="t", time_style_far="f")
     c.post("/settings", data=form)
     with db.session() as s:
-        assert games.first(s).timer_channel_id == 111111111111111111
-        assert get_settings(s).roles_channel_id == 222222222222222222
+        assert games.first(s, GUILD).timer_channel_id == 111111111111111111
+        assert get_settings(s, GUILD).roles_channel_id == 222222222222222222
 
 
 def test_search_names_the_game(tmp_path, monkeypatch):
@@ -311,10 +313,12 @@ def test_upgrade_from_before_games(tmp_path):
     db.init_engine(path)
     assert (tmp_path / "nyerk-before-v1.db").exists()                 # a copy first
     with db.session() as s:
+        from nyerk import servers
+        assert servers.claim_legacy(s, GUILD)                          # the next start, with GUILD_ID set
         g = s.get(Game, 1)
         assert (g.name, g.kind) == ("AION 2", "aion2")
         assert g.timer_channel_id == 920000000000000001 and g.party_channel_id == 920000000000000004
-        assert get_settings(s).roles_channel_id == 920000000000000002
+        assert get_settings(s, GUILD).roles_channel_id == 920000000000000002
         assert g.dashboard_boss_note.startswith("Route: Gartua")
         for model in (Category, Event, PfClass, PfBracket, PfWindow, PfContent, PfInterest, PfParty):
             total = s.scalar(select(func.count()).select_from(model))
@@ -325,4 +329,4 @@ def test_upgrade_from_before_games(tmp_path):
     # Running again changes nothing.
     db.init_engine(path)
     with db.session() as s:
-        assert len(games.all_games(s)) == 1
+        assert len(games.all_games(s, GUILD)) == 1
