@@ -24,7 +24,7 @@ DISCORD_API = "https://discord.com/api/v10"
 # Path prefix -> level needed. First match wins; everything else needs admin.
 # Prefixes end at a path boundary: "/me" must not match "/members".
 MEMBER_PATHS = ("/me", "/auth", "/logout")
-OWNER_PATHS = ("/settings", "/history", "/access")
+OWNER_PATHS = ("/settings", "/history", "/access", "/games", "/setup")
 # Admins may view these pages and use the listed actions; other changes are owner-only.
 ADMIN_POSTS_UNDER_OWNER_PAGES = ("/categories/repost-roles",)
 OWNER_POSTS = ("/categories", "/roles/", "/party/types", "/party/classes")
@@ -34,7 +34,7 @@ OWNER_POSTS = ("/categories", "/roles/", "/party/types", "/party/classes")
 # can be more hands off. The Access page and the owner password never open up:
 # otherwise an admin could grant themselves the rest.
 AREAS = {
-    "settings": ("Settings", "Channels, timing, dashboard text, link preview, export"),
+    "settings": ("Settings and games", "Channels, timing, dashboard text, link preview, export; add, switch off or delete games"),
     "wording": ("Message wording", "Alert templates, dashboard line labels, boss button text"),
     "roles": ("Roles and role IDs", "Roles channel setup and role messages, classes, type roles, dungeon role IDs"),
     "history": ("Change history", "See every change; restoring also needs the three areas above"),
@@ -53,7 +53,7 @@ def areas_for(path: str, method: str) -> frozenset[str] | None:
         return ALL_AREAS
     if method == "POST" and _under(path, ("/history",)):
         return ALL_AREAS | {"history"}
-    if _under(path, ("/settings",)):
+    if _under(path, ("/settings", "/games", "/setup")):
         return frozenset(("settings",))
     if _under(path, ("/history",)):
         return frozenset(("history",))

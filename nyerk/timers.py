@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_settings
 from .engine import ts
-from .models import Event, UserTimer
+from .models import Event, Game, UserTimer
 from .timeparse import TimeParseError, parse_duration, parse_moment
 
 
@@ -23,10 +23,14 @@ class Result:
     conflict: UserTimer | None = None  # someone else's active timer for this boss
 
 
-def boss_events(s: Session, enabled_only: bool = True) -> list[Event]:
+def boss_events(s: Session, enabled_only: bool = True, game_id: int | None = None) -> list[Event]:
+    """A game's world bosses; None = every game's. enabled_only also skips
+    games that are switched off."""
     q = select(Event).where(Event.schedule_type == "kill_report").order_by(Event.sort_order, Event.name)
+    if game_id is not None:
+        q = q.where(Event.game_id == game_id)
     if enabled_only:
-        q = q.where(Event.enabled.is_(True))
+        q = q.where(Event.enabled.is_(True), Event.game_id.in_(select(Game.id).where(Game.enabled.is_(True))))
     return list(s.scalars(q))
 
 
@@ -40,15 +44,16 @@ def find_boss(s: Session, name_or_id: str) -> Event | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def active_count(s: Session, user_id: int) -> int:
-    return s.scalar(
-        select(func.count()).select_from(UserTimer).where(UserTimer.user_id == user_id, UserTimer.status == "active")
-    ) or 0
+def active_count(s: Session, user_id: int, game_id: int | None = None) -> int:
+    q = select(func.count()).select_from(UserTimer).where(UserTimer.user_id == user_id, UserTimer.status == "active")
+    if game_id is not None:
+        q = q.where(UserTimer.event_id.in_(select(Event.id).where(Event.game_id == game_id)))
+    return s.scalar(q) or 0
 
 
 def _compute(s: Session, boss: Event, now: int, killed_at: str, respawns_in: str) -> tuple[str, int | None, int]:
     """-> (mode, killed_at_ts, fire_at). Raises TimeParseError."""
-    settings = get_settings(s)
+    settings, game = get_settings(s), s.get(Game, boss.game_id)
     killed_at, respawns_in = (killed_at or "").strip(), (respawns_in or "").strip()
     if killed_at and respawns_in:
         raise TimeParseError("Fill in killed_at or respawns_in, not both.")
@@ -59,7 +64,7 @@ def _compute(s: Session, boss: Event, now: int, killed_at: str, respawns_in: str
         if kill > now + 60:
             raise TimeParseError("killed_at is in the future.")
     else:
-        kill = now - settings.report_offset_min * 60
+        kill = now - game.report_offset_min * 60
     if boss.respawn_minutes <= 0:
         raise TimeParseError(f"{boss.name} has no respawn time set.")
     return "kill", kill, kill + boss.respawn_minutes * 60
@@ -84,14 +89,15 @@ def report(
 ) -> Result:
     """Report a kill. Re-reporting your own active timer replaces it. Someone
     else's active timer comes back as a conflict, unless `override_id`
-    names that exact timer (the reporter confirmed the override)."""
-    settings = get_settings(s)
+    names that exact timer (the reporter confirmed the override). The timer
+    limit counts the member's timers in the boss's game."""
+    settings = s.get(Game, boss.game_id)
     existing = active_for(s, boss)
     if existing and existing.user_id == user_id:
         return _replace_own(s, boss, existing, now, killed_at, respawns_in, user_name)
     if existing and existing.id != override_id:
         return Result(False, override_warning(boss, existing), conflict=existing)
-    count = active_count(s, user_id)
+    count = active_count(s, user_id, boss.game_id)
     if count >= settings.user_timer_limit:
         return Result(
             False,

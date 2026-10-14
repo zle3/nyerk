@@ -13,10 +13,9 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from .db import get_settings
 from .engine import escape_md, ts
 from .models import (
-    MemberProfile, PfBracket, PfClass, PfContent, PfInterest, PfParty, PfPartyMember, PfWindow, Settings,
+    Game, MemberGear, MemberProfile, PfBracket, PfClass, PfContent, PfInterest, PfParty, PfPartyMember, PfWindow,
 )
 
 TYPES = ("tank", "support", "dps")
@@ -44,45 +43,54 @@ def digest(text: str) -> str:
 # Lookups
 
 
-def classes(s: Session) -> list[PfClass]:
-    return list(s.scalars(select(PfClass).order_by(PfClass.sort_order, PfClass.id)))
+def game(s: Session, game_id: int) -> Game:
+    g = s.get(Game, game_id)
+    if g is None:
+        raise PartyError("That game no longer exists.")
+    return g
 
 
-def brackets(s: Session) -> list[PfBracket]:
-    return list(s.scalars(select(PfBracket).order_by(PfBracket.sort_order, PfBracket.id)))
+def classes(s: Session, game_id: int | None) -> list[PfClass]:
+    """A game's classes; None = every game's (for role bookkeeping)."""
+    q = select(PfClass).order_by(PfClass.sort_order, PfClass.id)
+    return list(s.scalars(q if game_id is None else q.where(PfClass.game_id == game_id)))
 
 
-def windows(s: Session) -> list[PfWindow]:
-    return list(s.scalars(select(PfWindow).order_by(PfWindow.minutes)))
+def brackets(s: Session, game_id: int) -> list[PfBracket]:
+    return list(s.scalars(select(PfBracket).where(PfBracket.game_id == game_id)
+                          .order_by(PfBracket.sort_order, PfBracket.id)))
 
 
-def contents(s: Session, active_only: bool = True) -> list[PfContent]:
+def windows(s: Session, game_id: int) -> list[PfWindow]:
+    return list(s.scalars(select(PfWindow).where(PfWindow.game_id == game_id).order_by(PfWindow.minutes)))
+
+
+def contents(s: Session, game_id: int | None, active_only: bool = True) -> list[PfContent]:
+    """A game's dungeons; None = every game's (dungeon ping roles are server-wide)."""
     q = select(PfContent).order_by(PfContent.sort_order, PfContent.name)
+    if game_id is not None:
+        q = q.where(PfContent.game_id == game_id)
     if active_only:
         q = q.where(PfContent.active.is_(True))
     return list(s.scalars(q))
 
 
-def member_classes(s: Session, role_ids: set[int]) -> list[PfClass]:
-    """A member's classes come from their roles on every click; they can
-    hold several."""
-    return [c for c in classes(s) if c.role_id and c.role_id in role_ids]
+def member_classes(s: Session, game_id: int, role_ids: set[int]) -> list[PfClass]:
+    """A member's classes in a game come from their roles on every click;
+    they can hold several."""
+    return [c for c in classes(s, game_id) if c.role_id and c.role_id in role_ids]
 
 
-def member_class(s: Session, role_ids: set[int]) -> PfClass | None:
-    held = member_classes(s, role_ids)
+def member_class(s: Session, game_id: int, role_ids: set[int]) -> PfClass | None:
+    held = member_classes(s, game_id, role_ids)
     return held[0] if held else None
 
 
-def require_classes(s: Session, who: Who) -> list[PfClass]:
-    held = member_classes(s, who.role_ids)
+def require_classes(s: Session, game_id: int, who: Who) -> list[PfClass]:
+    held = member_classes(s, game_id, who.role_ids)
     if not held:
         raise PartyError("Pick at least one class on the class panel first.")
     return held
-
-
-def require_class(s: Session, who: Who) -> PfClass:
-    return require_classes(s, who)[0]
 
 
 def pick_class_and_slot(party: PfParty, held: list[PfClass]) -> tuple[PfClass | None, str | None]:
@@ -99,23 +107,35 @@ def pick_class_and_slot(party: PfParty, held: list[PfClass]) -> tuple[PfClass | 
     return None, None
 
 
-def type_role_ids(settings: Settings) -> dict[str, int]:
-    return {"tank": settings.tank_role_id, "support": settings.support_role_id, "dps": settings.dps_role_id}
+def type_role_ids(game: Game) -> dict[str, int]:
+    return {"tank": game.tank_role_id, "support": game.support_role_id, "dps": game.dps_role_id}
 
 
-def live_party_for(s: Session, user_id: int) -> PfParty | None:
-    return s.scalar(
-        select(PfParty).join(PfPartyMember)
-        .where(PfPartyMember.user_id == user_id, PfParty.status.in_(LIVE)).limit(1)
-    )
+def live_party_for(s: Session, user_id: int, game_id: int | None) -> PfParty | None:
+    """The member's open or full party in a game (one per game); None = any game."""
+    q = select(PfParty).join(PfPartyMember).where(PfPartyMember.user_id == user_id, PfParty.status.in_(LIVE))
+    if game_id is not None:
+        q = q.where(PfParty.game_id == game_id)
+    return s.scalar(q.order_by(PfParty.id).limit(1))
 
 
-def active_interest(s: Session, user_id: int) -> PfInterest | None:
-    return s.scalar(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active").limit(1))
+def live_parties_for(s: Session, user_id: int) -> list[PfParty]:
+    return list(s.scalars(select(PfParty).join(PfPartyMember).where(
+        PfPartyMember.user_id == user_id, PfParty.status.in_(LIVE)).order_by(PfParty.id)))
 
 
-def live_parties(s: Session, status: str | None = None) -> list[PfParty]:
+def active_interest(s: Session, user_id: int, game_id: int | None) -> PfInterest | None:
+    """The member's registration in a game (one per game); None = any game."""
+    q = select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active")
+    if game_id is not None:
+        q = q.where(PfInterest.game_id == game_id)
+    return s.scalar(q.order_by(PfInterest.id).limit(1))
+
+
+def live_parties(s: Session, game_id: int | None, status: str | None = None) -> list[PfParty]:
     q = select(PfParty).options(selectinload(PfParty.members), selectinload(PfParty.content))
+    if game_id is not None:
+        q = q.where(PfParty.game_id == game_id)
     q = q.where(PfParty.status == status) if status else q.where(PfParty.status.in_(LIVE))
     return list(s.scalars(q.order_by(PfParty.created_at)))
 
@@ -124,22 +144,23 @@ def live_parties(s: Session, status: str | None = None) -> list[PfParty]:
 # Class selector
 
 
-def class_change(s: Session, who: Who, class_id: int | None) -> tuple[set[int], set[int], str, list[PfClass]]:
-    """Toggle one class (or clear all with None). Members can hold several
-    classes; each type role stays while any held class has that type.
-    Returns roles to add, roles to remove, the private reply, and the
-    classes held afterwards."""
-    settings = get_settings(s)
-    all_classes = [c for c in classes(s) if c.role_id]
-    type_roles = type_role_ids(settings)
-    all_type = {r for r in type_roles.values() if r}
-    held = [c for c in all_classes if c.role_id in who.role_ids]
-    if class_id is None:
-        owned = ({c.role_id for c in all_classes} | all_type) & who.role_ids
-        return set(), owned, "All your classes have been cleared.", []
-    c = s.get(PfClass, class_id)
-    if c is None:
+def class_change(s: Session, who: Who, class_id: int | None,
+                 game_id: int | None = None) -> tuple[set[int], set[int], str, list[PfClass]]:
+    """Toggle one class (or clear all of a game's with class_id None). Members
+    can hold several classes; each type role stays while any held class in
+    that game has that type. Returns roles to add, roles to remove, the
+    private reply, and the game's classes held afterwards."""
+    c = s.get(PfClass, class_id) if class_id is not None else None
+    if class_id is not None and c is None:
         raise PartyError("That class no longer exists.")
+    g = game(s, c.game_id if c else game_id)
+    all_classes = [x for x in classes(s, g.id) if x.role_id]
+    type_roles = type_role_ids(g)
+    all_type = {r for r in type_roles.values() if r}
+    held = [x for x in all_classes if x.role_id in who.role_ids]
+    if c is None:
+        owned = ({x.role_id for x in all_classes} | all_type) & who.role_ids
+        return set(), owned, f"All your {g.name} classes have been cleared.", []
     if not c.role_id:
         raise PartyError(f"{c.name} has no role set up yet. Ask an admin.")
     if c in held:
@@ -163,25 +184,35 @@ def class_change(s: Session, who: Who, class_id: int | None) -> tuple[set[int], 
 # Gear score (kept by Nyerk, not a Discord role)
 
 
-def gear_of(s: Session, user_id: int) -> PfBracket | None:
-    p = s.scalar(select(MemberProfile).where(MemberProfile.user_id == user_id))
-    return p.bracket if p else None
+def gear_of(s: Session, user_id: int, game_id: int) -> PfBracket | None:
+    row = s.scalar(select(MemberGear).where(MemberGear.user_id == user_id, MemberGear.game_id == game_id))
+    return row.bracket if row else None
 
 
-def set_gear(s: Session, user_id: int, user_name: str, bracket_id: int | None, now: int) -> PfBracket | None:
-    """One gear score per member; picking another replaces it, None clears."""
+def set_gear(s: Session, user_id: int, user_name: str, bracket_id: int | None, now: int,
+             game_id: int | None = None) -> PfBracket | None:
+    """One gear score per member per game; picking another replaces it.
+    bracket_id None clears it in game_id."""
     bracket = s.get(PfBracket, bracket_id) if bracket_id else None
     if bracket_id and bracket is None:
         raise PartyError("That gear score option no longer exists.")
+    gid = bracket.game_id if bracket else game_id
+    if gid is None:
+        raise PartyError("Which game's gear score?")
     p = s.scalar(select(MemberProfile).where(MemberProfile.user_id == user_id))
     if p is None:
         p = MemberProfile(user_id=user_id)
         s.add(p)
-    p.user_name, p.bracket_id, p.updated_at = user_name or p.user_name, bracket.id if bracket else None, now
+    p.user_name, p.updated_at = user_name or p.user_name, now
+    row = s.scalar(select(MemberGear).where(MemberGear.user_id == user_id, MemberGear.game_id == gid))
+    if row is None:
+        row = MemberGear(user_id=user_id, game_id=gid)
+        s.add(row)
+    row.bracket_id, row.updated_at = (bracket.id if bracket else None), now
     # Keep an open registration in step, so pings use the new score.
-    reg = active_interest(s, user_id)
+    reg = active_interest(s, user_id, gid)
     if reg:
-        reg.bracket_id = p.bracket_id
+        reg.bracket_id = row.bracket_id
     s.flush()
     return bracket
 
@@ -199,21 +230,25 @@ GEAR_PANEL = (
 
 def register(s: Session, who: Who, window_id: int, content_ids: list[int], now: int,
              class_id: int | None = None) -> PfInterest:
-    held = require_classes(s, who)
-    c = next((x for x in held if x.id == class_id), held[0])
-    bracket = gear_of(s, who.user_id)
-    if bracket is None:
-        raise PartyError("Set your gear score in the roles channel first.")
     window = s.get(PfWindow, window_id)
-    chosen = [x for x in (s.get(PfContent, i) for i in content_ids) if x is not None and x.active]
-    if window is None or not chosen:
+    if window is None:
         raise PartyError("Pick how long you are free and at least one piece of content.")
-    old = active_interest(s, who.user_id)
+    gid = window.game_id
+    held = require_classes(s, gid, who)
+    c = next((x for x in held if x.id == class_id), held[0])
+    bracket = gear_of(s, who.user_id, gid)
+    if bracket is None and brackets(s, gid):
+        raise PartyError("Set your gear score in the roles channel first.")
+    chosen = [x for x in (s.get(PfContent, i) for i in content_ids)
+              if x is not None and x.active and x.game_id == gid]
+    if not chosen:
+        raise PartyError("Pick how long you are free and at least one piece of content.")
+    old = active_interest(s, who.user_id, gid)
     if old:
         old.status = "cancelled"  # registering again replaces, never stacks
     row = PfInterest(
-        user_id=who.user_id, user_name=who.user_name, class_id=c.id, class_type=c.class_type,
-        bracket_id=bracket.id, content_ids=[x.id for x in chosen], created_at=now,
+        game_id=gid, user_id=who.user_id, user_name=who.user_name, class_id=c.id, class_type=c.class_type,
+        bracket_id=bracket.id if bracket else None, content_ids=[x.id for x in chosen], created_at=now,
         expires_at=now + window.minutes * 60, last_pinged_at=old.last_pinged_at if old else 0,
     )
     s.add(row)
@@ -221,18 +256,20 @@ def register(s: Session, who: Who, window_id: int, content_ids: list[int], now: 
     return row
 
 
-def cancel_registration(s: Session, user_id: int) -> PfInterest | None:
-    row = active_interest(s, user_id)
-    if row:
+def cancel_registration(s: Session, user_id: int, game_id: int | None) -> PfInterest | None:
+    """Cancel the member's registration in a game; None = in every game."""
+    rows = list(s.scalars(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active")))
+    rows = [r for r in rows if game_id is None or r.game_id == game_id]
+    for row in rows:
         row.status = "cancelled"
-    return row
+    return rows[0] if rows else None
 
 
 # ----------------------------------------------------------------------------
 # Slots
 
 
-def parse_makeup(settings: Settings, size: int, requirement: str, custom: str) -> dict[str, int]:
+def parse_makeup(settings: Game, size: int, requirement: str, custom: str) -> dict[str, int]:
     if size not in (5, 20):
         raise PartyError("Party size must be 5 or 20.")
     if requirement == "none":
@@ -278,8 +315,8 @@ def is_full(party: PfParty) -> bool:
 
 
 def _member(s: Session, party: PfParty, who: Who, c: PfClass, slot: str, now: int) -> PfPartyMember:
-    reg = active_interest(s, who.user_id)
-    gear = gear_of(s, who.user_id) or (reg.bracket if reg else None)
+    reg = active_interest(s, who.user_id, party.game_id)
+    gear = gear_of(s, who.user_id, party.game_id) or (reg.bracket if reg else None)
     bracket = gear.label if gear else ""
     if reg:
         reg.status = "joined"  # joining ends the registration
@@ -291,16 +328,16 @@ def _member(s: Session, party: PfParty, who: Who, c: PfClass, slot: str, now: in
 
 def create(s: Session, who: Who, content_id: int, size: int, requirement: str, custom: str,
            description: str, now: int) -> PfParty:
-    settings = get_settings(s)
-    held = require_classes(s, who)
-    if live_party_for(s, who.user_id):
-        raise PartyError("You are already in a party. Leave it before starting another.")
     content = s.get(PfContent, content_id)
     if content is None or not content.active:
         raise PartyError("Pick an active piece of content.")
+    settings = game(s, content.game_id)
+    held = require_classes(s, settings.id, who)
+    if live_party_for(s, who.user_id, settings.id):
+        raise PartyError("You are already in a party. Leave it before starting another.")
     makeup = parse_makeup(settings, size, requirement, custom)
     party = PfParty(
-        content_id=content.id, leader_id=who.user_id, leader_name=who.user_name, size=size,
+        game_id=settings.id, content_id=content.id, leader_id=who.user_id, leader_name=who.user_name, size=size,
         requirement=requirement, makeup=makeup, description=(description or "").strip()[:100],
         status="open", created_at=now, expires_at=now + settings.party_lifetime_min * 60,
         ping_pending=True, members=[],
@@ -321,8 +358,8 @@ def join(s: Session, party: PfParty, who: Who, now: int) -> bool:
         raise PartyError("That party is no longer open.")
     if any(m.user_id == who.user_id for m in party.members):
         raise PartyError("You are already in this party.")
-    held = require_classes(s, who)
-    if live_party_for(s, who.user_id):
+    held = require_classes(s, party.game_id, who)
+    if live_party_for(s, who.user_id, party.game_id):
         raise PartyError("You are already in another party. Leave it first.")
     c, slot = pick_class_and_slot(party, held)
     if slot is None:
@@ -397,7 +434,7 @@ def require_leader(party: PfParty, user_id: int) -> None:
 
 
 def extend(s: Session, party: PfParty, now: int) -> None:
-    settings = get_settings(s)
+    settings = game(s, party.game_id)
     if party.status != "open":
         raise PartyError("Only an open party can be extended.")
     if party.extensions_used >= settings.party_max_extensions:
@@ -410,20 +447,21 @@ def extend(s: Session, party: PfParty, now: int) -> None:
 def ping_targets(s: Session, party: PfParty, now: int) -> list[PfInterest]:
     """Registrants for this content with an open slot for their type, whose
     bracket reaches the minimum, outside the ping cooldown, not in a party."""
-    settings = get_settings(s)
+    settings = game(s, party.game_id)
     gap = settings.party_ping_gap_min * 60
     minimum = party.content.min_gear_score if party.content else 0
     out = []
-    rows = s.scalars(select(PfInterest).where(PfInterest.status == "active", PfInterest.expires_at > now))
+    rows = s.scalars(select(PfInterest).where(PfInterest.status == "active", PfInterest.expires_at > now,
+                                              PfInterest.game_id == party.game_id))
     for r in rows:
         if party.content_id not in (r.content_ids or []) or r.user_id == party.leader_id:
             continue
-        gear = gear_of(s, r.user_id) or r.bracket
+        gear = gear_of(s, r.user_id, party.game_id) or r.bracket
         if gear and gear.max_score < minimum:
             continue
         if r.last_pinged_at and now - r.last_pinged_at < gap:
             continue
-        if pick_slot(party, r.class_type) is None or live_party_for(s, r.user_id):
+        if pick_slot(party, r.class_type) is None or live_party_for(s, r.user_id, party.game_id):
             continue
         out.append(r)
     return out
@@ -445,12 +483,12 @@ def pause_clocks(s: Session, seconds: int, now: int) -> int:
     live party's and registration's deadline by that much, so nobody loses
     time they couldn't use: leaders could not extend, members could not join.
     Returns how many deadlines moved."""
-    warn = get_settings(s).party_warn_min * 60
+    warn = {g.id: g.party_warn_min * 60 for g in s.scalars(select(Game))}
     moved = 0
-    for p in live_parties(s):
+    for p in live_parties(s, None):
         if p.status == "open":
             p.expires_at += seconds
-            if p.warned_at is not None and now < p.expires_at - warn:
+            if p.warned_at is not None and now < p.expires_at - warn.get(p.game_id, 600):
                 p.warned_at = None  # the warning comes back when it is due again
         elif p.filled_at:
             p.filled_at += seconds
@@ -475,9 +513,11 @@ def leader_note(p: PfParty, user_id: int, name: str, what: str, became_leader: b
 
 
 def tick(s: Session, now: int) -> TickResult:
-    settings = get_settings(s)
+    """Every game's parties and registrations."""
+    games = {g.id: g for g in s.scalars(select(Game))}
     res = TickResult([], [], 0)
-    for p in live_parties(s):
+    for p in live_parties(s, None):
+        settings = games[p.game_id]
         name = party_title(p)
         if p.status == "open":
             if now >= p.expires_at:
@@ -539,7 +579,7 @@ def ping_text(p: PfParty, targets: list[PfInterest], role_id: int = 0) -> str:
     return f"{mentions}\nA party opened for **{party_title(p)}**{gear}. Join below, or pass if you can't make it."[:LIMIT]
 
 
-def warning_text(p: PfParty, settings: Settings) -> str:
+def warning_text(p: PfParty, settings: Game) -> str:
     left = settings.party_max_extensions - p.extensions_used
     ext = (f"Extend adds {settings.party_extend_min} minutes ({left} left)." if left > 0
            else "It can't be extended again.")
@@ -552,11 +592,20 @@ def ready_text(p: PfParty) -> str:
 
 
 CLASS_PANEL = (
-    "## AION 2 Classes\n"
+    "## {game} Classes\n"
     "Pick every class you play. Each gives the class role and its type role (Tank, Support or DPS); "
     "click a class again to remove it.\n"
     "Parties put you in a slot one of your classes can fill. **My roles** shows what you have."
 )
+
+
+def class_panel_text(game: Game) -> str:
+    return CLASS_PANEL.format(game=game.name)
+
+
+def gear_panel_text(game: Game, many_games: bool = False) -> str:
+    """The gear score message; named after the game when a server runs several."""
+    return GEAR_PANEL.replace("## Gear score", f"## {game.name} gear score", 1) if many_games else GEAR_PANEL
 
 CREATE_PANEL = (
     "## Start a party\n"
@@ -565,27 +614,28 @@ CREATE_PANEL = (
 )
 
 
-def interest_panel_text(s: Session, now: int) -> str:
+def interest_panel_text(s: Session, game_id: int, now: int) -> str:
     head = (
         "## Looking for a group?\n"
         "Register below and Nyerk will @mention you when a party opens for content you picked.\n"
         "You can join straight from the ping. Your registration ends on its own, or press Cancel."
     )
     rows = list(s.scalars(
-        select(PfInterest).where(PfInterest.status == "active", PfInterest.expires_at > now)
+        select(PfInterest).where(PfInterest.status == "active", PfInterest.expires_at > now,
+                                 PfInterest.game_id == game_id)
         .order_by(PfInterest.expires_at)
     ))
     if not rows:
         return head + "\n-# Nobody is registered right now."
     body: list[str] = []
-    for c in contents(s):
+    for c in contents(s, game_id):
         who = [r for r in rows if c.id in (r.content_ids or [])]
         if not who:
             continue
         body.append(f"### {party_title_for(c)}")
         for r in who:
             cls = r.pf_class.name if r.pf_class else "?"
-            gear = gear_of(s, r.user_id) or r.bracket
+            gear = gear_of(s, r.user_id, game_id) or r.bracket
             bracket = gear.label if gear else "?"
             body.append(f"{escape_md(r.user_name)} · {cls} ({TYPE_LABEL.get(r.class_type, '?')}) · {bracket}"
                         f" · until {ts(r.expires_at, 'R')}")

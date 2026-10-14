@@ -1,7 +1,7 @@
 """Party finder on Discord: panels, buttons, forms and the reconciler.
 
 Handlers change the database through party.py and then call sync(), which
-makes #aion-2-party-finder match the database: it posts, edits and deletes
+makes each game's party channel match the database: it posts, edits and deletes
 listings, pings, warnings, ready pings, the interest summary and the status
 message. The scheduler tick calls sync() too, so anything changed from the
 web admin, or missed during a restart, is fixed within 30 seconds.
@@ -17,10 +17,10 @@ from typing import TYPE_CHECKING
 import discord
 from sqlalchemy import select
 
-from . import db, party, safety, tracking
-from .db import get_settings, get_state
+from . import db, games, party, safety, tracking
+from .db import get_settings
 from .logbus import bus
-from .models import PfInterest, PfParty
+from .models import Game, PfInterest, PfParty
 from .party import PartyError, Who
 
 if TYPE_CHECKING:
@@ -47,6 +47,11 @@ def pf(interaction: discord.Interaction) -> "PartyFinder":
     return interaction.client.pf
 
 
+def game_here(s, interaction: discord.Interaction) -> Game | None:
+    """The game whose party channel the click came from (else the first game)."""
+    return games.by_party_channel(s, interaction.channel_id) or games.first(s)
+
+
 async def reply(interaction: discord.Interaction, text: str) -> None:
     if interaction.response.is_done():
         await interaction.followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
@@ -62,7 +67,8 @@ def _btn(custom_id: str, label: str, style=discord.ButtonStyle.secondary, emoji:
 # Persistent buttons. One DynamicItem per action, IDs under nyerk:pf:.
 
 
-class ClassButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:pf:class:(?P<id>\d+|clear|mine)"):
+class ClassButton(discord.ui.DynamicItem[discord.ui.Button],
+                  template=r"nyerk:pf:class:(?P<id>\d+|clear(?:-\d+)?|mine)"):
     def __init__(self, key: str, label: str = "", emoji: str = "") -> None:
         style = {"clear": discord.ButtonStyle.danger, "mine": discord.ButtonStyle.primary}.get(
             key, discord.ButtonStyle.secondary)
@@ -77,7 +83,11 @@ class ClassButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:pf
         if self.key == "mine":
             await interaction.client.show_my_roles(interaction)
             return
-        await pf(interaction).on_class(interaction, None if self.key == "clear" else int(self.key))
+        if self.key.startswith("clear"):  # "clear-<game id>"; plain "clear" from older panels
+            game_id = int(self.key[6:]) if self.key[6:].isdigit() else None
+            await pf(interaction).on_class(interaction, None, game_id)
+            return
+        await pf(interaction).on_class(interaction, int(self.key))
 
 
 class PanelButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:pf:(?P<what>reg|unreg|create)"):
@@ -136,9 +146,10 @@ class KickSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"nyerk:pf:
         await pf(interaction).on_kick(interaction, self.pid, int(values[0]) if values else 0)
 
 
-class GearButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:roles:gear:(?P<id>\d+|clear)"):
+class GearButton(discord.ui.DynamicItem[discord.ui.Button],
+                 template=r"nyerk:roles:gear:(?P<id>\d+|clear(?:-\d+)?)"):
     def __init__(self, key: str, label: str = "") -> None:
-        style = discord.ButtonStyle.danger if key == "clear" else discord.ButtonStyle.secondary
+        style = discord.ButtonStyle.danger if key.startswith("clear") else discord.ButtonStyle.secondary
         super().__init__(discord.ui.Button(label=(label or "Gear")[:80], style=style,
                                            custom_id=f"nyerk:roles:gear:{key}"))
         self.key = key
@@ -148,7 +159,15 @@ class GearButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:rol
         return cls(match["id"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await interaction.client.set_gear(interaction, None if self.key == "clear" else int(self.key))
+        if self.key.startswith("clear"):  # "clear-<game id>"; plain "clear" from older panels
+            game_id = int(self.key[6:]) if self.key[6:].isdigit() else None
+            if game_id is None:
+                with db.session() as s:
+                    g = game_here(s, interaction)
+                    game_id = g.id if g else None
+            await interaction.client.set_gear(interaction, None, game_id)
+            return
+        await interaction.client.set_gear(interaction, int(self.key))
 
 
 
@@ -156,12 +175,16 @@ class GearButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nyerk:rol
 ITEMS = (ClassButton, PanelButton, PartyButton, KickSelect, GearButton)
 
 
-def gear_view(s) -> discord.ui.View:
-    """Gear score buttons; used in the party finder and roles channels."""
+def gear_view(s, game_id: int) -> discord.ui.View | None:
+    """A game's gear score buttons (None when it has no brackets); used in
+    the party finder and roles channels."""
+    brackets = party.brackets(s, game_id)
+    if not brackets:
+        return None
     view = discord.ui.View(timeout=None)
-    for b in party.brackets(s)[:24]:
+    for b in brackets[:24]:
         view.add_item(GearButton(str(b.id), b.label))
-    view.add_item(GearButton("clear", "Clear"))
+    view.add_item(GearButton(f"clear-{game_id}", "Clear"))
     return view
 
 
@@ -248,9 +271,9 @@ class PartyFinder:
         leader clicked something in the party channel recently. Nyerk never
         DMs anyone; otherwise the listing shows who is in."""
         with db.session() as s:
-            channel_id = get_settings(s).party_channel_id
+            channels = {g.party_channel_id for g in games.all_games(s) if g.party_channel_id}
         click = self._last_click.get(leader_id)
-        if click and time.monotonic() - click[1] < 14 * 60 and click[0].channel_id == channel_id:
+        if click and time.monotonic() - click[1] < 14 * 60 and click[0].channel_id in channels:
             try:
                 await click[0].followup.send(text, ephemeral=True, allowed_mentions=NO_MENTIONS)
             except discord.HTTPException:
@@ -270,9 +293,10 @@ class PartyFinder:
         except TimeoutError:
             log.warning("party finder still busy at shutdown")
 
-    async def _channel(self):
+    async def _channel(self, game_id: int):
         with db.session() as s:
-            cid = get_settings(s).party_channel_id
+            g = s.get(Game, game_id)
+            cid = g.party_channel_id if g else 0
         return await self.bot._channel(cid)
 
     async def _delete(self, channel, message_id: int) -> None:
@@ -287,11 +311,14 @@ class PartyFinder:
 
     # -- handlers ---------------------------------------------------------------
 
-    async def on_class(self, interaction, class_id: int | None) -> None:
+    async def on_class(self, interaction, class_id: int | None, game_id: int | None = None) -> None:
         who = who_of(interaction)
         try:
             with db.session() as s:
-                add, remove, text, held = party.class_change(s, who, class_id)
+                if class_id is None and game_id is None:
+                    g = game_here(s, interaction)
+                    game_id = g.id if g else None
+                add, remove, text, held = party.class_change(s, who, class_id, game_id)
                 held_roles = {c.role_id for c in held}
         except PartyError as exc:
             await reply(interaction, str(exc))
@@ -312,12 +339,16 @@ class PartyFinder:
 
     async def on_reg(self, interaction) -> None:
         with db.session() as s:
-            held = party.member_classes(s, who_of(interaction).role_ids)
+            g = game_here(s, interaction)
+            if g is None:
+                await reply(interaction, "The party finder isn't set up yet.")
+                return
+            held = party.member_classes(s, g.id, who_of(interaction).role_ids)
             has_class = bool(held)
             cls = [(f"{x.name} ({party.TYPE_LABEL[x.class_type]})", str(x.id)) for x in held] if len(held) > 1 else None
-            has_gear = party.gear_of(s, interaction.user.id) is not None
-            w = [(x.label or f"{x.minutes} min", str(x.id)) for x in party.windows(s)]
-            c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s)]
+            has_gear = party.gear_of(s, interaction.user.id, g.id) is not None or not party.brackets(s, g.id)
+            w = [(x.label or f"{x.minutes} min", str(x.id)) for x in party.windows(s, g.id)]
+            c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s, g.id)]
         if not has_class:
             await reply(interaction, "Pick at least one class on the class panel first.")
         elif not has_gear:
@@ -332,7 +363,8 @@ class PartyFinder:
         try:
             with db.session() as s:
                 row = party.register(s, who, window_id, content_ids, now(), class_id)
-                names = ", ".join(party.party_title_for(x) for x in party.contents(s, False) if x.id in row.content_ids)
+                names = ", ".join(party.party_title_for(x) for x in party.contents(s, row.game_id, False)
+                                  if x.id in row.content_ids)
                 until = row.expires_at
         except PartyError as exc:
             await reply(interaction, str(exc))
@@ -344,7 +376,8 @@ class PartyFinder:
     async def on_unreg(self, interaction) -> None:
         who = who_of(interaction)
         with db.session() as s:
-            row = party.cancel_registration(s, who.user_id)
+            g = game_here(s, interaction)
+            row = party.cancel_registration(s, who.user_id, g.id if g else None)
         await reply(interaction, "Your registration is cancelled." if row else "You weren't registered.")
         if row:
             bus.info("party", f"{who.user_name} cancelled their registration.")
@@ -353,9 +386,13 @@ class PartyFinder:
     async def on_create(self, interaction) -> None:
         who = who_of(interaction)
         with db.session() as s:
-            has_class = party.member_class(s, who.role_ids) is not None
-            busy = party.live_party_for(s, who.user_id) is not None
-            c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s)]
+            g = game_here(s, interaction)
+            if g is None:
+                await reply(interaction, "The party finder isn't set up yet.")
+                return
+            has_class = party.member_class(s, g.id, who.role_ids) is not None
+            busy = party.live_party_for(s, who.user_id, g.id) is not None
+            c = [(party.party_title_for(x), str(x.id)) for x in party.contents(s, g.id)]
         if not has_class:
             await reply(interaction, "Pick at least one class on the class panel first.")
         elif busy:
@@ -453,55 +490,64 @@ class PartyFinder:
 
     # -- panels -------------------------------------------------------------------
 
-    def _class_view(self, s) -> discord.ui.View:
-        items = [ClassButton(str(c.id), c.name, c.emoji) for c in party.classes(s) if c.role_id][:23]
-        return _view(*items, ClassButton("mine", "My roles", "📋"), ClassButton("clear", "Clear classes"))
+    def _class_view(self, s, game_id: int) -> discord.ui.View:
+        items = [ClassButton(str(c.id), c.name, c.emoji) for c in party.classes(s, game_id) if c.role_id][:23]
+        return _view(*items, ClassButton("mine", "My roles", "📋"), ClassButton(f"clear-{game_id}", "Clear classes"))
 
-    async def post_panels(self, which: str = "all") -> str:
-        """Delete and repost panels in order: class, interest, create, status."""
-        channel = await self._channel()
+    async def post_panels(self, game_id: int, which: str = "all") -> str:
+        """Delete and repost a game's panels in order: class, gear, interest,
+        create, status."""
+        channel = await self._channel(game_id)
         if channel is None:
             return "Party channel not set or not reachable."
         kinds = ["class", "gear", "interest", "create", "status"] if which == "all" else [which]
+        posted = []
         async with self._sync_lock:
             for kind in kinds:
                 with db.session() as s:
-                    state, settings = get_state(s), get_settings(s)
+                    game = s.get(Game, game_id)
+                    if game is None:
+                        return "That game no longer exists."
                     attr = {"class": "class_panel_message_id", "gear": "gear_panel_message_id",
                             "interest": "interest_panel_message_id",
                             "create": "party_panel_message_id", "status": "party_status_message_id"}[kind]
-                    old = getattr(state, attr)
+                    old = getattr(game, attr)
                     if kind == "class":
-                        text, view = party.CLASS_PANEL, self._class_view(s)
+                        text, view = party.class_panel_text(game), self._class_view(s, game_id)
                     elif kind == "gear":
-                        text, view = party.GEAR_PANEL, gear_view(s)
+                        text, view = party.GEAR_PANEL, gear_view(s, game_id)
                     elif kind == "interest":
-                        text = party.interest_panel_text(s, now())
+                        text = party.interest_panel_text(s, game_id, now())
                         view = _view(PanelButton("reg"), PanelButton("unreg"))
                     elif kind == "create":
-                        text = party.CREATE_PANEL.format(lifetime=settings.party_lifetime_min)
+                        text = party.CREATE_PANEL.format(lifetime=game.party_lifetime_min)
                         view = _view(PanelButton("create"))
                     else:
-                        text, view = self._status(s)
+                        text, view = self._status(s, game)
                 await self._delete(channel, old)
+                if view is None:  # no gear score brackets in this game: no gear panel
+                    with db.session() as s:
+                        setattr(s.get(Game, game_id), attr, 0)
+                    continue
                 try:
                     msg = await channel.send(text, view=view, allowed_mentions=NO_MENTIONS)
                 finally:
                     view.stop()
+                posted.append(kind)
                 with db.session() as s:
-                    state = get_state(s)
-                    setattr(state, attr, msg.id)
+                    game = s.get(Game, game_id)
+                    setattr(game, attr, msg.id)
                     if kind == "interest":
-                        state.interest_panel_hash = party.digest(text)
+                        game.interest_panel_hash = party.digest(text)
                     if kind == "status":
-                        state.party_status_hash = party.digest(text + _status_key(s))
-        bus.info("party", f"Party finder panel(s) posted: {', '.join(kinds)}.")
-        return f"Posted {', '.join(kinds)}."
+                        game.party_status_hash = party.digest(text + _status_key(s, game_id))
+        bus.info("party", f"Party finder panel(s) posted: {', '.join(posted)}.")
+        return f"Posted {', '.join(posted)}."
 
-    def _status(self, s):
-        full = party.live_parties(s, "full")
+    def _status(self, s, game: Game):
+        full = party.live_parties(s, game.id, "full")
         buttons = [PartyButton("done", p.id, f"Done: {party.party_title(p)} ({p.leader_name})"[:80]) for p in full[:25]]
-        return party.status_text(full, get_settings(s).party_chat_delete_min), _view(*buttons)
+        return party.status_text(full, game.party_chat_delete_min), _view(*buttons)
 
     # -- reconciler ---------------------------------------------------------------
 
@@ -521,18 +567,22 @@ class PartyFinder:
         if res.interests_expired:
             bus.info("party", f"{res.interests_expired} registration(s) expired.", discord=False)
         await self.sync()
-        await self.clean_chat()
-
-    async def clean_chat(self) -> None:
-        """Members may chat in the party channel to plan runs; their messages
-        are deleted once they are party_chat_delete_min old. Nyerk's own
-        messages and pinned messages stay."""
         with db.session() as s:
-            minutes = get_settings(s).party_chat_delete_min
+            ids = [g.id for g in games.all_games(s, enabled_only=True) if g.party_channel_id]
+        for game_id in ids:
+            await self.clean_chat(game_id)
+
+    async def clean_chat(self, game_id: int) -> None:
+        """Members may chat in a game's party channel to plan runs; their
+        messages are deleted once they are party_chat_delete_min old.
+        Nyerk's own messages and pinned messages stay."""
+        with db.session() as s:
+            g = s.get(Game, game_id)
+            minutes = g.party_chat_delete_min if g else 0
         me = getattr(self.bot, "user", None)
         if not minutes or me is None:
             return
-        channel = await self._channel()
+        channel = await self._channel(game_id)
         if channel is None:
             return
         t = now()
@@ -561,32 +611,39 @@ class PartyFinder:
             bus.info("party", f"Deleted {len(old)} chat message(s) older than {minutes} minutes.", discord=False)
 
     async def sync(self) -> None:
+        """Make every enabled game's party channel match the database."""
         async with self._sync_lock:
-            channel = await self._channel()
-            if channel is None:
-                return
-            if not self._swept:
-                self._swept = True
-                await self._sweep_orphans(channel)
-            await self._sync_parties(channel)
-            await self._sync_panel(channel, "interest")
-            await self._sync_panel(channel, "status")
+            with db.session() as s:
+                ids = [g.id for g in games.all_games(s, enabled_only=True) if g.party_channel_id]
+            sweep = not self._swept
+            self._swept = True
+            for game_id in ids:
+                channel = await self._channel(game_id)
+                if channel is None:
+                    continue
+                if sweep:
+                    await self._sweep_orphans(channel, game_id)
+                await self._sync_parties(channel, game_id)
+                await self._sync_panel(channel, game_id, "interest")
+                await self._sync_panel(channel, game_id, "status")
 
-    async def _sweep_orphans(self, channel) -> None:
-        """Once after start: delete Nyerk's own messages in the party channel
-        that the database doesn't know about. They are left when Nyerk was
-        stopped right after posting something and before recording it, and
+    async def _sweep_orphans(self, channel, game_id: int) -> None:
+        """Once after start: delete Nyerk's own messages in a game's party
+        channel that the database doesn't know about. They are left when Nyerk
+        was stopped right after posting something and before recording it, and
         would otherwise sit there with dead buttons."""
         me = getattr(self.bot, "user", None)
         with db.session() as s:
-            st, state = get_settings(s), get_state(s)
-            if me is None or st.party_channel_id in (st.timer_channel_id, st.roles_channel_id, st.log_channel_id):
+            st, g = get_settings(s), s.get(Game, game_id)
+            others = {st.roles_channel_id, st.log_channel_id} | {x.timer_channel_id for x in games.all_games(s)} \
+                | {x.party_channel_id for x in games.all_games(s) if x.id != game_id}
+            if me is None or g is None or g.party_channel_id in others:
                 return  # shared channel: other messages of ours live there too
-            known = {state.class_panel_message_id, state.gear_panel_message_id, state.interest_panel_message_id,
-                     state.party_panel_message_id, state.party_status_message_id}
-            for p in s.scalars(select(PfParty).where(
+            known = {g.class_panel_message_id, g.gear_panel_message_id, g.interest_panel_message_id,
+                     g.party_panel_message_id, g.party_status_message_id}
+            for p in s.scalars(select(PfParty).where(PfParty.game_id == game_id, (
                     (PfParty.listing_message_id != 0) | (PfParty.ping_message_id != 0)
-                    | (PfParty.warning_message_id != 0) | (PfParty.ready_message_id != 0))):
+                    | (PfParty.warning_message_id != 0) | (PfParty.ready_message_id != 0)))):
                 known |= {p.listing_message_id, p.ping_message_id, p.warning_message_id, p.ready_message_id}
         try:
             stray = [m async for m in channel.history(limit=100)
@@ -599,17 +656,18 @@ class PartyFinder:
         if stray:
             bus.info("party", f"Removed {len(stray)} leftover party message(s) from before the restart.")
 
-    async def _sync_panel(self, channel, kind: str) -> None:
+    async def _sync_panel(self, channel, game_id: int, kind: str) -> None:
         with db.session() as s:
-            state = get_state(s)
+            game = s.get(Game, game_id)
             if kind == "interest":
-                mid, old_hash = state.interest_panel_message_id, state.interest_panel_hash
-                text, view = party.interest_panel_text(s, now()), _view(PanelButton("reg"), PanelButton("unreg"))
+                mid, old_hash = game.interest_panel_message_id, game.interest_panel_hash
+                text = party.interest_panel_text(s, game_id, now())
+                view = _view(PanelButton("reg"), PanelButton("unreg"))
                 key = party.digest(text)
             else:
-                mid, old_hash = state.party_status_message_id, state.party_status_hash
-                text, view = self._status(s)
-                key = party.digest(text + _status_key(s))
+                mid, old_hash = game.party_status_message_id, game.party_status_hash
+                text, view = self._status(s, game)
+                key = party.digest(text + _status_key(s, game_id))
         try:
             if not mid or key == old_hash:
                 return  # panel not posted yet (admin posts it) or nothing changed
@@ -624,18 +682,18 @@ class PartyFinder:
         finally:
             view.stop()
         with db.session() as s:
-            state = get_state(s)
+            game = s.get(Game, game_id)
             if kind == "interest":
-                state.interest_panel_message_id, state.interest_panel_hash = mid, key
+                game.interest_panel_message_id, game.interest_panel_hash = mid, key
             else:
-                state.party_status_message_id, state.party_status_hash = mid, key
+                game.party_status_message_id, game.party_status_hash = mid, key
 
-    async def _sync_parties(self, channel) -> None:
+    async def _sync_parties(self, channel, game_id: int) -> None:
         with db.session() as s:
-            settings = get_settings(s)
-            rows = list(s.scalars(select(PfParty).where(
+            settings = s.get(Game, game_id)
+            rows = list(s.scalars(select(PfParty).where(PfParty.game_id == game_id, (
                 (PfParty.status.in_(party.LIVE)) | (PfParty.listing_message_id != 0) | (PfParty.ping_message_id != 0)
-                | (PfParty.warning_message_id != 0) | (PfParty.ready_message_id != 0)
+                | (PfParty.warning_message_id != 0) | (PfParty.ready_message_id != 0))
             ).order_by(PfParty.created_at)))
             ids = [p.id for p in rows]
         for pid in ids:
@@ -740,7 +798,8 @@ class PartyFinder:
                 if pinged:
                     t = now()
                     for r in s.scalars(select(PfInterest).where(PfInterest.user_id.in_(pinged),
-                                                                PfInterest.status == "active")):
+                                                                PfInterest.status == "active",
+                                                                PfInterest.game_id == p.game_id)):
                         r.last_pinged_at = t
 
 
@@ -755,5 +814,5 @@ def _leave_note(res: party.LeaveResult) -> str:
     return (" " + "; ".join(bits) + ".") if bits else ""
 
 
-def _status_key(s) -> str:
-    return ",".join(f"{p.id}:{p.leader_name}" for p in party.live_parties(s, "full"))
+def _status_key(s, game_id: int) -> str:
+    return ",".join(f"{p.id}:{p.leader_name}" for p in party.live_parties(s, game_id, "full"))

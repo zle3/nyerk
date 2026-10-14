@@ -6,6 +6,8 @@
 # Runtime data: SQLite DB, backups, logs, TLS key, session key
 data/
 *.db
+# Test fixtures: made from demo data only (fake names and IDs).
+!tests/fixtures/*.db
 *.db-shm
 *.db-wal
 *.pem

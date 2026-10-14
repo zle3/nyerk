@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy import select
 
+from nyerk.games import first as G
 from nyerk import party
 from nyerk.db import get_settings
 from nyerk.models import PfClass, PfContent, PfInterest
@@ -12,11 +13,11 @@ T = 1_800_000_000
 @pytest.fixture()
 def pf(s):
     """Role IDs 1001.. for the 8 classes, two pieces of content."""
-    for i, c in enumerate(party.classes(s)):
+    for i, c in enumerate(party.classes(s, 1)):
         c.role_id = 1001 + i
-    st = get_settings(s)
+    st = G(s)
     st.tank_role_id, st.support_role_id, st.dps_role_id = 2001, 2002, 2003
-    s.add_all([PfContent(name="Fire Temple", min_gear_score=1600), PfContent(name="Raid", min_gear_score=1900)])
+    s.add_all([PfContent(game_id=1, name="Fire Temple", min_gear_score=1600), PfContent(game_id=1, name="Raid", min_gear_score=1900)])
     s.flush()
     return s
 
@@ -38,7 +39,7 @@ def content(s, name="Fire Temple"):
 
 def test_classes_toggle_and_type_roles_follow(pf):
     s = pf
-    by = {c.name: c for c in party.classes(s)}
+    by = {c.name: c for c in party.classes(s, 1)}
     me = Who(1, "Rae", {by["Gladiator"].role_id, 2003, 555})  # Gladiator + DPS + unrelated
     add, remove, text, held = party.class_change(s, me, by["Cleric"].id)
     assert add == {by["Cleric"].role_id, 2002} and remove == set()  # keeps Gladiator and DPS
@@ -50,13 +51,13 @@ def test_classes_toggle_and_type_roles_follow(pf):
     me.role_ids -= remove
     party.class_change(s, me, by["Ranger"].id)
     add, remove, _, held = party.class_change(s, Who(1, "Rae", {by["Cleric"].role_id, by["Ranger"].role_id,
-                                                                2002, 2003}), None)
+                                                                2002, 2003}), None, 1)
     assert add == set() and remove == {by["Cleric"].role_id, by["Ranger"].role_id, 2002, 2003} and held == []
 
 
 def test_type_role_stays_while_another_class_has_it(pf):
     s = pf
-    by = {c.name: c for c in party.classes(s)}
+    by = {c.name: c for c in party.classes(s, 1)}
     me = Who(1, "Rae", {by["Ranger"].role_id, by["Sorcerer"].role_id, 2003})
     add, remove, _, _ = party.class_change(s, me, by["Ranger"].id)
     assert remove == {by["Ranger"].role_id}  # Sorcerer still needs DPS
@@ -64,7 +65,7 @@ def test_type_role_stays_while_another_class_has_it(pf):
 
 def test_multi_class_member_fills_the_needed_slot(pf):
     s = pf
-    by = {c.name: c for c in party.classes(s)}
+    by = {c.name: c for c in party.classes(s, 1)}
     p = party.create(s, who(s, 1, "Templar"), content(s).id, 5, "default", "", "", T)
     for uid in (2, 3, 4):
         party.join(s, p, who(s, uid, "Ranger"), T)
@@ -76,15 +77,15 @@ def test_multi_class_member_fills_the_needed_slot(pf):
 
 def test_register_as_chosen_class(pf):
     s = pf
-    by = {c.name: c for c in party.classes(s)}
+    by = {c.name: c for c in party.classes(s, 1)}
     flex = Who(9, "Flex", {by["Ranger"].role_id, by["Cleric"].role_id})
-    b, w = party.brackets(s)[0].id, party.windows(s)[0].id
+    b, w = party.brackets(s, 1)[0].id, party.windows(s, 1)[0].id
     row = reg(s, flex, b, w, [content(s).id], T, class_id=by["Cleric"].id)
     assert (row.class_id, row.class_type) == (by["Cleric"].id, "support")
 
 
 def test_makeup_rules(pf):
-    st = get_settings(pf)
+    st = G(pf)
     assert party.parse_makeup(st, 5, "default", "") == {"tank": 1, "support": 1, "dps": 3, "any": 0}
     assert party.parse_makeup(st, 20, "custom", "2/4/10") == {"tank": 2, "support": 4, "dps": 10, "any": 4}
     assert party.parse_makeup(st, 20, "none", "")["any"] == 20
@@ -127,8 +128,8 @@ def test_one_party_at_a_time_and_leader_promotion(pf):
 
 def test_registration_ping_targets_and_cooldown(pf):
     s = pf
-    b = {x.label: x.id for x in party.brackets(s)}
-    w = party.windows(s)[0].id
+    b = {x.label: x.id for x in party.brackets(s, 1)}
+    w = party.windows(s, 1)[0].id
     low = reg(s, who(s, 10, "Ranger"), b["1400-1599"], w, [content(s).id], T)
     ok = reg(s, who(s, 11, "Cleric"), b["1600-1899"], w, [content(s).id], T)
     other = reg(s, who(s, 12, "Ranger"), b["1900-2100"], w, [content(s, "Raid").id], T)
@@ -179,8 +180,8 @@ def test_listing_text(pf):
 
 def test_gear_score_is_single_choice_and_feeds_pings(pf):
     s = pf
-    b = {x.label: x.id for x in party.brackets(s)}
-    w = party.windows(s)[0].id
+    b = {x.label: x.id for x in party.brackets(s, 1)}
+    w = party.windows(s, 1)[0].id
     member = who(s, 11, "Cleric")
     assert party.set_gear(s, 11, "user11", b["1400-1599"], T).label == "1400-1599"
     party.register(s, member, w, [content(s).id], T)
@@ -188,18 +189,18 @@ def test_gear_score_is_single_choice_and_feeds_pings(pf):
     assert party.ping_targets(s, p, T + 1) == []
     party.set_gear(s, 11, "user11", b["2100+"], T + 2)  # picking another replaces it
     assert [t.user_id for t in party.ping_targets(s, p, T + 3)] == [11]
-    assert party.gear_of(s, 11).label == "2100+"
-    party.set_gear(s, 11, "user11", None, T + 4)
-    assert party.gear_of(s, 11) is None
+    assert party.gear_of(s, 11, 1).label == "2100+"
+    party.set_gear(s, 11, "user11", None, T + 4, 1)
+    assert party.gear_of(s, 11, 1) is None
 
 
 def test_register_needs_gear_score(pf):
     with pytest.raises(PartyError, match="gear score"):
-        party.register(pf, who(pf, 11, "Cleric"), party.windows(pf)[0].id, [content(pf).id], T)
+        party.register(pf, who(pf, 11, "Cleric"), party.windows(pf, 1)[0].id, [content(pf).id], T)
 
 
 def test_listing_shows_saved_gear(pf):
     s = pf
-    party.set_gear(s, 1, "user1", party.brackets(s)[3].id, T)
+    party.set_gear(s, 1, "user1", party.brackets(s, 1)[3].id, T)
     p = party.create(s, who(s, 1, "Templar"), content(s).id, 5, "default", "", "", T)
     assert "Tank 1/1: user1 (Templar, 2100+)" in party.listing_text(p)

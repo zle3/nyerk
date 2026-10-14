@@ -15,7 +15,7 @@
   <meta property="og:image" content="{{ preview.image }}">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Nyerk: AION 2 timers, roles and party finder">
+  <meta property="og:image:alt" content="Nyerk: game timers, roles and party finder for Discord">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" type="image/png" href="/static/favicon.png">
   <link rel="stylesheet" href="/static/style.css">
@@ -36,11 +36,24 @@
       ("Community", [("/categories", "Roles", ("categories",)), ("/party", "Party finder", ("party",)),
                      ("/members", "Members", ("members", "member"))]),
       ("Insights", [("/stats", "Stats", ("stats",)), ("/logs", "Logs", ("logs",))]),
-      ("Admin", ([("/settings", "Settings", ("settings", "import_preview"))] if can.settings or is_owner else [])
+      ("Admin", ([("/settings", "Settings", ("settings", "import_preview")), ("/games", "Games", ("games", "setup"))]
+                 if can.settings or is_owner else [])
                 + ([("/access", "Access and security", ("access",))] if is_owner else [])
                 + ([("/history", "Change history", ("history",))] if can.history or is_owner else [])),
     ] %}
     <nav class="nav" aria-label="Sections">
+      {% if is_admin and current_game %}
+      <details class="menu game-pick">
+        <summary title="Showing {{ current_game.name }}. Switch game">{{ current_game.name }}</summary>
+        <div class="menu-list">
+          {% for g in games_list %}
+          <form method="post" action="/game/use"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="game_id" value="{{ g.id }}">
+            <button type="submit"{% if g.id == current_game.id %} aria-current="true"{% endif %}>{{ g.name }}{% if not g.enabled %} <span class="small muted">(off)</span>{% endif %}</button></form>
+          {% endfor %}
+          {% if can.settings or is_owner %}<a href="/games">Manage games</a>{% endif %}
+        </div>
+      </details>
+      {% endif %}
       {% if is_admin %}
       <a href="/" class="{{ 'active' if nav == 'overview' }}">Overview</a>
       {% for title, links in groups if links %}

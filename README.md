@@ -1,10 +1,11 @@
 # Nyerk
 
-**AION 2 event timers, roles and party finder for Discord.** One bot for one server (built for NA East, Siel, Elyos), set up from its own web page. Run it at home; optionally open the web page to your members at your own domain.
+**Event timers, roles and party finder for Discord.** Built for AION 2 (NA East, Siel, Elyos) and ready for any other game: run one or several games in a server, set up from its own web page. Run it at home; optionally open the web page to your members at your own domain.
 
 - **Timers:** alerts with role pings for events, world boss respawns, resets and maintenance, and a live dashboard with one-click boss kill reports.
 - **Roles:** self-serve ping roles, class and gear score buttons, quiet hours and a one-click "remove all my pings".
 - **Party finder:** an interest list that pings people when a matching party opens, 5 or 20 player listings, and a channel to chat and plan runs.
+- **Games:** start from the AION 2 template or a blank game; run several side by side, each with its own timer and party channels, or switch.
 - **Web page:** configure everything above, manage members, see stats, undo any change. Optionally open it to members with Discord sign-in.
 
 **[Quick start](#quick-start)** · **[Using it](#using-it)** · **[Updating](#updating)** · **[Wiki](https://github.com/zle3/nyerk/wiki)**
@@ -102,7 +103,7 @@ docker compose up -d
 **4. Set it up in the web page**
 
 1. Open `https://YOUR-COMPUTER-IP:8443` (type the `https://`). Your browser warns about the certificate; that's expected, so continue.
-2. Sign in with your `ADMIN_PASSWORD`.
+2. Sign in with your `ADMIN_PASSWORD`, then pick the game: **AION 2** (events, bosses, classes and gear scores ready to go) or **another game** (starts blank).
 3. **Settings:** paste your channel IDs → **Save settings**. Within a minute the dashboard appears in your timer channel.
 4. **Roles:** paste the role ID next to each event category and click **Save** on that row. When they're all in, click **Post roles channel**.
 5. **Party finder** (optional): paste the class role IDs (**Save classes**) and the Tank, Support and DPS role IDs (**Save**). Add the dungeons people group for under **Content**, click **Create missing roles**, then **Post all panels**. Back on **Roles**, click **Post roles channel** again so the dungeon roles appear.
@@ -132,7 +133,7 @@ Click **Update** in Dockge, or run `docker compose pull && docker compose up -d`
 | [Setup checklist](https://github.com/zle3/nyerk/wiki/Setup-checklist) | [Running and updating](https://github.com/zle3/nyerk/wiki/Running-and-updating) | [Using Nyerk](https://github.com/zle3/nyerk/wiki/Using-Nyerk) |
 | [Discord permissions](https://github.com/zle3/nyerk/wiki/Discord-permissions) | [Public access](https://github.com/zle3/nyerk/wiki/Public-access) (your own domain) | [How Nyerk behaves](https://github.com/zle3/nyerk/wiki/How-Nyerk-behaves) |
 | [Settings export and import](https://github.com/zle3/nyerk/wiki/Settings-export-and-import) | [Access levels](https://github.com/zle3/nyerk/wiki/Access-levels) | [Development](https://github.com/zle3/nyerk/wiki/Development) |
-| | [Security updates](https://github.com/zle3/nyerk/wiki/Security-updates) | |
+| [Games](https://github.com/zle3/nyerk/wiki/Games) (AION 2 and others) | [Security updates](https://github.com/zle3/nyerk/wiki/Security-updates) | |
 
 ## License
 

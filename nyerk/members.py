@@ -14,9 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import party, quiet
-from .db import get_settings
 from .models import (
-    Category, LogEntry, MemberProfile, PfInterest, PfParty, PfPartyMember, QuietHours, RoleHolder, UserTimer,
+    Category, Game, LogEntry, MemberGear, MemberProfile, PfInterest, PfParty, PfPartyMember, QuietHours,
+    RoleHolder, UserTimer,
 )
 
 
@@ -44,15 +44,21 @@ def known(s: Session, query: str = "") -> list[Summary]:
             row.name = name
         return row
 
-    class_names = {c.role_id: c.name for c in party.classes(s) if c.role_id}
+    games = {g.id: g.name for g in s.scalars(select(Game))}
+    many = len(games) > 1
+    class_names = {c.role_id: c.name for c in party.classes(s, None) if c.role_id}
     for h in s.scalars(select(RoleHolder)):
         m = touch(h.user_id, h.user_name)
         if h.kind == "class" and h.role_id in class_names:
             m.classes.append(class_names[h.role_id])
         elif h.kind == "ping":
             m.pings += 1
-    for p in s.scalars(select(MemberProfile).where(MemberProfile.bracket_id.is_not(None))):
-        touch(p.user_id, p.user_name).gear = p.bracket.label if p.bracket else ""
+    names = {p.user_id: p.user_name for p in s.scalars(select(MemberProfile))}
+    for g in s.scalars(select(MemberGear).where(MemberGear.bracket_id.is_not(None)).order_by(MemberGear.game_id)):
+        if g.bracket:
+            m = touch(g.user_id, names.get(g.user_id, ""))
+            label = f"{games.get(g.game_id, '?')}: {g.bracket.label}" if many else g.bracket.label
+            m.gear = f"{m.gear}, {label}" if m.gear else label
     for q in s.scalars(select(QuietHours).where(QuietHours.enabled.is_(True))):
         touch(q.user_id, q.user_name).quiet = "quiet now" if q.state == "quiet" else "on"
     for t in s.scalars(select(UserTimer).where(UserTimer.status == "active")):
@@ -60,7 +66,8 @@ def known(s: Session, query: str = "") -> list[Summary]:
     for r in s.scalars(select(PfInterest).where(PfInterest.status == "active")):
         touch(r.user_id, r.user_name).registered = True
     for m, p in s.execute(select(PfPartyMember, PfParty).join(PfParty).where(PfParty.status.in_(party.LIVE))):
-        touch(m.user_id, m.user_name).in_party = party.party_title(p)
+        row = touch(m.user_id, m.user_name)
+        row.in_party = f"{row.in_party}, {party.party_title(p)}" if row.in_party else party.party_title(p)
     # Names seen anywhere else (finished timers and parties) fill gaps.
     for t in s.scalars(select(UserTimer).order_by(UserTimer.id.desc()).limit(500)):
         if t.user_id in people and people[t.user_id].name.startswith("User "):
@@ -82,30 +89,43 @@ class RoleOption:
 
 
 def role_options(s: Session) -> list[RoleOption]:
-    opts = [RoleOption(c.role_id, f"{c.emoji} {c.name}".strip(), "class", party.TYPE_LABEL[c.class_type])
-            for c in party.classes(s) if c.role_id]
-    opts += [RoleOption(c.role_id, c.name, "event")
-             for c in s.scalars(select(Category).where(Category.role_id != 0).order_by(Category.sort_order))]
-    opts += [RoleOption(c.role_id, party.party_title_for(c), "dungeon")
-             for c in party.contents(s, False) if c.role_id]
+    """Every game's class, event and dungeon roles; labels name the game
+    when the server runs several."""
+    games = {g.id: g.name for g in s.scalars(select(Game).order_by(Game.sort_order, Game.id))}
+    many = len(games) > 1
+
+    def name(game_id, text):
+        return f"{games.get(game_id, '?')}: {text}" if many else text
+
+    opts = [RoleOption(c.role_id, name(c.game_id, f"{c.emoji} {c.name}".strip()), "class",
+                       party.TYPE_LABEL[c.class_type])
+            for c in party.classes(s, None) if c.role_id]
+    opts += [RoleOption(c.role_id, name(c.game_id, c.name), "event")
+             for c in s.scalars(select(Category).where(Category.role_id != 0)
+                                .order_by(Category.game_id, Category.sort_order))]
+    opts += [RoleOption(c.role_id, name(c.game_id, party.party_title_for(c)), "dungeon")
+             for c in party.contents(s, None, False) if c.role_id]
     return opts
 
 
+def type_roles(s: Session) -> set[int]:
+    return {r for g in s.scalars(select(Game)) for r in (g.tank_role_id, g.support_role_id, g.dps_role_id) if r}
+
+
 def managed_role_ids(s: Session) -> set[int]:
-    st = get_settings(s)
-    types = {r for r in (st.tank_role_id, st.support_role_id, st.dps_role_id) if r}
-    return {o.role_id for o in role_options(s)} | types
+    return {o.role_id for o in role_options(s)} | type_roles(s)
 
 
 def desired_roles(s: Session, chosen: set[int]) -> set[int]:
-    """Chosen class and ping roles plus the type roles the classes need."""
+    """Chosen class and ping roles plus the type roles the classes need
+    (each class's own game's Tank, Support or DPS role)."""
     opts = {o.role_id: o for o in role_options(s)}
-    st = get_settings(s)
-    by_type = {"tank": st.tank_role_id, "support": st.support_role_id, "dps": st.dps_role_id}
+    games = {g.id: party.type_role_ids(g) for g in s.scalars(select(Game))}
     want = {r for r in chosen if r in opts}
-    for c in party.classes(s):
-        if c.role_id in want and by_type.get(c.class_type):
-            want.add(by_type[c.class_type])
+    for c in party.classes(s, None):
+        role = games.get(c.game_id, {}).get(c.class_type)
+        if c.role_id in want and role:
+            want.add(role)
     return want
 
 
@@ -155,16 +175,22 @@ def detail(s: Session, user_id: int) -> dict:
                             .order_by(UserTimer.fire_at)))
     for t in timers:
         _ = t.event
-    reg = s.scalar(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active"))
-    reg_text = ""
-    if reg:
-        names = [party.party_title_for(c) for c in party.contents(s, False) if c.id in (reg.content_ids or [])]
-        reg_text = f"{', '.join(names)} as {reg.pf_class.name if reg.pf_class else '?'}"
-    p = party.live_party_for(s, user_id)
+    games = {g.id: g.name for g in s.scalars(select(Game))}
+    many = len(games) > 1
+    titles = {c.id: party.party_title_for(c) for c in party.contents(s, None, False)}
+    registrations = []
+    for reg in s.scalars(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active")
+                         .order_by(PfInterest.game_id)):
+        text = f"{', '.join(titles.get(i, '?') for i in reg.content_ids or [])} as " \
+               f"{reg.pf_class.name if reg.pf_class else '?'}"
+        registrations.append((reg, f"{games.get(reg.game_id, '?')}: {text}" if many else text))
+    parties = [(p, f"{games.get(p.game_id, '?')}: {party.party_title(p)}" if many else party.party_title(p))
+               for p in party.live_parties_for(s, user_id)]
+    for p, _ in parties:
+        _ = p.members
     q = quiet.get(s, user_id)
     tracked = {r.role_id for r in s.scalars(select(RoleHolder).where(RoleHolder.user_id == user_id))}
-    return dict(name=name, timers=timers, registration=reg, registration_text=reg_text,
-                party=p, party_title=party.party_title(p) if p else "", quiet=q,
+    return dict(name=name, timers=timers, registrations=registrations, parties=parties, quiet=q,
                 quiet_text=quiet.window_text(q) if q else "", tracked=tracked, paused=paused_roles(s, user_id))
 
 
@@ -186,11 +212,13 @@ def forget(s: Session, user_id: int, now: int) -> Forgotten:
     roles are removed separately by the caller, before this runs."""
     name = next((m.name for m in known(s) if m.user_id == user_id), "")
     out = Forgotten(name)
-    p = party.live_party_for(s, user_id)
-    if p is not None:
-        out.left_party = party.party_title(p)
+    left = []
+    for p in party.live_parties_for(s, user_id):
+        left.append(party.party_title(p))
         party.remove_member(s, p, user_id, now)
-    for label, model in (("roles", RoleHolder), ("gear score", MemberProfile), ("quiet hours", QuietHours),
+    out.left_party = ", ".join(left)
+    for label, model in (("roles", RoleHolder), ("gear score", MemberGear), ("profile", MemberProfile),
+                         ("quiet hours", QuietHours),
                          ("registrations", PfInterest), ("party seats", PfPartyMember)):
         rows = list(s.scalars(select(model).where(model.user_id == user_id)))
         for r in rows:

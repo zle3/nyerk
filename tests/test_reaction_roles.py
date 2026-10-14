@@ -3,6 +3,7 @@ import itertools
 
 from sqlalchemy import select
 
+from nyerk.games import first as G
 from nyerk import bot as botmod
 from nyerk import reaction_roles
 from nyerk.db import get_settings, get_state
@@ -15,7 +16,7 @@ def give_roles(s, n_dungeons=3):
     for i, c in enumerate(s.scalars(select(Category).order_by(Category.sort_order))):
         c.role_id = 100_000_000_000_000_000 + i
     for i in range(n_dungeons):
-        s.add(PfContent(name=f"Dungeon {i}", role_id=200_000_000_000_000_000 + i, sort_order=i))
+        s.add(PfContent(game_id=1, name=f"Dungeon {i}", role_id=200_000_000_000_000_000 + i, sort_order=i))
     s.flush()
 
 
@@ -100,12 +101,12 @@ def test_post_roles_channel_order_and_mapping(s, monkeypatch):
     state = get_state(s)
     s.refresh(state)
     assert state.reaction_messages[str(dungeons.id)]["1️⃣"] == 200_000_000_000_000_000
-    assert state.roles_class_message_id == classes.id and state.roles_clear_message_id == clear.id
+    assert G(s).roles_class_message_id == classes.id and state.roles_clear_message_id == clear.id
     assert state.roles_header_message_id == header.id
 
 
 def test_create_missing_dungeon_roles(s, monkeypatch):
-    s.add_all([PfContent(name="Fire Temple"), PfContent(name="Raid", role_id=5)])
+    s.add_all([PfContent(game_id=1, name="Fire Temple"), PfContent(game_id=1, name="Raid", role_id=5)])
     s.commit()
     guild = FakeGuild(set())
     b = botmod.NyerkBot(0)
@@ -170,7 +171,7 @@ def test_my_roles_overview(s):
     from nyerk import party, quiet
     from nyerk.bot import my_roles_text
     give_roles(s, n_dungeons=2)
-    cls = {c.name: c for c in party.classes(s)}
+    cls = {c.name: c for c in party.classes(s, 1)}
     cls["Cleric"].role_id, cls["Ranger"].role_id = 1001, 1002
     s.flush()
     quiet.set_hours(s, 7, "Rae", 23, 7, "America/New_York", set())

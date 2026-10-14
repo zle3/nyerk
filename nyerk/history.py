@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from . import transfer
-from .models import ConfigChange
+from .models import ConfigChange, Game
 
 KEEP = 300
 KEYS = ("name", "label", "minutes", "lead_minutes")
@@ -65,5 +65,7 @@ def restore(s: Session, change_id: int) -> list[str]:
     if row is None or not row.before:
         raise ValueError("That change can't be restored.")
     data = dict(row.before)
-    data["nyerk_export"] = transfer.FORMAT
-    return transfer.apply_import(s, data)
+    data.setdefault("nyerk_export", 1)
+    # Saved before games existed: it all belonged to the first game.
+    first = s.scalar(select(Game.id).order_by(Game.id).limit(1))
+    return transfer.apply_import(s, data, game_id=first)

@@ -12,11 +12,11 @@ import sys
 
 import uvicorn
 
-from . import db, forgotten, housekeeping
+from . import db, forgotten, games, housekeeping
 from .config import Config
-from .db import get_settings
+from .db import get_settings, get_state
 from .logbus import bus
-from .seed import seed, seed_party_finder, seed_reaction_groups, upgrade_defaults
+from .seed import seed_reaction_groups, upgrade_defaults
 from .web.app import create_app, hash_password
 
 log = logging.getLogger("nyerk")
@@ -156,13 +156,13 @@ def main() -> None:
     bus.setup(cfg.log_file, cfg.log_keep_days)
     db.init_engine(cfg.db_path)
     with db.session() as s:
-        if seed(s):
-            log.info("Seeded default events and categories.")
+        get_settings(s), get_state(s)
         for what in upgrade_defaults(s):
             log.info("Updated default %s.", what)
         seed_reaction_groups(s)
-        if seed_party_finder(s):
-            log.info("Seeded party finder classes, gear brackets and time windows.")
+        if not games.all_games(s):
+            # A fresh install: the owner picks the game on the web page first.
+            log.warning("No game set up yet: open the web page to choose one.")
     init_password(cfg)
     forgotten.reapply(cfg)  # a restored backup must not bring forgotten members back
     try:

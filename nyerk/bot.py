@@ -12,10 +12,10 @@ import discord
 from discord import app_commands
 from sqlalchemy import select
 
-from . import db, engine, party, party_bot, quiet, reaction_roles, safety, timers, tracking
+from . import db, engine, games, party, party_bot, quiet, reaction_roles, safety, timers, tracking
 from .db import get_settings, get_state
 from .logbus import bus
-from .models import Event, PfContent, SentMessage, UserTimer
+from .models import Event, Game, PfContent, SentMessage, UserTimer
 from .timeparse import humanize
 
 log = logging.getLogger("nyerk.bot")
@@ -64,7 +64,8 @@ class CustomTimeButton(discord.ui.DynamicItem[discord.ui.Button], template=r"nye
 
     async def callback(self, interaction: discord.Interaction) -> None:
         with db.session() as s:
-            bosses = [(b.id, b.name) for b in timers.boss_events(s)][:25]
+            game = games.by_timer_channel(s, interaction.channel_id)  # this dashboard's game
+            bosses = [(b.id, b.name) for b in timers.boss_events(s, game_id=game.id if game else None)][:25]
         if not bosses:
             await interaction.response.send_message("No world bosses are enabled.", ephemeral=True)
             return
@@ -173,14 +174,22 @@ def dashboard_view(bosses: list[tuple[int, str]]) -> discord.ui.View | None:
 # Slash commands
 
 
-nyerk_group = app_commands.Group(name="nyerk", description="AION 2 boss timers", guild_only=True)
+nyerk_group = app_commands.Group(name="nyerk", description="Boss timers", guild_only=True)
+
+
+def boss_choices(s) -> list[tuple[str, str]]:
+    """(label, value) for every enabled boss; labels name the game when the
+    server runs several, values are event IDs so same-named bosses differ."""
+    names = {g.id: g.name for g in games.all_games(s, enabled_only=True)}
+    many = len(names) > 1
+    return [(f"{names.get(b.game_id, '?')}: {b.name}" if many else b.name, str(b.id)) for b in timers.boss_events(s)]
 
 
 async def boss_autocomplete(interaction: discord.Interaction, current: str):
     with db.session() as s:
-        names = [b.name for b in timers.boss_events(s)]
+        choices = boss_choices(s)
     cur = current.lower()
-    return [app_commands.Choice(name=n, value=n) for n in names if cur in n.lower()][:25]
+    return [app_commands.Choice(name=n[:100], value=v) for n, v in choices if cur in n.lower()][:25]
 
 
 async def my_timer_autocomplete(interaction: discord.Interaction, current: str):
@@ -208,10 +217,14 @@ async def cmd_worldboss(interaction: discord.Interaction, boss: str,
 async def cmd_mytimers(interaction: discord.Interaction):
     with db.session() as s:
         rows = timers.user_timers(s, interaction.user.id)
-        limit = get_settings(s).user_timer_limit
-        lines = [f"{r.event.name}: {engine.ts(r.fire_at, 'F')} ({engine.ts(r.fire_at, 'R')})" for r in rows]
+        all_games = games.all_games(s)
+        many = len(all_games) > 1
+        names = {g.id: g.name for g in all_games}
+        lines = [f"{names.get(r.event.game_id, '?') + ': ' if many else ''}{r.event.name}: "
+                 f"{engine.ts(r.fire_at, 'F')} ({engine.ts(r.fire_at, 'R')})" for r in rows]
+        limit = f"/{all_games[0].user_timer_limit}" if len(all_games) == 1 else ""
     text = "\n".join(lines) if lines else "You have no active timers."
-    await interaction.response.send_message(f"{text}\nActive timers: {len(lines)}/{limit}.",
+    await interaction.response.send_message(f"{text}\nActive timers: {len(lines)}{limit}.",
                                             ephemeral=True, allowed_mentions=NO_MENTIONS)
 
 
@@ -274,7 +287,7 @@ class NyerkBot(discord.Client):
         self.tree.add_command(nyerk_group)
         self.tree.on_error = self._on_app_command_error
         self._wake = asyncio.Event()
-        self._force_repost = False
+        self._force_repost: set[int] = set()  # game IDs whose dashboard is reposted next tick
         self._lock = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
         self._started = False
@@ -327,9 +340,15 @@ class NyerkBot(discord.Client):
 
     # -- requests from the web admin -----------------------------------------
 
-    def request_refresh(self, repost: bool = False) -> None:
-        """Wake the scheduler now (timer or config changed)."""
-        self._force_repost = self._force_repost or repost
+    def request_refresh(self, repost: bool = False, game_id: int | None = None) -> None:
+        """Wake the scheduler now (timer or config changed). repost moves the
+        dashboard of game_id (or every game's) to the bottom of its channel."""
+        if repost:
+            if game_id is None:
+                with db.session() as s:
+                    self._force_repost |= {g.id for g in games.all_games(s)}
+            else:
+                self._force_repost.add(game_id)
         self._wake.set()  # web admin and bot share one event loop
 
     def status(self) -> dict:
@@ -442,8 +461,9 @@ class NyerkBot(discord.Client):
     async def tick(self) -> None:
         t = now()
         with db.session() as s:
-            settings = get_settings(s)
             state = get_state(s)
+            channels = {g.id: g.timer_channel_id for g in games.all_games(s)}
+            retention = {g.id: g.alert_retention_min for g in games.all_games(s)}
             last = state.last_tick_at or (t - TICK_SECONDS)
             if last > t:
                 last = t - TICK_SECONDS
@@ -459,18 +479,17 @@ class NyerkBot(discord.Client):
                     content, role_id = engine.render_alert(d.occ, d.slot)
                     if role_id and not safety.pingable(role_id):  # @everyone: never ping it
                         content, role_id = content.replace(f"<@&{role_id}>", "").strip(), 0
-                    to_send.append((d.occ.event.id, d.occ.event.name, d.occ.timer_id, d.occ.at,
-                                    d.slot.lead_minutes, content, role_id))
-            channel_id = settings.timer_channel_id
-            retention = settings.alert_retention_min
+                    to_send.append((d.occ.event.game_id, d.occ.event.id, d.occ.event.name, d.occ.timer_id,
+                                    d.occ.at, d.slot.lead_minutes, content, role_id))
 
         if skipped:
             head = f"Skipped {len(skipped)} missed alert(s): "
             bus.warn("skipped", head + "; ".join(skipped[:15]) + (" …" if len(skipped) > 15 else ""))
 
-        posted = 0
-        channel = await self._channel(channel_id)
-        for event_id, name, timer_id, occ_at, lead, content, role_id in to_send:
+        posted: set[int] = set()  # games that got an alert: their dashboard moves below it
+        for game_id, event_id, name, timer_id, occ_at, lead, content, role_id in to_send:
+            channel_id = channels.get(game_id, 0)
+            channel = await self._channel(channel_id)
             msg_id, status = None, "sent"
             if channel is None:
                 status = "failed"
@@ -483,7 +502,7 @@ class NyerkBot(discord.Client):
                 try:
                     msg = await channel.send(content, allowed_mentions=mentions)
                     msg_id = msg.id
-                    posted += 1
+                    posted.add(game_id)
                     # Scheduled alerts (Shugo, Rift…) stay on the web Logs page; boss alerts
                     # come from member reports and also go to #logs.
                     bus.info("alert", f"Sent {name} {_slot_name(lead)} alert" + (" with ping." if role_id else "."),
@@ -503,12 +522,12 @@ class NyerkBot(discord.Client):
             doomed = [(m.id, m.channel_id, m.message_id,
                        f"{names.get(m.event_id, f'event {m.event_id}')} {_slot_name(m.slot)} alert "
                        f"for {engine.ts(m.occurrence_at, 'f')}")
-                      for m in engine.messages_to_delete(s, retention, t)]
+                      for gid, minutes in retention.items() for m in engine.messages_to_delete(s, minutes, t, gid)]
 
         await self._cleanup(doomed)
-        repost = posted > 0 or self._force_repost
-        self._force_repost = False
-        await self.update_dashboard(repost=repost)
+        repost = posted | self._force_repost
+        self._force_repost = set()
+        await self.update_dashboards(repost)
         try:
             await self.apply_quiet_hours()
         except Exception as exc:
@@ -545,25 +564,37 @@ class NyerkBot(discord.Client):
 
     async def _ensure_dashboard_is_last(self) -> None:
         with db.session() as s:
-            settings, state = get_settings(s), get_state(s)
-            channel_id, dash_id = settings.timer_channel_id, state.dashboard_message_id
-        channel = await self._channel(channel_id)
-        if channel is None:
-            bus.error("error", f"Timer channel {channel_id} not reachable.")
-            return
-        last_id = getattr(channel, "last_message_id", None)
-        self._force_repost = not dash_id or (last_id is not None and last_id != dash_id)
+            dashes = [(g.id, g.name, g.timer_channel_id, g.dashboard_message_id)
+                      for g in games.all_games(s, enabled_only=True) if g.timer_channel_id]
+        for game_id, name, channel_id, dash_id in dashes:
+            channel = await self._channel(channel_id)
+            if channel is None:
+                bus.error("error", f"{name} timer channel {channel_id} not reachable.")
+                continue
+            last_id = getattr(channel, "last_message_id", None)
+            if not dash_id or (last_id is not None and last_id != dash_id):
+                self._force_repost.add(game_id)
 
     @staticmethod
     def _is_alert(message_id: int) -> bool:
         with db.session() as s:
             return s.scalar(select(SentMessage.id).where(SentMessage.message_id == message_id).limit(1)) is not None
 
-    async def update_dashboard(self, repost: bool = False) -> None:
+    async def update_dashboards(self, repost: set[int] | bool = frozenset()) -> None:
+        """Every enabled game's dashboard; repost (True = all) moves those to
+        the bottom of their channel."""
         with db.session() as s:
-            settings, state = get_settings(s), get_state(s)
-            dash = engine.build_dashboard(s, settings, now())
-            channel_id, old_id, old_hash = settings.timer_channel_id, state.dashboard_message_id, state.dashboard_hash
+            ids = [g.id for g in games.all_games(s, enabled_only=True)]
+        for game_id in ids:
+            await self.update_dashboard(game_id, repost=repost is True or (bool(repost) and game_id in repost))
+
+    async def update_dashboard(self, game_id: int, repost: bool = False) -> None:
+        with db.session() as s:
+            game = s.get(Game, game_id)
+            if game is None:
+                return
+            dash = engine.build_dashboard(s, game, now())
+            channel_id, old_id, old_hash = game.timer_channel_id, game.dashboard_message_id, game.dashboard_hash
         if not repost and old_id and dash.digest == old_hash:
             return
         channel = await self._channel(channel_id)
@@ -597,8 +628,9 @@ class NyerkBot(discord.Client):
             if view is not None:
                 view.stop()  # buttons are served by the dynamic items, not this view
         with db.session() as s:
-            state = get_state(s)
-            state.dashboard_message_id, state.dashboard_hash = new_id, dash.digest
+            game = s.get(Game, game_id)
+            if game is not None:
+                game.dashboard_message_id, game.dashboard_hash = new_id, dash.digest
 
     # -- reaction roles --------------------------------------------------------
 
@@ -615,19 +647,25 @@ class NyerkBot(discord.Client):
             everything = reaction_roles.entries(s)
             missing = {e.role_id: e.label for e in everything if guild is None or guild.get_role(e.role_id) is None}
             plan = reaction_roles.messages(s, skip=set(missing))
-            class_text, class_view = party.CLASS_PANEL, self.pf._class_view(s)
-            gear_text, gear_v = party.GEAR_PANEL, party_bot.gear_view(s)
+            live = games.all_games(s, enabled_only=True)
+            many = len(live) > 1
+            # Each game's class and gear score selectors, when it has classes with roles.
+            panels = [(g.id, party.class_panel_text(g), self.pf._class_view(s, g.id),
+                       party.gear_panel_text(g, many), party_bot.gear_view(s, g.id)) for g in live
+                      if party.classes(s, g.id)]
             header = (settings.roles_header or "").strip()
             channel_id = settings.roles_channel_id
             old_ids = {int(k) for k in (state.reaction_messages or {})} | {
-                x for x in (state.reaction_message_id, state.roles_header_message_id, state.roles_class_message_id,
-                            state.roles_gear_message_id, state.roles_clear_message_id) if x}
+                x for x in (state.reaction_message_id, state.roles_header_message_id, state.roles_clear_message_id)
+                if x} | {x for g in games.all_games(s) for x in (g.roles_class_message_id, g.roles_gear_message_id)
+                         if x}
         if missing:
             bus.warn("roles", f"Skipped entries whose role does not exist: {', '.join(sorted(missing.values()))}.")
         channel = await self._channel(channel_id)
         if channel is None:
-            class_view.stop()
-            gear_v.stop()
+            for _, _, cv, _, gv in panels:
+                cv.stop()
+                gv.stop()
             return "Roles channel not reachable."
         for old in old_ids:
             try:
@@ -635,14 +673,20 @@ class NyerkBot(discord.Client):
             except discord.HTTPException:
                 pass
         header_msg = await channel.send(header[:2000], allowed_mentions=NO_MENTIONS) if header else None
-        try:
-            class_msg = await channel.send(class_text, view=class_view, allowed_mentions=NO_MENTIONS)
-        finally:
-            class_view.stop()
-        try:
-            gear_msg = await channel.send(gear_text, view=gear_v, allowed_mentions=NO_MENTIONS)
-        finally:
-            gear_v.stop()
+        panel_ids: dict[int, tuple[int, int]] = {}
+        for game_id, class_text, class_view, gear_text, gear_v in panels:
+            try:
+                class_msg = await channel.send(class_text, view=class_view, allowed_mentions=NO_MENTIONS)
+            finally:
+                class_view.stop()
+            gear_id = 0
+            try:
+                if gear_v is not None:
+                    gear_id = (await channel.send(gear_text, view=gear_v, allowed_mentions=NO_MENTIONS)).id
+            finally:
+                if gear_v is not None:
+                    gear_v.stop()
+            panel_ids[game_id] = (class_msg.id, gear_id)
         posted: dict[str, dict[str, int]] = {}
         messages = []
         for text, chunk in plan:
@@ -661,8 +705,9 @@ class NyerkBot(discord.Client):
             state.reaction_messages = posted
             state.reaction_message_id, state.reaction_map = 0, {}
             state.roles_header_message_id = header_msg.id if header_msg else 0
-            state.roles_gear_message_id = gear_msg.id
-            state.roles_class_message_id, state.roles_clear_message_id = class_msg.id, clear_msg.id
+            state.roles_clear_message_id = clear_msg.id
+            for g in games.all_games(s):
+                g.roles_class_message_id, g.roles_gear_message_id = panel_ids.get(g.id, (0, 0))
         for msg, chunk in messages:
             for e in chunk:
                 try:
@@ -712,6 +757,17 @@ class NyerkBot(discord.Client):
                             pass  # needs Manage Messages in the roles channel; roles are gone either way
         finally:
             self._clearing.discard(member.id)
+
+    async def delete_messages(self, messages: list[tuple[int, int]]) -> None:
+        """Best effort: take down Nyerk's messages for a deleted game."""
+        for channel_id, message_id in messages:
+            channel = await self._channel(channel_id)
+            if channel is None:
+                continue
+            try:
+                await channel.get_partial_message(message_id).delete()
+            except discord.HTTPException:
+                pass
 
     async def create_content_roles(self, content_ids: list[int]) -> list[str]:
         """Create a mentionable role for each dungeon without one."""
@@ -764,11 +820,13 @@ class NyerkBot(discord.Client):
                 errors.append(f"{'Add' if adding else 'Remove'} {role.name if role else rid}: {exc.text or exc}")
         return errors
 
-    async def set_gear(self, interaction: discord.Interaction, bracket_id: int | None) -> None:
+    async def set_gear(self, interaction: discord.Interaction, bracket_id: int | None,
+                       game_id: int | None = None) -> None:
+        """Pick a gear score bracket, or clear the game's (bracket_id None)."""
         member = interaction.user
         try:
             with db.session() as s:
-                bracket = party.set_gear(s, member.id, member.display_name, bracket_id, now())
+                bracket = party.set_gear(s, member.id, member.display_name, bracket_id, now(), game_id)
                 label = bracket.label if bracket else ""
         except party.PartyError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
@@ -912,35 +970,50 @@ def my_roles_text(s, user_id: int, held: set[int], t: int) -> str:
     from .models import Category, PfInterest, RoleHolder
 
     lines = ["## Your roles"]
-    classes = party.member_classes(s, held)
-    lines.append("**Classes:** " + (", ".join(f"{c.emoji} {c.name} ({party.TYPE_LABEL[c.class_type]})".strip()
-                                             for c in classes) or "none yet. Pick them on the class panel."))
-    events = [c.name for c in s.scalars(select(Category).where(Category.role_id != 0)
-                                        .order_by(Category.sort_order)) if c.role_id in held]
-    gear = party.gear_of(s, user_id)
-    lines.append("**Gear score:** " + (gear.label if gear else "not set. Pick it in the roles channel."))
-    lines.append("**Event pings:** " + (", ".join(events) or "none"))
+    all_games = games.all_games(s, enabled_only=True)
+    many = len(all_games) > 1
     paused = {r.role_id for r in s.scalars(select(RoleHolder).where(RoleHolder.user_id == user_id,
                                                                     RoleHolder.suspended.is_(True)))}
-    dungeons = []
-    for c in party.contents(s, False):
-        if c.role_id and c.role_id in held:
-            dungeons.append(party.party_title_for(c))
-        elif c.role_id and c.role_id in paused:
-            dungeons.append(f"{party.party_title_for(c)} (paused)")
-    lines.append("**Dungeon pings:** " + (", ".join(dungeons) or "none"))
+    for g in all_games:
+        if many:
+            lines.append(f"### {g.name}")
+        classes = party.member_classes(s, g.id, held)
+        lines.append("**Classes:** " + (", ".join(f"{c.emoji} {c.name} ({party.TYPE_LABEL[c.class_type]})".strip()
+                                                 for c in classes) or "none yet. Pick them on the class panel."))
+        if party.brackets(s, g.id):
+            gear = party.gear_of(s, user_id, g.id)
+            lines.append("**Gear score:** " + (gear.label if gear else "not set. Pick it in the roles channel."))
+        events = [c.name for c in s.scalars(select(Category).where(Category.role_id != 0, Category.game_id == g.id)
+                                            .order_by(Category.sort_order)) if c.role_id in held]
+        lines.append("**Event pings:** " + (", ".join(events) or "none"))
+        dungeons = []
+        for c in party.contents(s, g.id, False):
+            if c.role_id and c.role_id in held:
+                dungeons.append(party.party_title_for(c))
+            elif c.role_id and c.role_id in paused:
+                dungeons.append(f"{party.party_title_for(c)} (paused)")
+        lines.append("**Dungeon pings:** " + (", ".join(dungeons) or "none"))
+        if not many:
+            lines.append(_quiet_line(s, user_id))  # quiet hours cover every game's dungeon pings
+        reg = s.scalar(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active",
+                                                PfInterest.expires_at > t, PfInterest.game_id == g.id))
+        if reg:
+            names = ", ".join(party.party_title_for(c) for c in party.contents(s, g.id, False)
+                              if c.id in (reg.content_ids or []))
+            cls = reg.pf_class.name if reg.pf_class else "?"
+            lines.append(f"**Looking for a group:** {names} as {cls}, until <t:{reg.expires_at}:t> "
+                         f"(<t:{reg.expires_at}:R>)")
+        p = party.live_party_for(s, user_id, g.id)
+        if p:
+            lines.append(f"**In a party:** {party.party_title(p)} ({p.status}, leader {p.leader_name})")
+    if many:
+        lines.append("### Every game")
+        lines.append(_quiet_line(s, user_id))
+    return "\n".join(lines)
+
+
+def _quiet_line(s, user_id: int) -> str:
     q = quiet.get(s, user_id)
     if q and q.enabled:
-        lines.append(f"**Quiet hours:** {quiet.window_text(q)}" + (" · quiet now" if q.state == "quiet" else ""))
-    else:
-        lines.append("**Quiet hours:** off")
-    reg = s.scalar(select(PfInterest).where(PfInterest.user_id == user_id, PfInterest.status == "active",
-                                            PfInterest.expires_at > t))
-    if reg:
-        names = ", ".join(party.party_title_for(c) for c in party.contents(s, False) if c.id in (reg.content_ids or []))
-        cls = reg.pf_class.name if reg.pf_class else "?"
-        lines.append(f"**Looking for a group:** {names} as {cls}, until <t:{reg.expires_at}:t> (<t:{reg.expires_at}:R>)")
-    p = party.live_party_for(s, user_id)
-    if p:
-        lines.append(f"**In a party:** {party.party_title(p)} ({p.status}, leader {p.leader_name})")
-    return "\n".join(lines)
+        return f"**Quiet hours:** {quiet.window_text(q)}" + (" · quiet now" if q.state == "quiet" else "")
+    return "**Quiet hours:** off"

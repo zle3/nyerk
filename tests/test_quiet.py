@@ -27,7 +27,7 @@ def test_window_same_day_and_overnight():
 
 
 def setup(s):
-    s.add_all([PfContent(name="Fire Temple", role_id=900), PfContent(name="Raid", role_id=901)])
+    s.add_all([PfContent(game_id=1, name="Fire Temple", role_id=900), PfContent(game_id=1, name="Raid", role_id=901)])
     s.scalar(select(Category).where(Category.name == "Shugo")).role_id = 800
     s.commit()
 

@@ -4,6 +4,7 @@ from nyerk import engine, timers
 from nyerk.models import Category, Event, SentMessage
 
 from .conftest import ny
+from nyerk.games import first as G
 
 
 def boss(s, name="Soul Ruler Kashapa"):
@@ -54,7 +55,7 @@ def test_countdown_has_no_offset(s):
 def test_user_limit(s):
     now = ny(2026, 10, 9, 12, 0)
     from nyerk.db import get_settings
-    get_settings(s).user_timer_limit = 1
+    G(s).user_timer_limit = 1
     assert timers.report(s, boss(s), 1, "R", now).ok
     r = timers.report(s, boss(s, "Silent Dartan"), 1, "R", now)
     assert not r.ok and "1/1" in r.reply
@@ -150,7 +151,7 @@ def test_maintenance_override_replaces_week(s):
     from nyerk import schedules
     maint = s.scalar(select(Event).where(Event.name == "Maintenance"))
     regular = schedules.get("weekly").next_after(maint.schedule_params, ny(2026, 10, 12, 0, 0))
-    s.add(Event(name="Maintenance", schedule_type="one_off", overrides_event_id=maint.id, duration_minutes=60,
+    s.add(Event(game_id=1, name="Maintenance", schedule_type="one_off", overrides_event_id=maint.id, duration_minutes=60,
                 schedule_params={**schedules.get("one_off").validate({"at": "2026-10-15 05:00", "tz": "UTC"}),
                                  "replaces": regular}))
     s.flush()
@@ -171,8 +172,7 @@ def test_cleanup_deletes_alerts_two_hours_after_the_event(s):
     assert [d.message_id for d in engine.messages_to_delete(s, 30, now)] == [1000, 1001]
 
 def _settings(s):
-    from nyerk.db import get_settings
-    return get_settings(s)
+    return G(s)  # the AION 2 game: dashboard and boss report settings are per game
 
 
 def test_cleanup_never_touches_recent_alerts(s):
@@ -199,8 +199,9 @@ def test_upgrade_adds_text_columns_with_real_newlines(tmp_path):
 
 
 def test_upgrade_repairs_escaped_newlines(s):
+    from nyerk.db import get_settings
     from nyerk.seed import upgrade_defaults
-    st = _settings(s)
+    st = get_settings(s)
     st.roles_header = "# Roles\\nPick"
     assert "roles header" in upgrade_defaults(s)
     assert st.roles_header == "# Roles\nPick"
@@ -277,7 +278,7 @@ def test_new_text_setting_with_apostrophe_reaches_old_databases(tmp_path):
     con.close()
     db.init_engine(path)
     with db.session() as s:
-        assert "(Laborer's Rest Stop)" in get_settings(s).dashboard_boss_note
+        assert "(Laborer's Rest Stop)" in G(s).dashboard_boss_note
 
 
 def test_route_update_reorders_and_renames_untouched_locations(s):

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
+{% block title %}Games{% endblock %}
+{% block content %}
+<p><a href="/settings">‹ Settings</a></p>
+<h1>Games</h1>
+<p class="lede">Each game has its own timer channel and dashboard, events, ping roles, classes, gear scores and party finder channel. Members' quiet hours and the roles channel cover every game. Switch which game the web page shows with the picker in the top bar.</p>
+
+<p class="section-label">Your games</p>
+<div class="list">
+  {% for r in rows %}{% set g = r.g %}
+  <div class="row">
+    <form method="post" action="/games/{{ g.id }}" class="grow inline">
+      {{ csrf_field() }}
+      <input type="text" name="name" value="{{ g.name }}" maxlength="64" aria-label="Name of {{ g.name }}" required>
+      <input type="number" name="sort_order" value="{{ g.sort_order }}" class="w-auto" aria-label="Order of {{ g.name }}" title="Order">
+      <label class="switch small"><input type="checkbox" name="enabled" value="1" {{ 'checked' if g.enabled }}><span class="track"></span>On</label>
+      <button class="btn small secondary" type="submit">Save</button>
+      <span class="small muted">{{ kinds[g.kind] if g.kind == 'aion2' else 'Custom game' }} · {{ r.events }} events · {{ r.classes }} classes · {{ r.contents }} dungeons</span>
+    </form>
+    <details class="danger-zone">
+      <summary class="btn small danger">Delete</summary>
+      <form method="post" action="/games/{{ g.id }}/delete" class="inline mt">
+        {{ csrf_field() }}
+        <input type="text" name="confirm" placeholder="Type {{ g.name }}" aria-label="Type {{ g.name }} to confirm" required>
+        <button class="btn small danger" type="submit">Delete {{ g.name }} for good</button>
+      </form>
+      <p class="small muted">Removes its events, boss timers, ping categories, classes, dungeons, gear scores, parties and stats, and takes down its dashboard and panels in Discord. Discord roles themselves stay.</p>
+    </details>
+  </div>
+  {% endfor %}
+</div>
+
+<p class="section-label" id="add">Add a game</p>
+<form method="post" action="/games/new" class="card">
+  {{ csrf_field() }}
+  <div class="fields">
+    <div class="field"><label for="kind">Start from</label><select id="kind" name="kind">
+      <option value="custom">Blank: another game</option>
+      <option value="aion2">AION 2 template</option></select>
+      <div class="help">The AION 2 template brings its events, world bosses, ping categories, classes and gear scores.</div></div>
+    <div class="field"><label for="name">Name</label><input id="name" name="name" type="text" maxlength="64" placeholder="e.g. Throne and Liberty"><div class="help">Blank with the AION 2 template names it AION 2.</div></div>
+  </div>
+  <button class="btn" type="submit">Add game</button>
+</form>
+<p class="small muted">Switching a game off stops its alerts, dashboard and party finder but keeps everything, so you can switch back. To move a server to another game, add the new one and switch the old one off.</p>
+{% endblock %}

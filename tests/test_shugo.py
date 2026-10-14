@@ -27,7 +27,7 @@ def test_parse_failure():
 
 
 def test_diff_seeded_db_only_offers_new_events(s):
-    changes = shugo.diff(s, shugo.parse(HTML, "NA East"), ny(2026, 10, 9, 12, 0))
+    changes = shugo.diff(s, shugo.parse(HTML, "NA East"), ny(2026, 10, 9, 12, 0), 1)
     kinds = {c["name"]: c["kind"] for c in changes}
     # Resets at 16:00 KST equal 07:00 UTC, so no spurious update.
     assert "Daily reset" not in kinds and "Weekly reset" not in kinds and "Spacetime Rift" not in kinds
@@ -39,8 +39,8 @@ def test_hand_edited_field_is_never_overwritten(s):
     rift.duration_minutes = 45
     rift.edited_fields = ["duration_minutes"]
     s.flush()
-    changes = shugo.diff(s, shugo.parse(HTML, "NA East"), ny(2026, 10, 9, 12, 0))
+    changes = shugo.diff(s, shugo.parse(HTML, "NA East"), ny(2026, 10, 9, 12, 0), 1)
     ch = next(c for c in changes if c["name"] == "Spacetime Rift")
     assert ch["fields"]["duration_minutes"]["locked"]
-    shugo.apply(s, {"changes": changes}, {ch["key"]})
+    shugo.apply(s, {"changes": changes}, {ch["key"]}, 1)
     assert rift.duration_minutes == 45

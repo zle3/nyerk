@@ -10,6 +10,7 @@ from nyerk.db import get_settings
 from nyerk.models import Category, Event, PfClass, PfContent, QuietHours, ReactionGroup, UserTimer
 from nyerk.seed import seed, seed_party_finder, seed_reaction_groups
 from nyerk.web.app import create_app, hash_password
+from nyerk.games import first as G
 
 
 @pytest.fixture()
@@ -136,7 +137,7 @@ def test_settings_validation(client):
             "party_ping_gap_min": "15"}
     client.post("/settings", data=base)
     with db.session() as s:
-        assert get_settings(s).user_timer_limit == 7
+        assert G(s).user_timer_limit == 7
     r = client.post("/settings", data={**base, "default_tz": "Nowhere/Land"})
     assert "Unknown time zone" in r.text
     with db.session() as s:
@@ -158,7 +159,7 @@ def test_party_page_and_crud(client):
                                       "dps_role_id": "", "party_default_tank": "1", "party_default_support": "1",
                                       "party_default_dps": "3"})
     with db.session() as s:
-        assert get_settings(s).tank_role_id == 555555555555555555
+        assert G(s).tank_role_id == 555555555555555555
     page = client.get("/party").text
     form = {k: v for k, v in re.findall(r'name="((?:name|emoji|role_id|sort_order)_\d+)" value="([^"]*)"', page)}
     form.update({f"class_type_{i}": t for i, t in re.findall(r'name="class_type_(\d+)".*?<option value="(\w+)" selected', page)})
@@ -181,18 +182,18 @@ def test_settings_export_import_flow(client):
     exported = client.get("/settings/export")
     assert exported.status_code == 200 and "attachment" in exported.headers["content-disposition"]
     data = exported.json()
-    data["settings"]["party_channel_id"] = "666666666666666666"
+    data["games"][0]["settings"]["party_channel_id"] = "666666666666666666"
     csrf = _csrf(client)
     preview = client.post("/settings/import", data={"csrf": csrf},
                           files={"file": ("n.json", json.dumps(data).encode(), "application/json")})
     assert preview.status_code == 200 and "party_channel_id" in preview.text
     with db.session() as s:
-        assert get_settings(s).party_channel_id == 0  # preview changed nothing
+        assert G(s).party_channel_id == 0  # preview changed nothing
     raw = re.search(r'<textarea name="raw" hidden>(.*?)</textarea>', preview.text, re.S)[1]
     import html
     client.post("/settings/import/apply", data={"csrf": csrf, "raw": html.unescape(raw)})
     with db.session() as s:
-        assert get_settings(s).party_channel_id == 666666666666666666
+        assert G(s).party_channel_id == 666666666666666666
 
 
 def test_content_bulk_save_and_roles_preview(client):

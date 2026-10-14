@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Category, PfContent, ReactionGroup
+from .models import Category, Game, PfContent, ReactionGroup
 
 NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 LETTERS = [chr(0x1F1E6 + i) for i in range(26)]  # 🇦 … 🇿
@@ -51,9 +51,16 @@ def groups(s: Session) -> list[ReactionGroup]:
 
 def build(s: Session, skip: set[int] | None = None) -> list[Group]:
     """Every group with its entries and final emojis, in posting order.
-    Groups with no roles are left out; roles in `skip` are left out."""
+    Groups with no roles are left out; roles in `skip` are left out, and so
+    are switched-off games' roles. With several games, labels name the game."""
     skip = skip or set()
     rows = groups(s)
+    live = {g.id: g.name for g in s.scalars(select(Game).where(Game.enabled.is_(True)))}
+    many = len(live) > 1
+
+    def label(game_id, name):
+        return f"{live[game_id]}: {name}" if many else name
+
     by_id = {g.id: Group(g.id, g.name, g.description) for g in rows}
     default = {g.default_for: g.id for g in rows if g.default_for}
     fallback = rows[0].id if rows else None
@@ -63,13 +70,15 @@ def build(s: Session, skip: set[int] | None = None) -> list[Group]:
 
     for c in s.scalars(select(Category).where(Category.role_id != 0).order_by(Category.sort_order, Category.id)):
         gid = place(c.group_id, "category")
-        if gid is not None and c.role_id not in skip:
-            by_id[gid].entries.append(Entry("category", c.id, c.name, c.role_id, (c.emoji or "").strip()))
+        if gid is not None and c.role_id not in skip and c.game_id in live:
+            by_id[gid].entries.append(Entry("category", c.id, label(c.game_id, c.name), c.role_id,
+                                            (c.emoji or "").strip()))
     for c in s.scalars(select(PfContent).where(PfContent.role_id != 0, PfContent.active.is_(True))
                        .order_by(PfContent.sort_order, PfContent.name)):
         gid = place(c.group_id, "content")
-        if gid is not None and c.role_id not in skip:
-            by_id[gid].entries.append(Entry("content", c.id, c.name, c.role_id, (c.react_emoji or "").strip()))
+        if gid is not None and c.role_id not in skip and c.game_id in live:
+            by_id[gid].entries.append(Entry("content", c.id, label(c.game_id, c.name), c.role_id,
+                                            (c.react_emoji or "").strip()))
 
     out = []
     for g in (by_id[r.id] for r in rows):

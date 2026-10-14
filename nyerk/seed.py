@@ -1,4 +1,5 @@
-"""First-run data from the scope document."""
+"""Game templates (AION 2 from the scope document, or a blank game) and
+upgrades for installs made before a default changed."""
 from __future__ import annotations
 
 from sqlalchemy import select
@@ -6,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from . import schedules
 from .db import get_settings, get_state
-from .models import AlertSlot, Category, Event, PfBracket, PfClass, PfWindow, ReactionGroup
+from .models import AlertSlot, Category, Event, Game, PfBracket, PfClass, PfWindow, ReactionGroup
 
 NY = "America/New_York"
 LEADS = (15, 5, 0)
@@ -51,37 +52,50 @@ def make_slots(spec) -> list[AlertSlot]:
 
 
 def seed(s: Session) -> bool:
-    """Insert defaults when the database is empty. Returns True if seeded."""
+    """Make sure the server-wide rows exist and there is at least one game;
+    a database with none gets the AION 2 game. For tests and the demo: a
+    real first start waits for the owner to pick a game on the web page."""
+    from . import games
+
     get_settings(s)
     get_state(s)
-    if s.scalar(select(Category).limit(1)) is not None:
+    if games.all_games(s):
         return False
+    games.create(s, "AION 2", "aion2")
+    return True
 
-    # Channel and role IDs are never in the code: set them on the Settings
-    # page or import a settings file (Settings > Import).
 
-    cats = {name: Category(name=name, sort_order=i) for i, name in enumerate(CATEGORIES)}
+def seed_game(s: Session, game: Game) -> None:
+    """Fill a new game from its template. Channel and role IDs are never in
+    the code: set them on the web page or import a settings file."""
+    s.add_all(PfWindow(game_id=game.id, minutes=m, label=l) for m, l in PF_WINDOWS)
+    if game.kind != "aion2":
+        return
+    cats = {name: Category(game_id=game.id, name=name, sort_order=i) for i, name in enumerate(CATEGORIES)}
     s.add_all(cats.values())
     s.flush()
-
     order = 0
     for name, location, respawn in BOSSES:
         s.add(Event(
-            category_id=cats["World Boss"].id, name=name, location=location, schedule_type="kill_report",
-            schedule_params={}, respawn_minutes=respawn, slots=make_slots(ALL_PING), sort_order=order,
-            source="scope",
+            game_id=game.id, category_id=cats["World Boss"].id, name=name, location=location,
+            schedule_type="kill_report", schedule_params={}, respawn_minutes=respawn, slots=make_slots(ALL_PING),
+            sort_order=order, source="scope",
         ))
         order += 1
     for name, cat, stype, params, dur, slots, dash, label, label_active, key in SCHEDULED:
         s.add(Event(
-            category_id=cats[cat].id, name=name, schedule_type=stype,
+            game_id=game.id, category_id=cats[cat].id, name=name, schedule_type=stype,
             schedule_params=schedules.get(stype).validate(params), duration_minutes=dur,
             slots=make_slots(slots), dashboard=dash, dashboard_label=label,
             dashboard_label_active=label_active, sort_order=order,
             source="shugo.gg" if key else "scope", source_key=key,
         ))
         order += 1
-    return True
+    s.add_all(PfClass(game_id=game.id, name=n, emoji=e, class_type=t, sort_order=i)
+              for i, (n, e, t) in enumerate(PF_CLASSES))
+    s.add_all(PfBracket(game_id=game.id, label=l, min_score=a, max_score=b, sort_order=i)
+              for i, (l, a, b) in enumerate(PF_BRACKETS))
+    s.flush()
 
 
 PF_CLASSES = [
@@ -96,29 +110,44 @@ PF_WINDOWS = [(15, "15 min"), (30, "30 min"), (60, "1 hr"), (120, "2 hr"), (240,
 def upgrade_defaults(s: Session) -> list[str]:
     """Move existing installs off defaults that changed, without touching
     anything the admin customised."""
-    st = get_settings(s)
+    from . import games
+
+    server = get_settings(s)
     done = []
+    state = get_state(s)
+    applied = list(state.upgrades_done or [])
+    if server.roles_header == "# 🎭 Roles\nPick your class, then the pings you want. Change them any time.":
+        server.roles_header = "# 🎭 Roles\nPick your classes and gear score, then the pings you want. Change them any time."
+        done.append("roles channel header")
+    if "\\n" in (server.roles_header or ""):  # older upgrades stored "\n" as two characters
+        server.roles_header = server.roles_header.replace("\\n", "\n")
+        done.append("roles header")
+    for st in games.all_games(s):
+        if st.kind == "aion2":
+            done += _upgrade_aion2(s, st, applied)
+    state.upgrades_done = applied
+    return done
+
+
+def _upgrade_aion2(s: Session, st: Game, applied: list[str]) -> list[str]:
+    done = []
+    g = st.id
     if st.dashboard_title == "⏱️ AION2 Timers":
         st.dashboard_title = "⏱️ AION 2 Timers"
         done.append("dashboard title")
-    state = get_state(s)
-    applied = list(state.upgrades_done or [])
     if "bracket_2100_plus" not in applied:
-        if s.scalar(select(PfBracket).limit(1)) is not None and \
-                s.scalar(select(PfBracket).where(PfBracket.label == "2100+")) is None:
-            top = max((b.sort_order for b in s.scalars(select(PfBracket))), default=0)
-            s.add(PfBracket(label="2100+", min_score=2100, max_score=9999, sort_order=top + 1))
+        mine = list(s.scalars(select(PfBracket).where(PfBracket.game_id == g)))
+        if mine and not any(b.label == "2100+" for b in mine):
+            top = max((b.sort_order for b in mine), default=0)
+            s.add(PfBracket(game_id=g, label="2100+", min_score=2100, max_score=9999, sort_order=top + 1))
             done.append("gear score bracket 2100+")
         applied.append("bracket_2100_plus")
-        state.upgrades_done = applied
-    if st.roles_header == "# 🎭 Roles\nPick your class, then the pings you want. Change them any time.":
-        st.roles_header = "# 🎭 Roles\nPick your classes and gear score, then the pings you want. Change them any time."
-        done.append("roles channel header")
     if st.oneoff_label in ("One-offs", "World bosses and one-offs"):
         st.oneoff_label = "World Bosses"
         done.append("dashboard boss section name")
     if "boss_order_gartua_first" not in applied:
-        bosses = {e.name: e for e in s.scalars(select(Event).where(Event.schedule_type == "kill_report"))}
+        bosses = {e.name: e for e in s.scalars(select(Event).where(Event.schedule_type == "kill_report",
+                                                                  Event.game_id == g))}
         if bosses:
             ordered = [bosses[n] for n in BOSS_ORDER if n in bosses]
             ordered += sorted((e for n, e in bosses.items() if n not in BOSS_ORDER), key=lambda e: e.sort_order)
@@ -126,9 +155,9 @@ def upgrade_defaults(s: Session) -> list[str]:
                 e.sort_order = i
             done.append("boss button order")
         applied.append("boss_order_gartua_first")
-        state.upgrades_done = applied
     if "boss_route_2026_10_11" not in applied:
-        bosses = {e.name: e for e in s.scalars(select(Event).where(Event.schedule_type == "kill_report"))}
+        bosses = {e.name: e for e in s.scalars(select(Event).where(Event.schedule_type == "kill_report",
+                                                                  Event.game_id == g))}
         if bosses:
             locations = {name: loc for name, loc, _ in BOSSES}
             for name, e in bosses.items():
@@ -140,7 +169,6 @@ def upgrade_defaults(s: Session) -> list[str]:
                 e.sort_order = i
             done.append("boss route order and locations")
         applied.append("boss_route_2026_10_11")
-        state.upgrades_done = applied
     if st.dashboard_commands_label == "Commands":  # was a heading over a command list
         st.dashboard_commands_label = "💡 Type `/nyerk` for more: report a kill with a custom time, and see, edit or cancel your timers."
         done.append("dashboard /nyerk reminder")
@@ -148,7 +176,7 @@ def upgrade_defaults(s: Session) -> list[str]:
         st.report_offset_min = 1
         done.append("report offset (5 → 1 minute)")
     # Columns added by older upgrades stored "\n" as two characters.
-    for col in ("roles_header", "dashboard_footer"):
+    for col in ("dashboard_footer",):
         value = getattr(st, col) or ""
         if "\\n" in value:
             setattr(st, col, value.replace("\\n", "\n"))
@@ -157,14 +185,9 @@ def upgrade_defaults(s: Session) -> list[str]:
 
 
 def seed_party_finder(s: Session) -> bool:
-    """Party finder defaults, separately so existing installs get them too.
-    Role IDs stay 0 until set in the admin page or imported."""
-    if s.scalar(select(PfClass).limit(1)) is not None:
-        return False
-    s.add_all(PfClass(name=n, emoji=e, class_type=t, sort_order=i) for i, (n, e, t) in enumerate(PF_CLASSES))
-    s.add_all(PfBracket(label=l, min_score=a, max_score=b, sort_order=i) for i, (l, a, b) in enumerate(PF_BRACKETS))
-    s.add_all(PfWindow(minutes=m, label=l) for m, l in PF_WINDOWS)
-    return True
+    """Kept for older callers: party finder defaults now come with each
+    game's template (seed_game)."""
+    return False
 
 
 def seed_reaction_groups(s: Session) -> bool:

@@ -3,51 +3,16 @@
 {% block content %}
 <h1>Settings</h1>
 <p class="lede">Applies on the next scheduler check, no restart needed.</p>
-<div class="actions">{% if is_owner %}<a class="btn secondary small" href="/access">Access and security</a>{% endif %}{% if can.history %}<a class="btn secondary small" href="/history">Change history</a>{% endif %}</div>
+<div class="actions"><a class="btn secondary small" href="/games">Games</a>{% if is_owner %}<a class="btn secondary small" href="/access">Access and security</a>{% endif %}{% if can.history %}<a class="btn secondary small" href="/history">Change history</a>{% endif %}</div>
 
 <form method="post" action="/settings">
   <input type="hidden" name="csrf" value="{{ csrf }}">
+  <h2 class="group-head" id="server">Server <span class="small muted">· every game</span></h2>
   <p class="section-label" id="channels">Channels</p>
   <div class="card fields">
-    <div class="field"><label for="timer_channel_id">Timer channel</label><input id="timer_channel_id" name="timer_channel_id" class="mono" type="text" value="{{ st.timer_channel_id or '' }}"><div class="help">#aion-2-timer. Alerts and the dashboard.</div></div>
-    <div class="field"><label for="roles_channel_id">Roles channel</label><input id="roles_channel_id" name="roles_channel_id" class="mono" type="text" value="{{ st.roles_channel_id or '' }}"><div class="help">#aion-2-roles. Header, classes, gear score, ping roles and ping settings.</div></div>
+    <div class="field"><label for="roles_channel_id">Roles channel</label><input id="roles_channel_id" name="roles_channel_id" class="mono" type="text" value="{{ st.roles_channel_id or '' }}"><div class="help">Header, each game's classes and gear score, ping roles and ping settings.</div></div>
     <div class="field"><label for="log_channel_id">Log channel</label><input id="log_channel_id" name="log_channel_id" class="mono" type="text" value="{{ st.log_channel_id or '' }}"><div class="help">#logs.</div></div>
-    <div class="field"><label for="party_channel_id">Party channel</label><input id="party_channel_id" name="party_channel_id" class="mono" type="text" value="{{ st.party_channel_id or '' }}"><div class="help">#aion-2-party-finder. Panels, listings and pings.</div></div>
-  </div>
-
-  <p class="section-label" id="boss-reports">Boss reports</p>
-  <div class="card fields">
-    <div class="field"><label for="user_timer_limit">Active timers per user</label><input id="user_timer_limit" name="user_timer_limit" type="number" min="1" max="100" value="{{ st.user_timer_limit }}"></div>
-    <div class="field"><label for="report_offset_min">Report offset (minutes)</label><input id="report_offset_min" name="report_offset_min" type="number" min="0" max="120" value="{{ st.report_offset_min }}"><div class="help">A report with no time assumes the kill happened this long ago.</div></div>
     <div class="field"><label for="default_tz">Server time zone</label><input id="default_tz" name="default_tz" type="text" list="tz-list" value="{{ st.default_tz }}"><div class="help">Used to read times like "14:30" in reports.</div></div>
-  </div>
-
-  <p class="section-label" id="dashboard-and-cleanup">Dashboard and cleanup</p>
-  <div class="card fields">
-    <div class="field"><label for="alert_retention_min">Delete alerts after (minutes)</label><input id="alert_retention_min" name="alert_retention_min" type="number" min="30" max="10080" value="{{ st.alert_retention_min }}"><div class="help">Counted from the event's start time, or a boss's spawn time. 120 = 2 hours. Alerts under an hour old are always kept.</div></div>
-    <div class="field"><label for="dashboard_max_oneoffs">Max World Bosses lines</label><input id="dashboard_max_oneoffs" name="dashboard_max_oneoffs" type="number" min="1" max="60" value="{{ st.dashboard_max_oneoffs }}"></div>
-    <div class="field"><label for="dashboard_divider">Divider line</label><input id="dashboard_divider" name="dashboard_divider" type="text" maxlength="100" value="{{ st.dashboard_divider }}"><div class="help">Sits above the title to separate the dashboard from alerts. Blank hides it.</div></div>
-    <div class="field"><label for="dashboard_title">Title</label><input id="dashboard_title" name="dashboard_title" type="text" maxlength="100" value="{{ st.dashboard_title }}"><div class="help">Large heading. Blank hides it.</div></div>
-    <div class="field"><label for="dashboard_top_label">Resets and maintenance heading</label><input id="dashboard_top_label" name="dashboard_top_label" type="text" maxlength="64" value="{{ st.dashboard_top_label }}"></div>
-    <div class="field"><label for="dashboard_main_label">Scheduled events heading</label><input id="dashboard_main_label" name="dashboard_main_label" type="text" maxlength="64" value="{{ st.dashboard_main_label }}"></div>
-    <div class="field"><label for="oneoff_label">World Bosses heading</label><input id="oneoff_label" name="oneoff_label" type="text" maxlength="64" value="{{ st.oneoff_label }}"><div class="help">Boss timers, plus any one-off events you add (like a season ending).</div></div>
-    <div class="field"><label for="dashboard_boss_note">World Bosses note</label><input id="dashboard_boss_note" name="dashboard_boss_note" type="text" maxlength="300" value="{{ st.dashboard_boss_note }}"><div class="help">Small grey line under the heading, e.g. the usual boss route. Blank hides it.</div></div>
-    <div class="field"><label for="dashboard_commands_label">/nyerk reminder</label><input id="dashboard_commands_label" name="dashboard_commands_label" type="text" maxlength="200" value="{{ st.dashboard_commands_label }}"><div class="help">One line telling members about the /nyerk commands. Blank hides it.</div></div>
-    <div class="field"><label for="dashboard_footer">Footer</label><input id="dashboard_footer" name="dashboard_footer" type="text" maxlength="200" value="{{ st.dashboard_footer }}"><div class="help">Small grey line at the bottom. Blank hides it.</div></div>
-    <div class="field"><label for="time_style_near">Time style within 24 h</label>
-      <select id="time_style_near" name="time_style_near">{% for k, label in TS_STYLES.items() %}<option value="{{ k }}" {{ 'selected' if st.time_style_near == k }}>:{{ k }} · {{ label }}</option>{% endfor %}</select></div>
-    <div class="field"><label for="time_style_far">Time style beyond 24 h</label>
-      <select id="time_style_far" name="time_style_far">{% for k, label in TS_STYLES.items() %}<option value="{{ k }}" {{ 'selected' if st.time_style_far == k }}>:{{ k }} · {{ label }}</option>{% endfor %}</select></div>
-  </div>
-
-  <p class="section-label" id="party-timing-minutes">Party timing (minutes)</p>
-  <div class="card fields">
-    <div class="field"><label for="party_lifetime_min">Listing lifetime</label><input id="party_lifetime_min" name="party_lifetime_min" type="number" min="5" value="{{ st.party_lifetime_min }}"></div>
-    <div class="field"><label for="party_warn_min">Leader warning before close</label><input id="party_warn_min" name="party_warn_min" type="number" min="1" value="{{ st.party_warn_min }}"></div>
-    <div class="field"><label for="party_extend_min">Extension length</label><input id="party_extend_min" name="party_extend_min" type="number" min="5" value="{{ st.party_extend_min }}"></div>
-    <div class="field"><label for="party_max_extensions">Max extensions</label><input id="party_max_extensions" name="party_max_extensions" type="number" min="0" value="{{ st.party_max_extensions }}"><div class="help">A count, not minutes.</div></div>
-    <div class="field"><label for="party_status_hold_min">Full party stays in status</label><input id="party_status_hold_min" name="party_status_hold_min" type="number" min="5" value="{{ st.party_status_hold_min }}"><div class="help">Unless the leader presses Done first.</div></div>
-    <div class="field"><label for="party_ping_gap_min">Ping limit per member</label><input id="party_ping_gap_min" name="party_ping_gap_min" type="number" min="0" value="{{ st.party_ping_gap_min }}"><div class="help">At most one interest ping per this many minutes.</div></div>
   </div>
 
   <p class="section-label" id="link-preview">Link preview</p>
@@ -56,11 +21,54 @@
     <div class="field"><label for="link_preview_description">Description</label><input id="link_preview_description" name="link_preview_description" type="text" maxlength="300" value="{{ st.link_preview_description }}"></div>
   </div>
 
+  <h2 class="group-head" id="game">{{ g.name }} <span class="small muted">· this game{% if many_games %}; switch games in the top bar{% endif %}</span></h2>
+  <p class="section-label" id="game-channels">Game channels</p>
+  <div class="card fields">
+    <div class="field"><label for="timer_channel_id">Timer channel</label><input id="timer_channel_id" name="timer_channel_id" class="mono" type="text" value="{{ g.timer_channel_id or '' }}"><div class="help">Alerts and the dashboard for {{ g.name }}. Each game needs its own.</div></div>
+    <div class="field"><label for="party_channel_id">Party channel</label><input id="party_channel_id" name="party_channel_id" class="mono" type="text" value="{{ g.party_channel_id or '' }}"><div class="help">Party finder panels, listings and pings for {{ g.name }}. Each game needs its own.</div></div>
+  </div>
+
+  <p class="section-label" id="boss-reports">Boss reports</p>
+  <div class="card fields">
+    <div class="field"><label for="user_timer_limit">Active timers per user</label><input id="user_timer_limit" name="user_timer_limit" type="number" min="1" max="100" value="{{ g.user_timer_limit }}"></div>
+    <div class="field"><label for="report_offset_min">Report offset (minutes)</label><input id="report_offset_min" name="report_offset_min" type="number" min="0" max="120" value="{{ g.report_offset_min }}"><div class="help">A report with no time assumes the kill happened this long ago.</div></div>
+  </div>
+
+  <p class="section-label" id="dashboard-and-cleanup">Dashboard and cleanup</p>
+  <div class="card fields">
+    <div class="field"><label for="alert_retention_min">Delete alerts after (minutes)</label><input id="alert_retention_min" name="alert_retention_min" type="number" min="30" max="10080" value="{{ g.alert_retention_min }}"><div class="help">Counted from the event's start time, or a boss's spawn time. 120 = 2 hours. Alerts under an hour old are always kept.</div></div>
+    <div class="field"><label for="dashboard_max_oneoffs">Max boss lines</label><input id="dashboard_max_oneoffs" name="dashboard_max_oneoffs" type="number" min="1" max="60" value="{{ g.dashboard_max_oneoffs }}"></div>
+    <div class="field"><label for="dashboard_divider">Divider line</label><input id="dashboard_divider" name="dashboard_divider" type="text" maxlength="100" value="{{ g.dashboard_divider }}"><div class="help">Sits above the title to separate the dashboard from alerts. Blank hides it.</div></div>
+    <div class="field"><label for="dashboard_title">Title</label><input id="dashboard_title" name="dashboard_title" type="text" maxlength="100" value="{{ g.dashboard_title }}"><div class="help">Large heading. Blank hides it.</div></div>
+    <div class="field"><label for="dashboard_top_label">Resets and maintenance heading</label><input id="dashboard_top_label" name="dashboard_top_label" type="text" maxlength="64" value="{{ g.dashboard_top_label }}"></div>
+    <div class="field"><label for="dashboard_main_label">Scheduled events heading</label><input id="dashboard_main_label" name="dashboard_main_label" type="text" maxlength="64" value="{{ g.dashboard_main_label }}"></div>
+    <div class="field"><label for="oneoff_label">Bosses heading</label><input id="oneoff_label" name="oneoff_label" type="text" maxlength="64" value="{{ g.oneoff_label }}"><div class="help">Boss timers, plus any one-off events you add (like a season ending).</div></div>
+    <div class="field"><label for="dashboard_boss_note">Bosses note</label><input id="dashboard_boss_note" name="dashboard_boss_note" type="text" maxlength="300" value="{{ g.dashboard_boss_note }}"><div class="help">Small grey line under the heading, e.g. the usual boss route. Blank hides it.</div></div>
+    <div class="field"><label for="dashboard_commands_label">/nyerk reminder</label><input id="dashboard_commands_label" name="dashboard_commands_label" type="text" maxlength="200" value="{{ g.dashboard_commands_label }}"><div class="help">One line telling members about the /nyerk commands. Blank hides it.</div></div>
+    <div class="field"><label for="dashboard_footer">Footer</label><input id="dashboard_footer" name="dashboard_footer" type="text" maxlength="200" value="{{ g.dashboard_footer }}"><div class="help">Small grey line at the bottom. Blank hides it.</div></div>
+    <div class="field"><label for="time_style_near">Time style within 24 h</label>
+      <select id="time_style_near" name="time_style_near">{% for k, label in TS_STYLES.items() %}<option value="{{ k }}" {{ 'selected' if g.time_style_near == k }}>:{{ k }} · {{ label }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="time_style_far">Time style beyond 24 h</label>
+      <select id="time_style_far" name="time_style_far">{% for k, label in TS_STYLES.items() %}<option value="{{ k }}" {{ 'selected' if g.time_style_far == k }}>:{{ k }} · {{ label }}</option>{% endfor %}</select></div>
+  </div>
+
+  <p class="section-label" id="party-timing-minutes">Party timing (minutes)</p>
+  <div class="card fields">
+    <div class="field"><label for="party_lifetime_min">Listing lifetime</label><input id="party_lifetime_min" name="party_lifetime_min" type="number" min="5" value="{{ g.party_lifetime_min }}"></div>
+    <div class="field"><label for="party_warn_min">Leader warning before close</label><input id="party_warn_min" name="party_warn_min" type="number" min="1" value="{{ g.party_warn_min }}"></div>
+    <div class="field"><label for="party_extend_min">Extension length</label><input id="party_extend_min" name="party_extend_min" type="number" min="5" value="{{ g.party_extend_min }}"></div>
+    <div class="field"><label for="party_max_extensions">Max extensions</label><input id="party_max_extensions" name="party_max_extensions" type="number" min="0" value="{{ g.party_max_extensions }}"><div class="help">A count, not minutes.</div></div>
+    <div class="field"><label for="party_status_hold_min">Full party stays in status</label><input id="party_status_hold_min" name="party_status_hold_min" type="number" min="5" value="{{ g.party_status_hold_min }}"><div class="help">Unless the leader presses Done first.</div></div>
+    <div class="field"><label for="party_ping_gap_min">Ping limit per member</label><input id="party_ping_gap_min" name="party_ping_gap_min" type="number" min="0" value="{{ g.party_ping_gap_min }}"><div class="help">At most one interest ping per this many minutes.</div></div>
+  </div>
+
+  {% if g.kind == 'aion2' %}
   <p class="section-label" id="defaults-source">Defaults source</p>
   <div class="card fields">
-    <div class="field"><label for="shugo_url">Timer page</label><input id="shugo_url" name="shugo_url" type="url" value="{{ st.shugo_url }}"></div>
-    <div class="field"><label for="shugo_region">Region heading</label><input id="shugo_region" name="shugo_region" type="text" value="{{ st.shugo_region }}"></div>
+    <div class="field"><label for="shugo_url">Timer page</label><input id="shugo_url" name="shugo_url" type="url" value="{{ g.shugo_url }}"></div>
+    <div class="field"><label for="shugo_region">Region heading</label><input id="shugo_region" name="shugo_region" type="text" value="{{ g.shugo_region }}"></div>
   </div>
+  {% endif %}
   <datalist id="tz-list">{% for z in COMMON_TZ %}<option value="{{ z }}">{% endfor %}</datalist>
   <div class="savebar"><span class="small muted">Channel IDs: right-click a channel › Copy Channel ID.</span><button class="btn" type="submit">Save settings</button></div>
 </form>
@@ -74,7 +82,7 @@
       <tbody>{% for tab, what, count in export_counts %}<tr><td><strong>{{ tab }}</strong></td><td class="small">{{ what }}</td><td class="small muted">{{ count }}</td></tr>{% endfor %}</tbody>
     </table>
   </div>
-  <p class="small muted">Not included: the admin password, the bot token, boss timers, parties, registrations and one-week maintenance overrides. Import merges: categories, events and classes are matched by name, and anything not in the file is left alone, so a short file with only IDs works too.</p>
+  <p class="small muted">Not included: the admin password, the bot token, boss timers, parties, registrations and one-week maintenance overrides. Import merges: games are matched by name, and categories, events and classes inside a game by name, and anything not in the file is left alone, so a short file with only IDs works too.</p>
   <div class="actions">
     <a class="btn secondary" href="/settings/export">Export settings</a>
   </div>

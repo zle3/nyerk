@@ -38,6 +38,7 @@ demo.freeze_clock()
 from sqlalchemy import select  # noqa: E402
 
 from nyerk import db, engine, members, party, reaction_roles  # noqa: E402
+from nyerk import games  # noqa: E402
 from nyerk.db import get_settings  # noqa: E402
 from nyerk.models import Category, Event, PfParty, RoleHolder, UserTimer  # noqa: E402
 from tools.discord_mock import Button, Message, Select, buttons_in_rows, page  # noqa: E402
@@ -51,22 +52,22 @@ MEMBER_FOR_ME = 7  # Lyra
 
 def names(s):
     roles = {c.role_id: c.name for c in s.scalars(select(Category))}
-    roles |= {c.role_id: c.name for c in party.contents(s, False)}
-    roles |= {c.role_id: c.name for c in party.classes(s)}
-    st = get_settings(s)
+    roles |= {c.role_id: c.name for c in party.contents(s, 1, False)}
+    roles |= {c.role_id: c.name for c in party.classes(s, 1)}
+    st = games.first(s)
     roles |= {st.tank_role_id: "Tank", st.support_role_id: "Support", st.dps_role_id: "DPS"}
     users = {demo.uid(i): n for i, n in enumerate(demo.MEMBERS)}
     return roles, users
 
 
 def class_panel(s, at):
-    btns = [Button(c.name, emoji=c.emoji) for c in party.classes(s) if c.role_id][:23]
+    btns = [Button(c.name, emoji=c.emoji) for c in party.classes(s, 1) if c.role_id][:23]
     btns += [Button("My roles", "primary", "📋"), Button("Clear classes", "danger")]
-    return Message(at, party.CLASS_PANEL, buttons_in_rows(btns))
+    return Message(at, party.class_panel_text(games.first(s)), buttons_in_rows(btns))
 
 
 def gear_panel(s, at):
-    btns = [Button(b.label) for b in party.brackets(s)] + [Button("Clear", "danger")]
+    btns = [Button(b.label) for b in party.brackets(s, 1)] + [Button("Clear", "danger")]
     return Message(at, party.GEAR_PANEL, buttons_in_rows(btns))
 
 
@@ -90,7 +91,7 @@ def timer_channel(s):
         alert("Silent Dartan", t(14, 45), 15, orrin),
         alert("Silent Dartan", t(14, 45), 0, orrin),
     ]
-    dash = engine.build_dashboard(s, get_settings(s), NOW)
+    dash = engine.build_dashboard(s, games.first(s), NOW)
     btns = [Button(label, "primary" if bid == 0 else "secondary") for bid, label in dash.bosses]
     msgs.append(Message(t(14, 45), dash.text, buttons_in_rows(btns), edited=True))
     return msgs
@@ -117,12 +118,12 @@ def roles_channel(s):
 
 def party_channel(s, ctx):
     at = NOW - 2 * 86400
-    st = get_settings(s)
-    full = party.live_parties(s, "full")
+    st = games.first(s)
+    full = party.live_parties(s, 1, "full")
     open_p = s.get(PfParty, ctx["open_party_id"])
     msgs = [
         class_panel(s, at), gear_panel(s, at),
-        Message(at, party.interest_panel_text(s, NOW), [[Button("Register", "primary"),
+        Message(at, party.interest_panel_text(s, 1, NOW), [[Button("Register", "primary"),
                                                           Button("Cancel my registration")]], edited=True),
         Message(at, party.CREATE_PANEL.format(lifetime=st.party_lifetime_min), [[Button("Create party", "primary")]]),
         Message(at, party.status_text(full, st.party_chat_delete_min), buttons_in_rows(

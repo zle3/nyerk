@@ -126,8 +126,8 @@ def _same_schedule(a_type: str, a_params: dict, b_type: str, b_params: dict, now
     )
 
 
-def diff(s: Session, items: list[dict], now: int) -> list[dict]:
-    events = list(s.scalars(select(Event).where(Event.overrides_event_id.is_(None))))
+def diff(s: Session, items: list[dict], now: int, game_id: int) -> list[dict]:
+    events = list(s.scalars(select(Event).where(Event.overrides_event_id.is_(None), Event.game_id == game_id)))
     by_key = {e.source_key.lower(): e for e in events if e.source_key}
     by_name = {e.name.lower(): e for e in events}
     changes = []
@@ -161,28 +161,29 @@ def diff(s: Session, items: list[dict], now: int) -> list[dict]:
     return changes
 
 
-def apply(s: Session, pending: dict, keys: set[str]) -> list[str]:
-    """Apply selected changes. Locked (hand-edited) fields are never written."""
+def apply(s: Session, pending: dict, keys: set[str], game_id: int) -> list[str]:
+    """Apply selected changes to a game. Locked (hand-edited) fields are never written."""
     applied = []
     for ch in pending.get("changes", []):
         if ch["key"] not in keys:
             continue
         item = ch["item"]
         if ch["kind"] == "new":
-            cat = s.scalar(select(Category).order_by(Category.sort_order).where(Category.name == "Other"))
+            cat = s.scalar(select(Category).order_by(Category.sort_order).where(
+                Category.name == "Other", Category.game_id == game_id))
             if cat is None:
-                cat = Category(name="Other", sort_order=99)
+                cat = Category(game_id=game_id, name="Other", sort_order=99)
                 s.add(cat)
                 s.flush()
             s.add(Event(
-                category_id=cat.id, name=item["name"], schedule_type=item["schedule_type"],
+                game_id=game_id, category_id=cat.id, name=item["name"], schedule_type=item["schedule_type"],
                 schedule_params=item["schedule_params"], duration_minutes=item["duration_minutes"],
                 slots=make_slots(NONE), enabled=False, source="shugo.gg", source_key=item["name"], sort_order=50,
             ))
             applied.append(f"added {item['name']} (disabled)")
             continue
         e = s.get(Event, ch["event_id"])
-        if e is None:
+        if e is None or e.game_id != game_id:
             continue
         edited = set(e.edited_fields or [])
         if "schedule" in ch["fields"] and "schedule" not in edited:
@@ -194,7 +195,7 @@ def apply(s: Session, pending: dict, keys: set[str]) -> list[str]:
     return applied
 
 
-async def check(s_factory, url: str, region: str) -> tuple[dict | None, str]:
+async def check(s_factory, url: str, region: str, game_id: int) -> tuple[dict | None, str]:
     """Fetch and diff. Returns (pending or None, error)."""
     try:
         html = await fetch(url)
@@ -203,5 +204,5 @@ async def check(s_factory, url: str, region: str) -> tuple[dict | None, str]:
         return None, f"{type(exc).__name__}: {exc}"
     now = int(time.time())
     with s_factory() as s:
-        changes = diff(s, items, now)
+        changes = diff(s, items, now, game_id)
     return {"fetched_at": now, "changes": changes, "parsed": len(items)}, ""
