@@ -1856,6 +1856,33 @@ def create_app(cfg, bot=None) -> FastAPI:
         flash(request, "Settings saved.")
         return back("/settings")
 
+    @app.post("/settings/channels/create")
+    async def settings_create_channels(request: Request):
+        """Create the missing channels (or one: kind) and save their IDs."""
+        data = await form(request)
+        bot = _bot_ready()
+        if not bot:
+            flash(request, "Bot is not connected.", "err")
+            return back("/settings#channels")
+        kind = str(data.get("kind", ""))
+        kinds = [kind] if kind in ("timer", "party", "roles", "logs") else ["timer", "party", "roles", "logs"]
+        with db.session() as s:
+            game_id = game_of(request, s).id
+        try:
+            made = await bot.create_channels(guild_of(request), game_id, kinds)
+        except Exception as exc:
+            bus.error("config", f"Creating channels failed: {exc!r}")
+            flash(request, f"Discord refused: {exc}. Nyerk needs the Manage Channels and Manage Roles "
+                           "permissions.", "err")
+            return back("/settings#channels")
+        if not made:
+            flash(request, "Every channel is already set.")
+            return back("/settings#channels")
+        refresh(repost=True, game_id=game_id)
+        flash(request, f"Created {', '.join(made)} in a Nyerk category. Next: post the party finder panels and "
+                       "the roles channel.")
+        return back("/settings#channels")
+
     @app.post("/settings/password")
     async def settings_password(request: Request):
         data = await form(request)
@@ -2385,7 +2412,7 @@ def _role_id(raw) -> int:
     return safety.check_role(_snowflake(raw))
 
 
-INVITE_PERMISSIONS = 2415995968  # the Quick start's permission set
+INVITE_PERMISSIONS = 2415995984  # the Quick start's permission set
 
 
 def _invite_url(cfg, bot) -> str:

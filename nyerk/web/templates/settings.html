@@ -10,8 +10,8 @@
   <h2 class="group-head" id="server">Server <span class="small muted">· every game</span></h2>
   <p class="section-label" id="channels">Channels</p>
   <div class="card fields">
-    <div class="field"><label for="roles_channel_id">Roles channel</label><input id="roles_channel_id" name="roles_channel_id" class="mono" type="text" value="{{ st.roles_channel_id or '' }}"><div class="help">Header, each game's classes and gear score, ping roles and ping settings.</div></div>
-    <div class="field"><label for="log_channel_id">Log channel</label><input id="log_channel_id" name="log_channel_id" class="mono" type="text" value="{{ st.log_channel_id or '' }}"><div class="help">#logs.</div></div>
+    <div class="field"><label for="roles_channel_id">Roles channel</label><input id="roles_channel_id" name="roles_channel_id" class="mono" type="text" value="{{ st.roles_channel_id or '' }}">{% if not st.roles_channel_id %}<button class="btn small secondary mt" type="submit" form="mk-ch-roles">Create channel</button>{% endif %}<div class="help">Header, each game's classes and gear score, ping roles and ping settings.</div></div>
+    <div class="field"><label for="log_channel_id">Log channel</label><input id="log_channel_id" name="log_channel_id" class="mono" type="text" value="{{ st.log_channel_id or '' }}">{% if not st.log_channel_id %}<button class="btn small secondary mt" type="submit" form="mk-ch-logs">Create channel</button>{% endif %}<div class="help">#logs. A channel Nyerk creates is visible to admins only.</div></div>
     <div class="field"><label for="default_tz">Server time zone</label><input id="default_tz" name="default_tz" type="text" list="tz-list" value="{{ st.default_tz }}"><div class="help">Used to read times like "14:30" in reports.</div></div>
   </div>
 
@@ -24,9 +24,13 @@
   <h2 class="group-head" id="game">{{ g.name }} <span class="small muted">· this game{% if many_games %}; switch games in the top bar{% endif %}</span></h2>
   <p class="section-label" id="game-channels">Game channels</p>
   <div class="card fields">
-    <div class="field"><label for="timer_channel_id">Timer channel</label><input id="timer_channel_id" name="timer_channel_id" class="mono" type="text" value="{{ g.timer_channel_id or '' }}"><div class="help">Alerts and the dashboard for {{ g.name }}. Each game needs its own.</div></div>
-    <div class="field"><label for="party_channel_id">Party channel</label><input id="party_channel_id" name="party_channel_id" class="mono" type="text" value="{{ g.party_channel_id or '' }}"><div class="help">Party finder panels, listings and pings for {{ g.name }}. Each game needs its own.</div></div>
+    <div class="field"><label for="timer_channel_id">Timer channel</label><input id="timer_channel_id" name="timer_channel_id" class="mono" type="text" value="{{ g.timer_channel_id or '' }}">{% if not g.timer_channel_id %}<button class="btn small secondary mt" type="submit" form="mk-ch-timer">Create channel</button>{% endif %}<div class="help">Alerts and the dashboard for {{ g.name }}. Each game needs its own.</div></div>
+    <div class="field"><label for="party_channel_id">Party channel</label><input id="party_channel_id" name="party_channel_id" class="mono" type="text" value="{{ g.party_channel_id or '' }}">{% if not g.party_channel_id %}<button class="btn small secondary mt" type="submit" form="mk-ch-party">Create channel</button>{% endif %}<div class="help">Party finder panels, listings and pings for {{ g.name }}. Each game needs its own.</div></div>
   </div>
+
+  {% if not (st.roles_channel_id and st.log_channel_id and g.timer_channel_id and g.party_channel_id) %}
+  <p class="small muted">Create channel makes it in a "Nyerk" category with the right permissions: the timer and roles channels are read-only for members, members can chat in the party channel, and the log channel is for admins only. <button class="btn small secondary" type="submit" form="mk-ch-all">Create all missing channels</button></p>
+  {% endif %}
 
   <p class="section-label" id="boss-reports">Boss reports</p>
   <div class="card fields">
@@ -111,4 +115,7 @@
   <button class="btn secondary" type="submit">Change password</button>
 </form>
 {% endif %}
+{% for kind in ('timer', 'party', 'roles', 'logs', 'all') %}
+<form method="post" action="/settings/channels/create" id="mk-ch-{{ kind }}" hidden data-confirm="Create {{ 'the missing channels' if kind == 'all' else 'this channel' }} in Discord?"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ kind }}"></form>
+{% endfor %}
 {% endblock %}

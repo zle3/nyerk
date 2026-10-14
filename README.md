@@ -68,12 +68,12 @@ No coding needed. You need a computer or home server that stays on, with [Docker
 2. **Bot** → **Reset Token** → copy the token. Treat it like a password: never share it.
 3. **General Information** → copy the **Application ID**.
 4. Invite the bot: open this link with your Application ID pasted in, and pick your server.
-   `https://discord.com/oauth2/authorize?client_id=YOUR_APPLICATION_ID&scope=bot+applications.commands&permissions=2415995968`
+   `https://discord.com/oauth2/authorize?client_id=YOUR_APPLICATION_ID&scope=bot+applications.commands&permissions=2415995984`
 
 **2. Prepare your Discord server**
 
 1. Turn on **User Settings → Advanced → Developer Mode**, so you can right-click anything → **Copy ID**.
-2. Make four channels (any names): timers, roles, logs, and party finder (optional). Make the timer channel **read-only** for members; buttons and commands still work there. Members may chat in the party finder channel: Nyerk deletes their messages after 15 minutes.
+2. Make four channels (any names): timers, roles, logs, and party finder (optional). Or skip this: once Nyerk runs, **Settings → Create all missing channels** makes them with the right permissions. Make the timer channel **read-only** for members; buttons and commands still work there. Members may chat in the party finder channel: Nyerk deletes their messages after 15 minutes.
 3. Make the roles members will pick: one per event they want pings for (World Boss, Shugo, Rift, …), each set to **Allow anyone to @mention this role**. For the party finder, also one per class and Tank, Support and DPS.
 4. In **Server Settings → Roles**, drag **Nyerk's role above all of those**, or it can't hand them out.
 
