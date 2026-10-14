@@ -896,6 +896,57 @@ class NyerkBot(discord.Client):
             bus.info("roles", f"Created {what} {name} ({role.id}).")
         return made
 
+    async def create_channels(self, guild_id: int, game_id: int, kinds: list[str]) -> list[str]:
+        """Create the channels Nyerk needs that aren't set yet (CHANNELS),
+        in a "Nyerk" category, with members' permissions set for each, and
+        save their IDs. Returns the names made."""
+        guild = self._guild(guild_id)
+        if guild is None:
+            raise RuntimeError("Not connected to a server")
+        with db.session() as s:
+            st, g = get_settings(s, guild_id), s.get(Game, game_id)
+            if g is None or g.guild_id != guild_id:
+                return []
+            current = {"roles": st.roles_channel_id, "logs": st.log_channel_id,
+                       "timer": g.timer_channel_id, "party": g.party_channel_id}
+            many = len(games.all_games(s, guild_id)) > 1
+            game_name = g.name
+            admin_roles = {int(x) for x in (st.admin_role_ids or "").replace(" ", "").split(",") if x.isdigit()}
+        todo = [k for k in CHANNELS if k in kinds and not current[k]]
+        if not todo:
+            return []
+        category = discord.utils.get(guild.categories, name="Nyerk") or \
+            await guild.create_category("Nyerk", reason="Nyerk channels")
+        made = []
+        for kind in todo:
+            name, members_post, private = CHANNELS[kind]
+            if kind in ("timer", "party") and many:
+                name = f"{_slug(game_name)}-{name}"
+            everyone = discord.PermissionOverwrite(view_channel=not private, read_message_history=not private,
+                                                   send_messages=members_post, add_reactions=False)
+            if kind == "party":
+                everyone.add_reactions = None  # members' chat: the server's usual reactions
+            overwrites = {guild.default_role: everyone,
+                          guild.me: discord.PermissionOverwrite(
+                              view_channel=True, send_messages=True, read_message_history=True,
+                              manage_messages=True, add_reactions=True, embed_links=True)}
+            if private:
+                for rid in admin_roles:
+                    role = guild.get_role(rid)
+                    if role is not None:
+                        overwrites[role] = discord.PermissionOverwrite(view_channel=True, read_message_history=True)
+            channel = await guild.create_text_channel(name, category=category, overwrites=overwrites,
+                                                      reason="Nyerk channel")
+            with db.session() as s:
+                if kind in ("roles", "logs"):
+                    setattr(get_settings(s, guild_id), "roles_channel_id" if kind == "roles" else "log_channel_id",
+                            channel.id)
+                else:
+                    setattr(s.get(Game, game_id), f"{kind}_channel_id", channel.id)
+            made.append(f"#{channel.name}")
+            bus.info("config", f"Created channel #{channel.name} ({kind}).")
+        return made
+
     async def fetch_member(self, guild_id: int, user_id: int) -> tuple[str, set[int]] | None:
         """Display name and role IDs for one member of a server, straight from
         Discord. Uses a normal API lookup, so no privileged intent is needed."""
@@ -1112,6 +1163,23 @@ def _chunks(lines: list[str], size: int) -> list[str]:
         else:
             cur = f"{cur}\n{line}" if cur else line
     return out + ([cur] if cur else [])
+
+
+# Channels Nyerk can create: kind -> (name, members may post, private).
+# The timer and roles channels are read-only for members (buttons, reactions
+# on Nyerk's own reactions and commands still work); members chat in the
+# party channel; the log channel is for admins only.
+CHANNELS = {
+    "timer": ("timers", False, False),
+    "party": ("party-finder", True, False),
+    "roles": ("roles", False, False),
+    "logs": ("nyerk-logs", False, True),
+}
+
+
+def _slug(name: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "game"
 
 
 def _slot_name(lead: int) -> str:
