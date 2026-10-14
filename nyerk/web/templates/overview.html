@@ -12,6 +12,18 @@
   </form>
 </div>
 
+{% if waiting %}
+<div class="banner">
+  <span>{{ waiting|length }} server{{ 's' if waiting|length != 1 }} waiting for your approval: {{ waiting|join(', ') }}.</span>
+  <a class="btn small" href="/servers">Review</a>
+</div>
+{% endif %}
+{% if setup and setup[0] < setup[1] %}
+<div class="banner">
+  <span>Setup: {{ setup[0] }} of {{ setup[1] }} steps done.</span>
+  <a class="btn small" href="/setup">Continue setup</a>
+</div>
+{% endif %}
 {% if pending_changes %}
 <div class="banner">
   <span>shugo.gg lists {{ pending_changes }} change{{ 's' if pending_changes != 1 }} to review.</span>

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
+{% block title %}Setup guide{% endblock %}
+{% block content %}
+{% set done, total = progress %}
+<div class="page-head">
+  <div>
+    <h1>Setup guide</h1>
+    <p class="lede">{% if done == total %}{{ game.name }} is set up. Everything below can be changed any time.{% else %}{{ done }} of {{ total }} steps done for {{ game.name }}. Work down the list; each step has a button that does it for you, or a link to do it by hand.{% endif %}</p>
+  </div>
+  <a class="btn secondary" href="/setup">Check again</a>
+</div>
+{% if not bot_online %}<div class="banner"><span>The bot isn't connected, so Nyerk can't create anything in Discord or check its permissions right now.</span></div>{% endif %}
+
+<ol class="steps">
+{% for st in steps %}
+  <li class="card step" id="{{ st.key }}">
+    <div class="step-head">
+      <strong>{{ loop.index }}. {{ st.title }}</strong>
+      {% if st.done %}<span class="pill ok">done</span>{% elif st.optional %}<span class="pill">optional</span>{% else %}<span class="pill warn">to do</span>{% endif %}
+    </div>
+    <p class="small {{ 'muted' if st.done }}">{{ st.detail }}</p>
+    {% if st.todo and not st.done %}<ul class="small">{% for x in st.todo[:12] %}<li>{{ x }}</li>{% endfor %}{% if st.todo|length > 12 %}<li>and {{ st.todo|length - 12 }} more</li>{% endif %}</ul>{% endif %}
+    <div class="actions">
+    {% if st.key == 'game' %}
+      <a class="btn small secondary" href="/games">Games</a>
+    {% elif st.key == 'channels' %}
+      {% if not st.done %}<form method="post" action="/setup/channels" class="inline-form" data-confirm="Create the missing channels in a Nyerk category?">{{ csrf_field() }}<button class="btn small" type="submit">Create missing channels</button></form>{% endif %}
+      <a class="btn small secondary" href="/settings#channels">Use my own channels</a>
+      <span class="small muted">Created channels: timer and roles read-only for members, party finder open for chat, logs for admins only. Needs Manage Channels.</span>
+    {% elif st.key == 'access' %}
+      <a class="btn small secondary" href="/setup#access">Check again</a>
+      <a class="btn small secondary" href="https://github.com/zle3/nyerk/wiki/Discord-permissions" rel="noopener">What Nyerk needs</a>
+    {% elif st.key == 'ping_roles' %}
+      {% if not st.done and st.todo %}<form method="post" action="/roles/create-missing" class="inline-form" data-confirm="Create a mentionable role for every ping category without one?">{{ csrf_field() }}<input type="hidden" name="what" value="ping"><button class="btn small" type="submit">Create missing ping roles</button></form>{% endif %}
+      <a class="btn small secondary" href="/categories">Use my own roles</a>
+    {% elif st.key == 'party_roles' %}
+      {% if not st.done and st.todo %}<form method="post" action="/roles/create-missing" class="inline-form" data-confirm="Create a role for every class, type and dungeon without one?">{{ csrf_field() }}<input type="hidden" name="what" value="party"><button class="btn small" type="submit">Create missing roles</button></form>{% endif %}
+      {% if game.link_home_id %}
+      {% if not st.done %}<form method="post" action="/party/linked/match" class="inline-form">{{ csrf_field() }}<button class="btn small secondary" type="submit">Match existing roles by name</button></form>{% endif %}
+      <a class="btn small secondary" href="/party#linked">Pick roles</a>
+      {% else %}
+      <a class="btn small secondary" href="/party#classes">Classes and dungeons</a>
+      {% endif %}
+      <span class="small muted">Tank, Support and DPS roles of those names are used if you have them.</span>
+    {% elif st.key == 'posted' %}
+      <form method="post" action="/setup/post" class="inline-form">{{ csrf_field() }}<button class="btn small {{ 'secondary' if st.done }}" type="submit">{{ 'Post everything again' if st.done else 'Post everything' }}</button></form>
+      <span class="small muted">Then check Discord: the dashboard in the timer channel, roles to react to, and the class picker in the party finder channel.</span>
+    {% elif st.key == 'share' %}
+      <a class="btn small secondary" href="/games#links">Shared party finders</a>
+    {% elif st.key == 'admins' %}
+      <a class="btn small secondary" href="/access">Access and security</a>
+    {% endif %}
+    </div>
+  </li>
+{% endfor %}
+</ol>
+{% if done == total %}<p><a class="btn" href="/">Go to the overview</a></p>{% endif %}
+{% endblock %}

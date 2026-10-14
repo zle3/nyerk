@@ -164,3 +164,16 @@
   });
   document.addEventListener("click", (e) => { if (!e.target.closest(".site-search")) close(); });
 })();
+
+// Copy buttons: data-copy="#input" copies that field's value.
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-copy]");
+  if (!btn) return;
+  const field = document.querySelector(btn.dataset.copy);
+  if (!field) return;
+  try { await navigator.clipboard.writeText(field.value); }
+  catch (err) { field.select(); document.execCommand("copy"); }
+  const label = btn.textContent;
+  btn.textContent = "Copied";
+  setTimeout(() => { btn.textContent = label; }, 1500);
+});

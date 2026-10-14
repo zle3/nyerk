@@ -25,7 +25,7 @@ from . import auth
 from . import search as websearch
 from . import security as websecurity
 
-from .. import db, engine, forgotten, games, history, linking, servers, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
+from .. import db, engine, forgotten, games, history, linking, onboarding, servers, members, party, quiet, reaction_roles, safety, schedules, shugo, stats, timers, transfer
 from ..db import get_settings, get_state
 from ..housekeeping import run_import_check
 from ..logbus import bus, current_guild
@@ -558,6 +558,11 @@ def create_app(cfg, bot=None) -> FastAPI:
             active = s.scalar(select(func.count()).select_from(UserTimer).join(Event).where(
                 UserTimer.status == "active", Event.game_id == game.id))
             ctx = dict(dash=dash, logs=logs, active=active, state=state, settings=game)
+            if may(request, "settings"):
+                ctx["setup"] = onboarding.progress(setup_steps(request, s))
+            if (current(request) or {}).get("host"):
+                ctx["waiting"] = [x.guild_name or str(x.guild_id) for x in servers.all_servers(s)
+                                  if x.status != servers.APPROVED and x.guild_id != servers.LEGACY]
         return render(request, "overview.html", **ctx)
 
     @app.post("/dashboard/repost")
@@ -664,13 +669,101 @@ def create_app(cfg, bot=None) -> FastAPI:
         flash(request, f"Now showing {name}.")
         return back(_same_site(str(request.headers.get("referer") or "/")))
 
+    def setup_steps(request: Request, s) -> list:
+        bot = _bot_ready()
+        game = game_of(request, s)
+        problems = bot.setup_problems(guild_of(request), game.id) if bot and hasattr(bot, "setup_problems") else None
+        return onboarding.steps(s, guild_of(request), game, problems)
+
     @app.get("/setup", response_class=HTMLResponse)
     async def setup_page(request: Request):
+        """A new server: pick the game. Afterwards: the setup guide."""
         require(request)
         with db.session() as s:
-            if games.all_games(s, guild_of(request)):
-                return back("/")
-        return render(request, "setup.html", kinds=games.KINDS)
+            if not games.all_games(s, guild_of(request)):
+                return render(request, "setup.html", kinds=games.KINDS)
+            rows = setup_steps(request, s)
+            game = game_of(request, s)
+            ctx = dict(steps=rows, progress=onboarding.progress(rows), game=game, bot_online=_bot_ready() is not None)
+        return render(request, "setup_guide.html", **ctx)
+
+    @app.post("/setup/channels")
+    async def setup_channels(request: Request):
+        await form(request)
+        bot = _bot_ready()
+        if not bot:
+            flash(request, "Bot is not connected.", "err")
+            return back("/setup#channels")
+        with db.session() as s:
+            game_id = game_of(request, s).id
+        try:
+            made = await bot.create_channels(guild_of(request), game_id, ["timer", "party", "roles", "logs"])
+        except Exception as exc:
+            bus.error("config", f"Creating channels failed: {exc!r}")
+            flash(request, f"Discord refused: {exc}. Give Nyerk's role Manage Channels and Manage Roles "
+                           "(Server Settings → Roles), then try again.", "err")
+            return back("/setup#channels")
+        refresh(repost=True, game_id=game_id)
+        flash(request, f"Created {', '.join(made)}." if made else "Every channel is already set.")
+        return back("/setup#access")
+
+    @app.post("/setup/post")
+    async def setup_post(request: Request):
+        """Post the dashboard, the roles channel and the party finder panels."""
+        await form(request)
+        bot = _bot_ready()
+        if not bot:
+            flash(request, "Bot is not connected.", "err")
+            return back("/setup#posted")
+        gid = guild_of(request)
+        with db.session() as s:
+            game_id = game_of(request, s).id
+        refresh(repost=True, game_id=game_id)
+
+        async def _run():
+            try:
+                await bot.post_roles_message(gid)
+                await bot.pf.post_panels(game_id, "all")
+            except Exception as exc:
+                bus.error("config", f"Posting during setup failed: {exc!r}")
+
+        asyncio.create_task(_run())
+        flash(request, "Posting the dashboard, roles channel and party finder panels. Reload in a moment.")
+        return back("/setup#posted")
+
+    @app.post("/roles/create-missing")
+    async def roles_create_missing(request: Request):
+        """Setup guide: create every missing event ping role (what=ping) or
+        party finder role (what=party: classes, Tank/Support/DPS, dungeons)."""
+        data = await form(request)
+        what = str(data.get("what", ""))
+        anchor = "/setup#ping_roles" if what == "ping" else "/setup#party_roles"
+        bot = _bot_ready()
+        if not bot:
+            flash(request, "Bot is not connected.", "err")
+            return back(anchor)
+        gid = guild_of(request)
+        with db.session() as s:
+            g = game_of(request, s)
+            game_id, linked = g.id, (g.id if g.link_home_id else None)
+            cats = [c.id for c in s.scalars(select(Category).where(Category.game_id == g.id, Category.role_id == 0))]
+            classes = [c.id for c in party.classes_for(s, g) if not c.role_id]
+            dungeons = [c.id for c in party.contents_for(s, g, False) if not c.role_id]
+        try:
+            if what == "ping":
+                made = await bot.create_category_roles(gid, cats)
+            else:
+                made = await bot.create_class_roles(gid, classes, game_id=linked)
+                made += await bot.create_type_roles(gid, game_id)
+                made += await bot.create_content_roles(gid, dungeons, game_id=linked)
+        except Exception as exc:
+            bus.error("roles", f"Creating roles failed: {exc!r}")
+            flash(request, f"Discord refused: {exc}. Nyerk needs the Manage Roles permission.", "err")
+            return back(anchor)
+        refresh()
+        flash(request, f"Created {len(made)} role{'s' if len(made) != 1 else ''}: {', '.join(made)}." if made
+              else "Every role was already set (Tank, Support and DPS roles of the same name were used).")
+        return back(anchor)
 
     @app.post("/setup")
     async def setup_save(request: Request):
@@ -686,8 +779,8 @@ def create_app(cfg, bot=None) -> FastAPI:
             flash(request, str(exc), "err")
             return back("/setup")
         bus.info("config", f"Set up for {name}.")
-        flash(request, f"Nyerk is set up for {name}. Next: paste your channel IDs below.")
-        return back("/settings")
+        flash(request, f"Nyerk is set up for {name}. Follow the steps below to finish.")
+        return back("/setup")
 
     @app.get("/games", response_class=HTMLResponse)
     async def games_page(request: Request):

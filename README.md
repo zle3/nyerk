@@ -105,7 +105,7 @@ docker compose up -d
 **4. Set it up in the web page**
 
 1. Open `https://YOUR-COMPUTER-IP:8443` (type the `https://`). Your browser warns about the certificate; that's expected, so continue.
-2. Sign in with your `ADMIN_PASSWORD`, then pick the game: **AION 2** (events, bosses, classes and gear scores ready to go) or **another game** (starts blank).
+2. Sign in with your `ADMIN_PASSWORD`, then pick the game: **AION 2** (events, bosses, classes and gear scores ready to go) or **another game** (starts blank). The **setup guide** opens next: it checks each step below and has a button for most of them (create channels, create roles, check Nyerk's permissions, post everything). The steps below are the same thing by hand.
 3. **Settings:** paste your channel IDs → **Save settings**, or click **Create all missing channels** if you skipped making them. Within a minute the dashboard appears in your timer channel.
 4. **Roles:** paste the role ID next to each event category and click **Save** on that row. When they're all in, click **Post roles channel**.
 5. **Party finder** (optional): paste the class role IDs (**Save classes**), or click **Create missing roles** under the classes, and the Tank, Support and DPS role IDs (**Save**). Add the dungeons people group for under **Content**, click **Create missing roles**, then **Post all panels**. Back on **Roles**, click **Post roles channel** again so the dungeon roles appear.

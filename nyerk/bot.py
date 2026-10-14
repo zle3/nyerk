@@ -15,7 +15,7 @@ from sqlalchemy import select
 from . import db, engine, games, linking, party, party_bot, quiet, reaction_roles, safety, servers, timers, tracking
 from .db import get_settings, get_state
 from .logbus import bus, current_guild, for_guild
-from .models import Event, Game, PfBracket, PfClass, PfContent, SentMessage, UserTimer
+from .models import Category, Event, Game, PfBracket, PfClass, PfContent, SentMessage, UserTimer
 from .timeparse import humanize
 
 log = logging.getLogger("nyerk.bot")
@@ -868,13 +868,81 @@ class NyerkBot(discord.Client):
         the new roles are this server's roles for them."""
         return await self._create_pf_roles(guild_id, "content", content_ids, game_id)
 
+    async def create_category_roles(self, guild_id: int, category_ids: list[int]) -> list[str]:
+        """Create a mentionable role for each event ping category without one."""
+        return await self._create_pf_roles(guild_id, "category", category_ids, None)
+
+    async def create_type_roles(self, guild_id: int, game_id: int) -> list[str]:
+        """Tank, Support and DPS roles for a game that has none set: a role of
+        that name Nyerk can hand out is used, otherwise one is created."""
+        guild = self._guild(guild_id)
+        if guild is None:
+            raise RuntimeError("Not connected to a server")
+        with db.session() as s:
+            g = s.get(Game, game_id)
+            if g is None or g.guild_id != guild_id:
+                return []
+            todo = [(k, label) for k, label in (("tank", "Tank"), ("support", "Support"), ("dps", "DPS"))
+                    if not getattr(g, f"{k}_role_id")]
+        have = {name.lower(): rid for rid, name, ok in self.guild_roles(guild_id) if ok}
+        made = []
+        for key, label in todo:
+            rid = have.get(label.lower())
+            if not rid:
+                rid = (await guild.create_role(name=label, mentionable=False, reason="Nyerk class type role")).id
+                made.append(label)
+                bus.info("roles", f"Created type role {label} ({rid}).")
+            with db.session() as s:
+                setattr(s.get(Game, game_id), f"{key}_role_id", rid)
+        return made
+
+    def setup_problems(self, guild_id: int, game_id: int) -> list[str] | None:
+        """What stops Nyerk working in a server, in plain words; None when
+        not connected. Checks the server-wide permissions it needs, what it
+        can do in each of its channels, and that its roles sit below Nyerk's."""
+        guild = self._guild(guild_id)
+        me = guild.me if guild is not None else None
+        if me is None:
+            return None
+        out = []
+        if not me.guild_permissions.manage_roles:
+            out.append("Nyerk's role needs Manage Roles (Server Settings → Roles → Nyerk).")
+        with db.session() as s:
+            st, g = get_settings(s, guild_id), s.get(Game, game_id)
+            channels = [("Timer", g.timer_channel_id, ("view_channel", "send_messages", "read_message_history")),
+                        ("Party finder", g.party_channel_id, ("view_channel", "send_messages", "read_message_history",
+                                                              "manage_messages")),
+                        ("Roles", st.roles_channel_id, ("view_channel", "send_messages", "read_message_history",
+                                                        "add_reactions")),
+                        ("Logs", st.log_channel_id, ("view_channel", "send_messages"))]
+            roles = {c.role_id for c in party.classes_for(s, g)} | {c.role_id for c in party.contents_for(s, g, False)} \
+                | {g.tank_role_id, g.support_role_id, g.dps_role_id} \
+                | {c.role_id for c in s.scalars(select(Category).where(Category.game_id == game_id))}
+        for label, cid, need in channels:
+            if not cid:
+                continue
+            ch = guild.get_channel(cid)
+            if ch is None:
+                out.append(f"{label} channel: not found. It was deleted, or Nyerk can't see it: "
+                           "add Nyerk's role to the channel (or its category) with View Channel.")
+                continue
+            perms = ch.permissions_for(me)
+            lacking = [n.replace("_", " ").title() for n in need if not getattr(perms, n)]
+            if lacking:
+                out.append(f"#{ch.name} ({label.lower()} channel): Nyerk needs {', '.join(lacking)}.")
+        top = me.top_role
+        above = sorted(r.name for r in (guild.get_role(x) for x in roles - {0}) if r is not None and r >= top)
+        if above:
+            out.append("Drag Nyerk's role above these roles so it can hand them out: " + ", ".join(above) + ".")
+        return out
+
     async def create_class_roles(self, guild_id: int, class_ids: list[int], game_id: int | None = None) -> list[str]:
         """Create a role for each of a server's classes without one (not
         mentionable: class roles are never pinged). game_id as above."""
         return await self._create_pf_roles(guild_id, "class", class_ids, game_id)
 
     async def _create_pf_roles(self, guild_id: int, kind: str, ids: list[int], game_id: int | None) -> list[str]:
-        model = PfContent if kind == "content" else PfClass
+        model = {"content": PfContent, "class": PfClass, "category": Category}[kind]
         guild = self._guild(guild_id)
         if guild is None:
             raise RuntimeError("Not connected to a server")
@@ -893,8 +961,8 @@ class NyerkBot(discord.Client):
                 elif row.role_id or s.get(Game, row.game_id).guild_id != guild_id:
                     continue
                 name = row.name
-            what = "dungeon ping role" if kind == "content" else "class role"
-            role = await guild.create_role(name=name[:100], mentionable=kind == "content",
+            what = {"content": "dungeon ping role", "class": "class role", "category": "event ping role"}[kind]
+            role = await guild.create_role(name=name[:100], mentionable=kind != "class",
                                            reason=f"Nyerk {what} (party finder)")
             with db.session() as s:
                 row = s.get(model, rid)
