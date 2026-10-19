@@ -58,7 +58,7 @@ services:
   # in the env. No ports are opened on your router; see https://github.com/zle3/nyerk/wiki/Public-access
   cloudflared:
     # Pinned release; set CLOUDFLARED_VERSION in the env to move to a newer one.
-    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.0}
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.1}
     container_name: nyerk-tunnel
     profiles: [tunnel]
     restart: unless-stopped
