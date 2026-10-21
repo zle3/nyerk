@@ -63,9 +63,9 @@ async def amain(cfg: Config) -> None:
     bus.info("startup", f"Nyerk starting. Web admin on {scheme}://{cfg.web_host}:{cfg.web_port}", discord=False)
 
     servers = [server]
-    if cfg.is_public and cfg.tunnel_port and cfg.tunnel_port != cfg.web_port:
-        # For cloudflared on the stack network: plain HTTP, never published.
-        # Cloudflare provides HTTPS to visitors.
+    if (cfg.is_public or cfg.app_api_key) and cfg.tunnel_port and cfg.tunnel_port != cfg.web_port:
+        # For cloudflared, and the private app, on the stack network:
+        # plain HTTP, never published. Cloudflare provides HTTPS to visitors.
         # lifespan="off": the app's startup and shutdown run once, in the main server.
         tunnel_server = uvicorn.Server(uvicorn.Config(
             app, host="0.0.0.0", port=cfg.tunnel_port, log_level="warning", proxy_headers=False, lifespan="off"))

@@ -218,9 +218,15 @@ def test_every_route_requires_sign_in(app):
     from fastapi.routing import APIRoute
     c = TestClient(app, base_url="https://nyerk.example.com")
     public = {"/login", "/auth/discord", "/auth/callback", "/terms", "/privacy"}
+    # Key-protected instead (the private app): off while APP_API_KEY is unset.
+    keyed = {"/api/app/timers"}
     checked = 0
     for r in app.routes:
         if not isinstance(r, APIRoute) or r.path in public:
+            continue
+        if r.path in keyed:
+            for method in r.methods:
+                assert c.request(method, r.path).status_code == 404, (method, r.path)
             continue
         path = re.sub(r"\{[^}]+\}", "1", r.path)
         for method in r.methods:

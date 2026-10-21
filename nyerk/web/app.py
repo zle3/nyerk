@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, available_timezones
 
 import bcrypt
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
@@ -1789,6 +1789,91 @@ def create_app(cfg, bot=None) -> FastAPI:
             refresh()
         flash(request, result.reply.replace("your ", ""), "ok" if result.ok else "err")
         return back("/timers")
+
+    # -- Private app API: world boss timers from the game -----------------------------
+
+    def app_api_key(request: Request) -> None:
+        """The private app's key. 404 while APP_API_KEY is unset."""
+        key = cfg.app_api_key
+        if not key:
+            raise HTTPException(404)
+        got = request.headers.get("authorization", "")
+        if not secrets.compare_digest(got.encode(), f"Bearer {key}".encode()):
+            raise HTTPException(401)
+
+    def app_api_game(request: Request, s) -> Game:
+        """The game the private app reads and sets bosses in."""
+        app_api_key(request)
+        game = games.first(s, cfg.app_api_guild_id or cfg.guild_id)
+        if game is None:
+            raise HTTPException(404)
+        return game
+
+    @app.get("/api/app/timers")
+    async def app_api_timers(request: Request):
+        """The world bosses' active timers: {"timers": [{"boss", "fire_at", "by"}]}."""
+        with db.session() as s:
+            game = app_api_game(request, s)
+            out = []
+            for boss in timers.boss_events(s, enabled_only=False, game_id=game.id):
+                t = timers.active_for(s, boss)
+                if t is not None:
+                    out.append({"boss": boss.name, "fire_at": t.fire_at, "by": t.user_name})
+        return JSONResponse({"game": game.name, "timers": out})
+
+    @app.post("/api/app/timers")
+    async def app_api_set(request: Request):
+        """Respawn times read from the game: {"timers": [{"boss", "fire_at",
+        "by", "user_id"}]}. The game's time is exact, so it replaces the boss's
+        active timer (logged); one within a minute of it is left alone."""
+        app_api_key(request)
+        try:
+            body = await request.json()
+            items = list(body.get("timers", []))[:20]
+        except Exception:
+            raise HTTPException(400)
+        now = int(time.time())
+        result = {"set": [], "same": [], "unknown": []}
+        with db.session() as s:
+            game = app_api_game(request, s)
+            bosses = {e.name.lower(): e for e in timers.boss_events(s, enabled_only=False, game_id=game.id)}
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("boss", ""))[:100]
+                boss = bosses.get(name.lower())
+                try:
+                    fire = int(item.get("fire_at", 0))
+                except (TypeError, ValueError):
+                    fire = 0
+                if boss is None or not now < fire < now + 2 * 86400:
+                    result["unknown"].append(name)
+                    continue
+                by = str(item.get("by", "app"))[:60] or "app"
+                try:
+                    uid = int(item.get("user_id", 0))
+                except (TypeError, ValueError):
+                    uid = 0
+                existing = timers.active_for(s, boss)
+                if existing is not None and abs(existing.fire_at - fire) <= 60:
+                    result["same"].append(boss.name)
+                    continue
+                replaced = ""
+                if existing is not None:
+                    existing.status = "overridden"
+                    replaced = (f" Replaced timer #{existing.id} by {existing.user_name}, "
+                                f"which fired {engine.ts(existing.fire_at, 'f')}.")
+                s.add(UserTimer(
+                    event_id=boss.id, user_id=uid, user_name=f"{by} (game)", mode="countdown", killed_at=None,
+                    fire_at=fire, status="active", created_at=now, armed_at=now,
+                ))
+                result["set"].append(boss.name)
+                bus.info("timer", f"{boss.name}: respawn time from the game via the private app ({by}), "
+                                  f"fires {engine.ts(fire, 'f')}.{replaced}")
+            game_id = game.id
+        if result["set"]:
+            refresh(game_id=game_id)
+        return JSONResponse(result)
 
     # -- maintenance ------------------------------------------------------------------
 

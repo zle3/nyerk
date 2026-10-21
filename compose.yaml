@@ -32,6 +32,8 @@ services:
       ADMIN_ROLE_IDS: ${ADMIN_ROLE_IDS:-}
       PASSWORD_LOGIN: ${PASSWORD_LOGIN:-lan}
       TUNNEL_PORT: ${TUNNEL_PORT:-8080}
+      APP_API_KEY: ${APP_API_KEY:-}
+      APP_API_GUILD_ID: ${APP_API_GUILD_ID:-}
     # Container lockdown: read-only filesystem except /data and /tmp, no extra
     # privileges. The startup script keeps only what it needs to hand /data to
     # PUID:PGID, then Nyerk runs as that user with no capabilities at all.
