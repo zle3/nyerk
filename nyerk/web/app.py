@@ -1811,7 +1811,12 @@ def create_app(cfg, bot=None) -> FastAPI:
 
     @app.get("/api/app/timers")
     async def app_api_timers(request: Request):
-        """The world bosses' active timers: {"timers": [{"boss", "fire_at", "by"}]}."""
+        """The world bosses' active timers and the dashboard's events:
+        {"timers": [{"boss", "fire_at", "by"}], "events": [{"name", "label",
+        "category", "next_at", "running_until", "duration_min"}]}. Events are
+        the ones the dashboard shows, soonest first; times are Unix seconds,
+        null when there is none."""
+        now = int(time.time())
         with db.session() as s:
             game = app_api_game(request, s)
             out = []
@@ -1819,7 +1824,30 @@ def create_app(cfg, bot=None) -> FastAPI:
                 t = timers.active_for(s, boss)
                 if t is not None:
                     out.append({"boss": boss.name, "fire_at": t.fire_at, "by": t.user_name})
-        return JSONResponse({"game": game.name, "timers": out})
+            evs = engine.load_events(s, game.id)
+            overrides = engine._overrides(evs)
+            down = engine.maintenance_windows(evs, now, now + 7 * 86400).get(game.id, [])
+            events = []
+            for e in evs:
+                if not e.enabled or e.overrides_event_id or e.dashboard == "hidden" \
+                        or e.schedule_type == "kill_report":
+                    continue
+                running = engine.running_occurrence(e, now, overrides.get(e.id))
+                # Nothing happens during maintenance, except the top line's own events.
+                skip = None if e.dashboard == "top" else down
+                nxt = engine.next_occurrence(e, now, overrides.get(e.id), skip=skip)
+                if running is None and nxt is None:
+                    continue
+                events.append({
+                    "name": e.name,
+                    "label": engine._label(e, running is not None),
+                    "category": e.category.name if e.category else "",
+                    "next_at": nxt.at if nxt else None,
+                    "running_until": running.end if running else None,
+                    "duration_min": e.duration_minutes,
+                })
+            events.sort(key=lambda x: (x["running_until"] is None, x["next_at"] or 0))
+        return JSONResponse({"game": game.name, "timers": out, "events": events})
 
     @app.post("/api/app/timers")
     async def app_api_set(request: Request):
