@@ -54,3 +54,17 @@ def test_game_times_set_and_replace_timers(tmp_path, monkeypatch):
         rows = list(s.scalars(select(UserTimer).order_by(UserTimer.id)))
         assert [t.status for t in rows] == ["overridden", "active"]
         assert rows[1].fire_at == fire + 3600
+
+
+def test_events_come_with_the_timers(tmp_path, monkeypatch):
+    c = make(tmp_path, monkeypatch)
+    got = c.get("/api/app/timers", headers={"Authorization": "Bearer k3y"}).json()
+    names = [e["name"] for e in got["events"]]
+    # The AION 2 template's scheduled events (bosses are timers, not events).
+    assert "Shugo Festival" in names and "Daily reset" in names
+    assert "Eternal Gartua" not in names
+    now = int(time.time())
+    shugo = next(e for e in got["events"] if e["name"] == "Shugo Festival")
+    assert shugo["category"] == "Shugo"
+    # Hourly: on now, or due within the hour (unless maintenance is on).
+    assert shugo["running_until"] or (shugo["next_at"] and shugo["next_at"] - now <= 3600 + 4 * 3600)
