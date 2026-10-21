@@ -64,6 +64,13 @@ class Config:
     # published). Opened when PUBLIC_URL is set; 0 turns it off.
     tunnel_port: int = field(default_factory=lambda: _env_int("TUNNEL_PORT", 8080))
 
+    # -- Private app API -------------------------------------------------------
+    # Shared key for a private end-to-end app that reads world boss timers and
+    # sets them from players' games (/api/app/...). Empty: the API is off.
+    app_api_key: str = field(default_factory=lambda: _env("APP_API_KEY"))
+    # The Discord server whose bosses it reads and sets (default: GUILD_ID).
+    app_api_guild_id: int = field(default_factory=lambda: _env_int("APP_API_GUILD_ID"))
+
     @property
     def is_public(self) -> bool:
         return self.public_url.startswith("https://")
