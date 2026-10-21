@@ -1862,6 +1862,10 @@ def create_app(cfg, bot=None) -> FastAPI:
             raise HTTPException(400)
         now = int(time.time())
         result = {"set": [], "same": [], "unknown": []}
+        # Logged after the session commits: the log writes to the database too,
+        # and SQLite would make it wait for this session's write (a deadlock
+        # until the busy timeout).
+        logs: list[str] = []
         with db.session() as s:
             game = app_api_game(request, s)
             bosses = {e.name.lower(): e for e in timers.boss_events(s, enabled_only=False, game_id=game.id)}
@@ -1896,9 +1900,11 @@ def create_app(cfg, bot=None) -> FastAPI:
                     fire_at=fire, status="active", created_at=now, armed_at=now,
                 ))
                 result["set"].append(boss.name)
-                bus.info("timer", f"{boss.name}: respawn time from the game via the private app ({by}), "
-                                  f"fires {engine.ts(fire, 'f')}.{replaced}")
+                logs.append(f"{boss.name}: respawn time from the game via the private app ({by}), "
+                            f"fires {engine.ts(fire, 'f')}.{replaced}")
             game_id = game.id
+        for line in logs:
+            bus.info("timer", line)
         if result["set"]:
             refresh(game_id=game_id)
         return JSONResponse(result)

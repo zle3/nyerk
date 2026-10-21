@@ -12,13 +12,13 @@ from nyerk.web.app import create_app
 from .conftest import GUILD  # noqa: F401
 
 
-def make(tmp_path, monkeypatch, key="k3y"):
+def make(tmp_path, monkeypatch, key="k3y", db_file=False):
     monkeypatch.setenv("NYERK_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("WEB_TLS", "off")
     monkeypatch.setenv("GUILD_ID", str(GUILD))
     if key:
         monkeypatch.setenv("APP_API_KEY", key)
-    db.init_engine(":memory:")
+    db.init_engine(str(tmp_path / "nyerk.db") if db_file else ":memory:")
     with db.session() as s:
         seed(s, GUILD)
     return TestClient(create_app(Config()))
@@ -68,3 +68,17 @@ def test_events_come_with_the_timers(tmp_path, monkeypatch):
     assert shugo["category"] == "Shugo"
     # Hourly: on now, or due within the hour (unless maintenance is on).
     assert shugo["running_until"] or (shugo["next_at"] and shugo["next_at"] - now <= 3600 + 4 * 3600)
+
+
+def test_setting_a_timer_doesnt_wait_on_its_own_log(tmp_path, monkeypatch):
+    # A real database file, all four bosses at once (as the first upload sends):
+    # the log lines used to be written while the timers' write was open, and
+    # SQLite made each wait until its busy timeout (5 s a boss).
+    c = make(tmp_path, monkeypatch, db_file=True)
+    start = time.time()
+    bosses = ["Eternal Gartua", "High Commander Lagta", "Soul Ruler Kashapa", "Silent Dartan"]
+    fire = int(time.time()) + 3600
+    r = c.post("/api/app/timers", headers={"Authorization": "Bearer k3y"},
+               json={"timers": [{"boss": b, "fire_at": fire + i, "by": "Alias"} for i, b in enumerate(bosses)]})
+    assert r.status_code == 200 and sorted(r.json()["set"]) == sorted(bosses)
+    assert time.time() - start < 3, "waited on the database"
